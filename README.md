@@ -2,7 +2,7 @@
 A library for soiling analysis and mirror washing for Concentrating Solar Power (CSP) heliostats.
 
 ## Summary
-This library provides tools developed for predicting soling reflectance losses for Solar Tower CSP plants using weather and plant design data. The deposition model has one free parameter ($hrz0>1$) which is the ratio of a reference height to the roughness length of the site. The value can either be assumed (e.g. expertise, literature) or (better) may estimated via some experimental procedure [^release1]. In order to account for the effects of tracking on soiling, the solar field is divided up into a number of sectors and a single "representative" heliostat is used to represent the soiling status of the entire sector.
+This library provides tools developed for predicting soling reflectance losses for Solar Tower CSP plants using weather and plant design data. The deposition model has one free parameter (hrz0>1) which is the ratio of a reference height to the roughness length of the site. The value can either be assumed (e.g. expertise, literature) or (better) may estimated via some experimental procedure [^release1]. In order to account for the effects of tracking on soiling, the solar field is divided up into a number of sectors and a single "representative" heliostat is used to represent the soiling status of the entire sector.
 
 The details of the soiling model (including the sectorization and fitting procedure) can be found in [1-3] and a demo of soiling loss predictions can be found in `demo.ipynb`.
 
@@ -19,17 +19,17 @@ The input data workbook can have the following sheets:
 
 * *Weather* which has columns with the following headers: 
     - Time (required), a datetime in `dd/mm/yyyy HH:MM` format.
-    - AirTemp (required), a float of the air temperature. Units are $C$.
-    - WindSpeed (required), a float of the wind speed. Units are $m/s$.
-    - TSP/PMX (required), a float of dust concentration in air as TSP or PMX. Units are $\mu g/m^3$.
-    - DNI (optional), a float representing the Direct Normal Irradiation. Units are $W/m^2$.
-    - RainIntensity (optional), a float representing the rain intensity. Units are $mm/hr$.
+    - AirTemp (required), a float of the air temperature. Units are C.
+    - WindSpeed (required), a float of the wind speed. Units are m/s.
+    - TSP/PMX (required), a float of dust concentration in air as TSP or PMX. Units are µg/m^3.
+    - DNI (optional), a float representing the Direct Normal Irradiation. Units are W/m^2.
+    - RainIntensity (optional), a float representing the rain intensity. Units are mm/hr.
 
 The following sheets are optional and are there only for future functionality:
 
 * *Tilts* which has n+1 columns for n mirrors. The first column is Time in the same datetime format as the weather and columns 2 to n+1 are with headers `Mirror_x`, with `x=1,2,...,n` which contain the tilts in degrees. This sheet is not yet used, since the `field_model` class computes the tilts for tracking using the `helios_angles` method.
 
-* *Reflectance_Average*. Columns are Time in datetime format (see above) followed by the average of reflectance measurements for each mirror at each time. This will be used in a later release to enable fitting of the $hrz0$ parameter via experiments.
+* *Reflectance_Average*. Columns are Time in datetime format (see above) followed by the average of reflectance measurements for each mirror at each time. This will be used in a later release to enable fitting of the hrz0 parameter via experiments.
 
 * *Reflectance_Sigma* (required for fitting_experiment class only). Columns are Time in datetime format (see above) followed by the standard deviation of the reflectance measurements for each mirror at each time. This will be used in a later release to enable fitting of the hrz0 parameter via experiments.
 
@@ -60,13 +60,15 @@ For the soiling model, please cite
 
 ### BibTeX
   ~~~
-  @article{
-    title = {Development and experimental validation of a physical model for the soiling of mirrors for {CSP} industry applications},
-	volume = {173},
-	journal = {Sol. Energy},
-	author = {Picotti, G and Borghesani, P and Manzolini, G and Cholette, M E and Wang, R},
-	year = {2018},
-	pages = {1287--1305},
+  @article{PICOTTI20181287,
+    title = {Development and experimental validation of a physical model for the soiling of mirrors for CSP industry applications},
+    journal = {Solar Energy},
+    volume = {173},
+    pages = {1287-1305},
+    year = {2018},
+    issn = {0038-092X},
+    doi = {https://doi.org/10.1016/j.solener.2018.08.066},
+    author = {G. Picotti and P. Borghesani and G. Manzolini and M.E. Cholette and R. Wang}
     }
   ~~~
 
@@ -76,14 +78,16 @@ For the cleaning costs and optimization, please cite
 
 ### BibTeX
   ~~~
-  article{ 
-    title = {Optimization of cleaning strategies for heliostat fields in solar tower plants},
+@article{PICOTTI2020501,
+	title = {Optimization of cleaning strategies for heliostat fields in solar tower plants},
+	journal = {Solar Energy},
 	volume = {204},
-	journal = {Sol. Energy},
-    author = {Picotti, Giovanni and Moretti, Luca and Cholette, Michael E. and Binotti, Marco and Simonetti, Riccardo and Martelli, Emanuele and Steinberg, Theodore A and Manzolini, Giampaolo},
+	pages = {501-514},
 	year = {2020},
-	pages = {501--514} 
-    }
+	issn = {0038-092X},
+	doi = {https://doi.org/10.1016/j.solener.2020.04.032},
+	author = {Giovanni Picotti and Luca Moretti and Michael E. Cholette and Marco Binotti and Riccardo Simonetti and Emanuele Martelli and Theodore A. Steinberg and Giampaolo Manzolini}
+	}
   ~~~
 
 ## References
