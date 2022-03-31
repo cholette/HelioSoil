@@ -6,14 +6,14 @@ This library provides tools developed for predicting soling reflectance losses f
 
 The details of the soiling model (including the sectorization and fitting procedure) can be found in [1-3] and a demo of soiling loss predictions can be found in `demo.ipynb`.
 
-In addition to a soiling model, this library provides a basic economic and cleaning schedule modules to 1) understand the economic losses due to soiling given a certain number of cleaning crews, and 2) enable optimization of the cleaning trucks and washing frequency. A demonsration of this capability is available in `heuristic_cleaning.ipynb` [^2] and discussion on the economic and cleaning models can be found in [3,4].
+In addition to a soiling model, this library provides a basic economic and cleaning schedule modules to 1) understand the economic losses due to soiling given a certain number of cleaning crews, and 2) enable optimization of the cleaning trucks and washing frequency. A demonsration of this capability is available in `heuristic_optimization.ipynb` [^2] and discussion on the economic and cleaning models can be found in [3,4].
 
 [^release1]: In a later release, tools to tune this parameter using field measurements will be included.
 
 [^2]: In a later release, more sophisticated cleaning schedules are likely to be included.
 
 ## Input Files
-The model takes as two or three `.xlsx` files: one for the basic model parameters, one for the input data, and for one for solar field layout. 
+The model takes as inputs three `.xlsx` files: one for the basic model parameters, one for the input data, and for one for solar field layout. One input document in `.epw` format is also required to define the climate and the geographical coordinates of the simulated plant.
 
 The input data workbook can have the following sheets: 
 
@@ -43,7 +43,7 @@ The module assumes a Solar Tower plant and that the dust size distribution is kn
 	
 Either a first- or second-surface geometry model is used to evaluate reflectance losses from the deposited dust. The second surface model is default and is likely closer to reality for most heliostats.
 
-The current cleaning optimization is quite simple: a numebr of trucks clean the field a certain number of times annually. More sophisticated policies may be added in future releases (e.g. the mixed-integer linear program from [3] or the condition-based policies from [7,8]).
+The current cleaning optimization is quite simple: a number of trucks clean the field a certain number of times annually. More sophisticated policies may be added in future releases (e.g. the mixed-integer linear program from [3] or the condition-based policies from [7,8]).
 
 ## Acknowledgements
 <img style="float: left;background-color: white;margin-bottom:10px;margin-right:10px" src="doc/astri_logo.png" width="88" height="113">
