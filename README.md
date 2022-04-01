@@ -2,15 +2,13 @@
 A library for soiling analysis and mirror washing for Concentrating Solar Power (CSP) heliostats.
 
 ## Summary
-This library provides tools developed for predicting soling reflectance losses for Solar Tower CSP plants using weather and plant design data. The deposition model has one free parameter (hrz0>1) which is the ratio of a reference height to the roughness length of the site. The value can either be assumed (e.g. expertise, literature) or (better) may estimated via some experimental procedure [^release1]. In order to account for the effects of tracking on soiling, the solar field is divided up into a number of sectors and a single "representative" heliostat is used to represent the soiling status of the entire sector.
+This library provides tools developed for predicting soling reflectance losses for Solar Tower CSP plants using weather and plant design data. The deposition model has one free parameter (hrz0>1) which is the ratio of a reference height to the roughness length of the site. The value can either be assumed (e.g. expertise, literature) or (better) may estimated via some experimental procedure via the `fitting_experiment` class. In order to account for the effects of tracking on soiling, the solar field is divided up into a number of sectors and a single "representative" heliostat is used to represent the soiling status of the entire sector.
 
-The details of the soiling model (including the sectorization and fitting procedure) can be found in [1-3] and a demo of soiling loss predictions can be found in `demo.ipynb`.
+The details of the soiling model (including the sectorization and fitting procedure) can be found in [1-3] and a demo of soiling loss predictions can be found in `demo.ipynb`. The fitting of hrz0 using experimental data is demonstrated in `hrz0_fitting_demo.ipynb` using experimental data collected at the Queensland University of Technology (QUT), which are discussed in [1]. The data from these experiments are provided in the `data/qut_experiments`.
 
-In addition to a soiling model, this library provides a basic economic and cleaning schedule modules to 1) understand the economic losses due to soiling given a certain number of cleaning crews, and 2) enable optimization of the cleaning trucks and washing frequency. A demonsration of this capability is available in `heuristic_optimization.ipynb` [^2] and discussion on the economic and cleaning models can be found in [3,4].
+In addition to a soiling model, this library provides a basic economic and cleaning schedule modules to 1) understand the economic losses due to soiling given a certain number of cleaning crews, and 2) enable optimization of the cleaning trucks and washing frequency. A demonsration of this capability is available in `heuristic_optimization.ipynb` [^1] and discussion on the economic and cleaning models can be found in [3,4].
 
-[^release1]: In a later release, tools to tune this parameter using field measurements will be included.
-
-[^2]: In a later release, more sophisticated cleaning schedules are likely to be included.
+[^1]: In a later release, more sophisticated cleaning schedules are likely to be included.
 
 ## Input Files
 The model takes as inputs three `.xlsx` files: one for the basic model parameters, one for the input data, and for one for solar field layout. One input document in `.epw` format is also required to define the climate and the geographical coordinates of the simulated plant.
@@ -25,15 +23,15 @@ The input data workbook can have the following sheets:
     - DNI (optional), a float representing the Direct Normal Irradiation. Units are W/m^2.
     - RainIntensity (optional), a float representing the rain intensity. Units are mm/hr.
 
-The following sheets are optional and are there only for future functionality:
+The following sheets are required for `fitting_experiment` class only:
 
-* *Tilts* which has n+1 columns for n mirrors. The first column is Time in the same datetime format as the weather and columns 2 to n+1 are with headers `Mirror_x`, with `x=1,2,...,n` which contain the tilts in degrees. This sheet is not yet used, since the `field_model` class computes the tilts for tracking using the `helios_angles` method.
+* *Tilts* which has n+1 columns for n mirrors. The first column is `Time` in the same datetime format as the weather and columns 2 to n+1 are with headers `Mirror_x`, with `x=1,2,...,n` which contain the tilts in degrees. This sheet is required for the `fitting_experiment` class, since  the `field_model` class computes the tilts via the tracking requirement in the `helios_angles` method.
 
 * *Reflectance_Average*. Columns are Time in datetime format (see above) followed by the average of reflectance measurements for each mirror at each time. This will be used in a later release to enable fitting of the hrz0 parameter via experiments.
 
-* *Reflectance_Sigma* (required for fitting_experiment class only). Columns are Time in datetime format (see above) followed by the standard deviation of the reflectance measurements for each mirror at each time. This will be used in a later release to enable fitting of the hrz0 parameter via experiments.
+* *Reflectance_Sigma*. Columns are Time in datetime format (see above) followed by the standard deviation of the reflectance measurements for each mirror at each time. This will be used in a later release to enable fitting of the hrz0 parameter via experiments.
 
-Examples of the format of these sheets can be found in the `data` folder. The reflectance data tabs are provided from experiments undertaken at the Queensland University of Technology (QUT) as detailed in [1]. 
+Examples of the format of these sheets can be found in the `data` folder.
 
 ## External dependencies
 The details of the required python packages can be found in the environment.yml file. Aside from these requirements, the average optical efficiencies of each sector are computed using [CoPylot](https://www.nrel.gov/docs/fy21osti/78774.pdf). To use CoPylot, install SolarPILOT following the instructions in Section 2.1 of [5] and place the files `copylot.py` and `solarpilot.dll` into the main directory.

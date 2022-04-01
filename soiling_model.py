@@ -19,9 +19,11 @@ from numpy import matlib
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.cm import turbo
+import matplotlib.dates as mdates
 from warnings import warn
 import copy
 from scipy.interpolate import interp2d
+from scipy.optimize import minimize_scalar
 import copy
 from copylot import CoPylot
 
@@ -35,6 +37,10 @@ def _ensure_list(s):
     if not isinstance(s,list):
         s = [s]
     return s
+def _check_keys(simulation_data,reflectance_data):
+    for ii in range(len(simulation_data.time.keys())):
+            if simulation_data.file_name[ii] != reflectance_data.file_name[ii]:
+                raise ValueError("Filenames in simulation data and reflectance do not match. Please ensure you imported the same list of files for both.")
 def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1):
     T_days = 365
     n_hours = int(T_days*(24/dt)) # number of hours between cleanings
@@ -722,6 +728,116 @@ class constants:
         self.eps0 = float(table.loc['eps0'].Value)                      # empirical factor for boundary layer resistance computation
         self.D0 = float(table.loc['D0'].Value)                          # [m] common value of separation distance (Ahmadi)
 
+class reflectance_measurements:
+    def __init__(self,reflectance_files,time_grids,number_of_measurements=None, reflectometer_incidence_angle=None,\
+        import_tilts=False,column_names_to_import=None):
+        
+        reflectance_files = _ensure_list(reflectance_files)
+        reflectometer_incidence_angle = _ensure_list(reflectometer_incidence_angle)
+        N_experiments = len(reflectance_files)
+        if number_of_measurements == None:
+            number_of_measurements = [1.0]*N_experiments
+        
+        if reflectometer_incidence_angle == None:
+            reflectometer_incidence_angle = [0]*N_experiments
+
+        self.file_name = {}
+        self.times = {}
+        self.average = {}
+        self.sigma = {}
+        self.sigma_of_the_mean = {}
+        self.prediction_indices = {}
+        self.prediction_times = {}
+        self.rho0 = {}
+        self.reflectometer_incidence_angle = {}
+        if import_tilts:
+            self.tilts = {}
+        self.import_reflectance_data(reflectance_files,time_grids,number_of_measurements,reflectometer_incidence_angle,\
+            import_tilts=import_tilts,column_names_to_import=column_names_to_import)
+        
+    def import_reflectance_data(self,reflectance_files,time_grids,number_of_measurements,reflectometer_incidence_angle,\
+        import_tilts=False,column_names_to_import=None):
+        for ii in range(len(reflectance_files)):
+            
+            self.file_name[ii] = reflectance_files[ii]
+            reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Average"),\
+                "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Sigma")}
+
+            self.times[ii] = reflectance_data['Average']['Time'].values
+            if column_names_to_import != None: # extract relevant column names of the pandas dataframe
+                self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+            else:
+                self.average[ii] = reflectance_data['Average'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+
+            self.prediction_indices[ii] = []
+            self.prediction_times[ii] = []
+            for m in self.times[ii]:
+                self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))        
+            self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
+            self.rho0[ii] = self.average[ii][0,:]
+
+            # idx = reflectance_files.index(f) 
+            self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
+            self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(number_of_measurements)
+
+            if import_tilts:
+                if column_names_to_import != None: # extract relevant column names of the pandas dataframe
+                    self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[column_names_to_import].values.transpose()
+                else:
+                    self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts").iloc[:,1::].to_numpy().transpose()
+                    
+    def get_experiment_subset(self,idx):
+        attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes
+        self_out = copy.deepcopy(self)
+        for a in attributes:
+            attr = self_out.__getattribute__(a)
+            if isinstance(attr,dict):
+                for k in list(attr.keys()):
+                    if k not in idx:
+                        attr.pop(k)
+        return self_out
+   
+    def plot(self):
+        files = list(self.average.keys())
+        N_mirrors = self.average[0].shape[1]
+        N_experiments = len(files)
+        fig,ax = plt.subplots(N_mirrors,N_experiments,sharex="col",sharey=True)
+        fig.suptitle("Reflectance Data Plot", fontsize=16)
+        miny = 1.0
+        for ii in range(N_experiments):
+            f = files[ii]
+            for jj in range(N_mirrors):
+
+                # axis handle
+                if N_experiments == 1:
+                    a = ax[jj] # experiment ii, mirror jj plot
+                else:
+                    a = ax[jj,ii]
+
+                tilt = self.tilts[f][jj]
+                if jj == 0:
+                    tilt_str = r"Experiment "+str(ii+1)+ r", tilt = ${0:.0f}^{{\circ}}$"
+                else:
+                    tilt_str = r"tilt = ${0:.0f}^{{\circ}}$"
+                
+                if all(tilt==tilt[0]):
+                    a.set_title(tilt_str.format(tilt[0]))
+                else:
+                    a.set_title(tilt_str.format(tilt.mean())+" (average)")
+
+                a.grid('on')
+                m = self.average[f][:,jj]
+                s = self.sigma_of_the_mean[f][:,jj]
+                miny = min((m-6*s).min(),miny)
+                error_two_sigma = 1.96*s
+                a.errorbar(self.times[f],m,yerr=error_two_sigma,label="Measurement mean",marker=".")
+            
+            a.set_ylabel(r"Reflectance at ${0:.1f}^{{\circ}}$".format(self.reflectometer_incidence_angle[ii]))
+        a.set_ylim((miny,1))
+        a.set_xlabel("Date")
+
 class field_model(base_model):
     def __init__(self,file_params,file_SF,num_sectors=None):
         super().__init__(file_params)
@@ -959,6 +1075,289 @@ class field_model(base_model):
                     for tt in range(T)] )
             _print_if("Done!",verbose)
         self.helios = helios
+
+class fitting_experiment(base_model):
+    def __init__(self,file_params,dust_type=None):
+        table = pd.read_excel(file_params,index_col="Parameter")
+        super().__init__(file_params,dust_measurement_type=dust_type)
+        self.helios.hamaker = float(table.loc['hamaker_glass'].Value)
+        self.helios.poisson = float(table.loc['poisson_glass'].Value)
+        self.helios.youngs_modulus = float(table.loc['youngs_modulus_glass'].Value)
+        if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
+            self.helios.stow_tilt = None
+
+    def helios_angles(self,simulation_inputs,reflectance_data,verbose=True,second_surface=True):
+
+        sim_in = simulation_inputs
+        files = list(sim_in.time.keys())
+        N_experiments = len(files)
+
+        # check to ensure that reflectance_data and simulation_input keys correspond to the same files
+        _check_keys(sim_in,reflectance_data)
+
+        _print_if("Setting tilts for "+str(N_experiments)+" experiments",verbose)
+        helios = self.helios
+        helios.tilt = {f: None for f in files} # clear the existing tilts
+        for ii in range(N_experiments):
+            f = files[ii]
+            tilts = reflectance_data.tilts[f]
+            N_times = len(sim_in.time[f])
+            N_helios = tilts.shape[0]
+            
+            helios.tilt[f] = np.zeros((0,N_times))
+            for jj in range(N_helios):
+                row_mask = np.ones((1,N_times))
+                helios.tilt[f] = np.vstack((helios.tilt[f],tilts[jj]*row_mask))
+
+            helios.elevation[f] = 90-helios.tilt[f]
+            helios.incidence_angle[f] = reflectance_data.reflectometer_incidence_angle[f]
+
+            if second_surface==False:
+                helios.inc_ref_factor[f] = (1+np.sin(rad(helios.incidence_angle[f])))/np.cos(rad(helios.incidence_angle[f])) # first surface
+                _print_if("First surface model",verbose)
+            elif second_surface==True:
+                helios.inc_ref_factor[f] = 2/np.cos(rad(helios.incidence_angle[f]))  # second surface model
+                _print_if("Second surface model",verbose)
+            else:
+                _print_if("Choose either first or second surface model",verbose)
+    
+        self.helios = helios
+
+    def reflectance_loss(self):
+        
+        files = list(self.helios.tilt.keys())
+        helios = self.helios
+        helios.soiling_factor = {f: None for f in files} # clear the soiling factor
+        for f in files:
+            cumulative_soil =    np.cumsum(helios.delta_soiled_area[f],axis=1)   # accumulate soiling between cleans
+            cumulative_soil = np.c_[np.zeros(cumulative_soil.shape[0]), cumulative_soil]
+            helios.soiling_factor[f] = 1- cumulative_soil[:,1::]*helios.inc_ref_factor[f]  # soiling factor for each sector of the solar field
+        
+        self.helios = helios
+
+    def predict_reflectance(self,simulation_inputs,hrz0=None,sigma_dep=None,verbose=True):
+
+        self.deposition_flux(simulation_inputs,hrz0=hrz0,verbose=verbose)
+        self.adhesion_removal(verbose=verbose)
+        self.calculate_delta_soiled_area(simulation_inputs,sigma_dep=sigma_dep,verbose=verbose)
+        self.reflectance_loss()
+
+    def _sse(self,hrz0,simulation_inputs,reflectance_data):
+        pi = reflectance_data.prediction_indices
+        meas = reflectance_data.average
+        r0 = reflectance_data.rho0
+
+        # check to ensure that reflectance_data and simulation_input keys correspond to the same files
+        _check_keys(simulation_inputs,reflectance_data)
+
+        sse = 0
+        self.update_model_parameters(hrz0)
+        self.predict_reflectance(simulation_inputs,verbose=False)
+        sf = self.helios.soiling_factor
+        files = list(sf.keys())
+        for f in files:
+            rho_prediction = r0[f]*sf[f][:,pi[f]].transpose()
+            sse += np.sum( (rho_prediction -meas[f] )**2 )
+        return sse  
+
+    def fit_hrz0_least_squares(self,simulation_inputs,reflectance_data,verbose=True):
+
+        # check to ensure that reflectance_data and simulation_input keys correspond to the same files
+        _check_keys(simulation_inputs,reflectance_data)
+
+        fun = lambda x: self._sse(x,simulation_inputs,reflectance_data)
+        _print_if("Fitting hrz0 with least squares ...",verbose)
+        xL = 1e-6 + 1.0
+        xU = 1000 
+        res = minimize_scalar(fun,bounds=(xL,xU),method="Bounded") # use bounded to prevent evaluation at values <=1
+        _print_if("... done! \n hrz0 = "+str(res.x),verbose)
+        return res.x, res.fun
+
+    def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,reflectance_data=None,figsize=None,\
+        reflectance_std='measurements',save_path=None,fig_title=None):
+        sim_in = simulation_inputs
+        samples = posterior_predictive_distribution_samples # not used yet, but will be in a future release
+        files = list(sim_in.time.keys())
+        N_mirrors = np.array([self.helios.tilt[f].shape[0] for f in files])
+        if np.all(N_mirrors==N_mirrors[0]):
+            N_mirrors = N_mirrors[0]
+        else:
+            raise ValueError("Number of mirrors must be the same for each experiment to use this function.")
+
+        if reflectance_data != None:
+            # check to ensure that reflectance_data and simulation_input keys correspond to the same files
+            _check_keys(sim_in,reflectance_data)
+        
+        N_experiments = sim_in.N_simulations
+        ws_max = max([max(sim_in.wind_speed[f]) for f in files]) # max wind speed for setting y-axes
+        mean_predictions        =  {f: np.array([]) for f in files} 
+        CI_upper_predictions    =  {f: np.array([]) for f in files}
+        CI_lower_predictions    =  {f: np.array([]) for f in files}
+        
+        fig,ax = plt.subplots(N_mirrors+1,N_experiments,figsize = figsize,sharex="col")
+        fig.suptitle(fig_title, fontsize=16)
+        ax_wind = []
+        for ii in range(N_experiments):
+            f = files[ii]
+            N_times = self.helios.tilt[f].shape[1]
+            mean_predictions[f]     =  np.zeros(shape=(N_mirrors,N_times)) 
+            CI_upper_predictions[f] =  np.zeros(shape=(N_mirrors,N_times))
+            CI_lower_predictions[f] =  np.zeros(shape=(N_mirrors,N_times))
+
+            dust_conc = sim_in.dust_concentration[f]
+            ws = sim_in.wind_speed[f]
+            dust_type = sim_in.dust_type[f]
+            ts = sim_in.time[f]
+            if reflectance_data != None:
+                tr = reflectance_data.times[f]
+
+            for jj in range(0,N_mirrors):
+                if jj == 0:
+                    tilt_str = r"Experiment "+str(ii+1)+ r", tilt = ${0:.0f}^{{\circ}}$"
+                else:
+                    tilt_str = r"tilt = ${0:.0f}^{{\circ}}$"
+
+                # get the axis handles
+                if N_experiments == 1:
+                    a = ax[jj] # experiment ii, mirror jj plot
+                    a2 = ax[-1] # weather plot
+                    am = ax[0] # plot to put legend on
+                else:
+                    a = ax[jj,ii]
+                    a2 = ax[-1,ii]
+                    am = ax[0,0]
+
+
+                if reflectance_data != None: # plot predictions and reflectance data
+                    m = reflectance_data.average[f][:,jj]
+                    m0 = m[0]
+
+                    if reflectance_std == 'measurements':
+                        s = reflectance_data.sigma[f][:,jj]
+                    elif reflectance_std == 'mean':
+                        s = reflectance_data.sigma_of_the_mean[f][:,jj]
+                    else:
+                        raise ValueError("reflectance_std="+reflectance_std+" not recognized. Must be either \"measurements\" or \"mean\" ")
+
+                    # measurement plots
+                    error_two_sigma = 1.96*s
+                    a.errorbar(tr,m,yerr=error_two_sigma,label="Measurement mean")
+
+                    # mean prediction plot
+                    if samples == None: # use soiling factor in helios
+                        ym = m0*self.helios.soiling_factor[f][jj,:]
+                        a.plot(sim_in.time[f],ym,label='Reflectance Prediction',color='black')
+                    else:
+                        y = m0*samples[f][jj,:,:]
+                        ym = y.mean(axis=1)
+                        a.plot(sim_in.time[f],ym,label='Reflectance Prediction (Bayesian)',color='red')
+
+                    tilt = reflectance_data.tilts[f][jj]
+                    if all(tilt==tilt[0]):
+                        a.set_title(tilt_str.format(tilt[0]))
+                    else:
+                        a.set_title(tilt_str.format(tilt.mean())+" (average)")
+                else: # plot soiling factor predictions only
+                    m0 = 1.0
+                    if samples == None: 
+                        ym = self.helios.soiling_factor[f][jj,:]  # no m0 is set to 1 since there are no measurements. Output is soiling factor only.  
+                        a.plot(sim_in.time[f],ym,label='Soiling Factor Prediction',color='black')
+                    else:
+                        y = samples[f][jj,:,:]
+                        ym = y.mean(y,axis=1)
+                        a.plot(sim_in.time[f],ym,label='Soiling Factor Prediction (Bayesian)',color='red')
+                    
+                    tilt = self.helios.tilt[f][jj,:]
+                    if all(tilt==tilt[0]):
+                        a.set_title(tilt_str.format(tilt[0]))            
+                    else:
+                        a.set_title(tilt_str.format(tilt.mean())+" (average)")
+
+                # The below plots prediction confidence intervals for a stochastic model. Not used yet, but will be in a future release. 
+                if samples==None and len(self.helios.delta_soiled_area_variance)>0: # add +/- 2 sigma limits to the predictions, is sigma_dep is set
+                    var_predict = self.helios.delta_soiled_area_variance[f][jj,:]
+                    sigma_predict = np.sqrt( var_predict)
+                    Lp = ym - m0*1.96*sigma_predict
+                    Up = ym + m0*1.96*sigma_predict
+                    a.fill_between(ts,Lp,Up,color='black',alpha=0.1,label=r'$\pm 2\sigma$ CI')
+                elif samples != None: # use percentiles of posterior predictive samples for confidence intervals
+                    Lp = np.percentile(y,2.5,axis=1)
+                    Up = np.percentile(y,97.5,axis=1)
+                    a.fill_between(ts,Lp,Up,color='red',alpha=0.1,label=r'$\pm 2\sigma$ Bayesian CI')
+                
+                a.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval               
+                
+                if reflectance_data!=None: # reflectance is computed at reflectometer incidence angle
+                    ang = reflectance_data.reflectometer_incidence_angle[f]
+                    s = a.set_ylabel(r"$\rho(t)$ at "+str(ang)+"$^{{\circ}}$")
+                else: # reflectance is computed at heliostat incidence angle. Put average incidence angle on axis label
+                    ang = np.mean( self.helios.incidence_angle[f] )
+                    s = a.set_ylabel(r"soiling factor at "+str(ang)+"$^{{\circ}}$ \n (average)")
+
+                # set mean and CIs for output
+                try:
+                    mean_predictions[f][jj,:] = ym
+                    CI_upper_predictions[f][jj,:] = Up
+                    CI_lower_predictions[f][jj,:] = Lp 
+                except:
+                    mean_predictions[f][jj,:] = ym
+            
+            am.legend()
+            label_str = dust_type + r" (mean = {0:.2f} $\mu g$/$m^3$)" 
+            a2.plot(ts,dust_conc,label=label_str.format(dust_conc.mean()), color='blue')
+            a2.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval
+            myFmt = mdates.DateFormatter('%d-%m-%Y')
+            a2.xaxis.set_major_formatter(myFmt)
+            a2.tick_params(axis ='y', labelcolor = 'blue')
+
+            a2a = a2.twinx()
+            p = a2a.plot(ts,ws,color='green',label="Wind Speed ({0:.2f} m/s)".format(ws.mean()))
+            ax_wind.append(a2a)
+            a2a.tick_params(axis ='y', labelcolor = 'green')
+            a2a.set_ylim((0,ws_max))
+            
+            if ii == 0: # ylabel for TSP on leftmost plot only
+                fs = r"{0:s} $\frac{{\mu}}{{m^3}}$"
+                a2.set_ylabel(fs.format(dust_type),color='blue')
+            if ii == N_experiments-1: # ylabel for wind speed on rightmost plot only
+                a2a.set_ylabel('Wind Speed (m/s)', color='green') 
+            
+            a2.set_title(label_str.format(dust_conc.mean())+", Wind Speed ({0:.2f} m/s)".format(ws.mean()),fontsize=10)
+        
+        if N_experiments > 1:
+
+            # share y axes for all reflectance measurments
+            ymax = max([x.get_ylim()[1] for x in ax[0:-1,:].flatten()])
+            ymin = min([x.get_ylim()[0] for x in ax[0:-1,:].flatten()])
+            for a in ax[0:-1,:].flatten(): 
+                a.set_ylim(ymin,1)
+
+            # share y axes for weather variables of the same type
+            ymax_dust = max([x.get_ylim()[1] for x in ax[-1,:]])
+            ymax_wind = max([x.get_ylim()[1] for x in ax_wind])
+            for a in ax[-1,:]:
+                a.set_ylim(0,1.1*ymax_dust)
+            for a in ax_wind:
+                a.set_ylim(0,1.1*ymax_wind)
+        else:
+            ymax = max([x.get_ylim()[1] for x in ax[0:-1].flatten()])
+            ymin = min([x.get_ylim()[0] for x in ax[0:-1].flatten()])
+            for a in ax[0:-1]:
+                a.set_ylim(ymin,ymax)
+
+        fig.autofmt_xdate()
+        if save_path != None:
+            fig.savefig(save_path+"output.png")
+
+        return mean_predictions,CI_lower_predictions,CI_upper_predictions
+
+    def update_model_parameters(self,x):
+        if isinstance(x,list) or isinstance(x,np.ndarray) :
+            self.hrz0 = x[0]
+            if len(x)>1:
+                self.sigma_dep = x[1]
+        else:
+            self.hrz0 = x
 
 class cleaning_optimisation:
     def __init__(self,params,solar_field,weather_files,climate_file,num_sectors,\
