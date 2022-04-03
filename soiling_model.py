@@ -41,11 +41,11 @@ def _check_keys(simulation_data,reflectance_data):
     for ii in range(len(simulation_data.time.keys())):
             if simulation_data.file_name[ii] != reflectance_data.file_name[ii]:
                 raise ValueError("Filenames in simulation data and reflectance do not match. Please ensure you imported the same list of files for both.")
-def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1):
+def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_per_truck=1):
     T_days = 365
     n_hours = int(T_days*(24/dt)) # number of hours between cleanings
     clean_interval = np.floor(T_days/n_cleans)
-    min_clean_interval = np.ceil(n_sectors/n_trucks)
+    min_clean_interval = np.ceil(n_sectors/n_trucks/n_sectors_per_truck)
     if clean_interval < min_clean_interval:
         clean_interval = min_clean_interval
         n_cleans = int(np.floor(T_days/clean_interval))
@@ -57,10 +57,10 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1):
     
     # shift schedule
     cleans = np.zeros((n_sectors,n_hours))
-    for ii in range(n_trucks,n_sectors,n_trucks):
+    for ii in range(n_trucks*n_sectors_per_truck,n_sectors,n_trucks*n_sectors_per_truck):
         idx0 = n_sectors-ii
-        idx1 = n_sectors-(ii-n_trucks)
-        idx_col = clean_ends-(24/dt)*(int(ii/n_trucks)-1)
+        idx1 = n_sectors-(ii-n_trucks*n_sectors_per_truck)
+        idx_col = clean_ends-(24/dt)*(int(ii/n_trucks/n_sectors_per_truck)-1)
         for jj in idx_col.astype(int):
             if jj<0:
                 cc = jj + 365*24
@@ -70,16 +70,13 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1):
 
     # take care of remainder (first day of a field clean)
     if idx0 != 0:
-        idx_col = clean_ends-(24/dt)*int(ii/n_trucks)
+        idx_col = clean_ends-(24/dt)*int(ii/n_trucks/n_sectors_per_truck)
         for jj in idx_col.astype(int):
             if jj<0:
                 cc = jj + 365*24
                 cleans[0:idx0,cc] = 1
             else:
                 cleans[0:idx0,jj] = 1
-    
-
-
     return cleans
 
 class base_model:
@@ -1389,7 +1386,8 @@ class cleaning_optimisation:
         self.simulation_data = sd
         self.plant = pl
 
-    def compute_total_cleaning_costs(self,simulation_inputs,n_trucks,n_cleans,verbose=True):
+    def compute_total_cleaning_costs(self,simulation_inputs,n_trucks,n_cleans,\
+        n_sectors_per_truck=1,verbose=True):
 
         field = self.field_model
         plant = self.plant
@@ -1400,7 +1398,8 @@ class cleaning_optimisation:
         cleans = {k: [] for k in files}
         for f in files:
             n_helios = field.helios.tilt[f].shape[0]
-            cleans[f] = simple_annual_cleaning_schedule(n_helios,n_trucks,n_cleans)
+            cleans[f] = simple_annual_cleaning_schedule(n_helios,n_trucks,n_cleans,\
+                n_sectors_per_truck=n_sectors_per_truck)
         
         # compute reflectance losses (updates field.helios.soiling_factor)
         field.reflectance_loss(simulation_inputs,cleans,verbose=verbose) 
@@ -1424,8 +1423,8 @@ class cleaning_optimisation:
             # ensure that soiling factor is positive
             if np.any(sf<=0):
                 ind = np.where(sf<=0)[0]
-                print("Warning: soiling factor is <= zero for {0:d} heliostats.".format(len(ind))+\
-                    "\n Setting these soiling factors equal to zero.")
+                _print_if("Warning: soiling factor is <= zero for {0:d} heliostats.".format(len(ind))+\
+                    "\n Setting these soiling factors equal to zero.",verbose)
                 sf[ind] = 0
             
             # costs and efficiencies
@@ -1471,7 +1470,7 @@ class cleaning_optimisation:
             C_cl_fix = (depreciation_cost+operator_cost+self.truck['maintenance_costs'])*n_trucks
             C_cl_var = (self.truck['water_cost'] + self.truck['fuel_cost'])*number_of_sectors_cleaned
             C_cl[fi] = C_cl_fix + C_cl_var
-            print(fmt_str.format(fi,C_deg[fi]+C_cl[fi],C_deg[fi],C_cl[fi]))
+            _print_if(fmt_str.format(fi,C_deg[fi]+C_cl[fi],C_deg[fi],C_cl[fi]),verbose)
 
         TCC = (C_cl + C_deg)        
         results = { 'total_cleaning_costs':TCC,
