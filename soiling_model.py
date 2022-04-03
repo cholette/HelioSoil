@@ -78,6 +78,56 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
             else:
                 cleans[0:idx0,jj] = 1
     return cleans
+def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index):
+    sim_data = simulation_inputs
+    reflect_data = reflectance_data
+    f = experiment_index
+
+    fig,ax = plt.subplots(nrows=4,sharex=True)
+    fmt = r"${0:s}^\circ$"
+    ave = reflect_data.average[f]
+    t = reflect_data.times[f]
+    std = reflect_data.sigma[f]
+    names = ["M"+str(ii+1) for ii in range(ave.shape[1])]
+    for ii in range(ave.shape[1]):
+        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=fmt.format(names[ii]),marker='o',capsize=4.0)
+
+    ax[0].grid(True) 
+    label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data.reflectometer_incidence_angle[f]) 
+    ax[0].set_ylabel(label_str)
+    ax[0].legend()
+
+    ax[1].plot(sim_data.time[f],sim_data.dust_concentration[f],color='brown',label="measurements")
+    ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = "Average")
+    label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data.dust_type[0])
+    ax[1].set_ylabel(label_str,color='brown')
+    ax[1].tick_params(axis='y', labelcolor='brown')
+    ax[1].grid(True)
+    ax[1].legend()
+
+    # Rain intensity, if available
+    if len(sim_data.rain_intensity)>0: # rain intensity is not an empty dict
+        ax[2].plot(sim_data.time[f],sim_data.rain_intensity[f])
+    else:
+        rain_nan = np.nan*np.ones(sim_data.time[f].shape)
+        ax[2].plot(sim_data.time[f],rain_nan)
+    
+    ax[2].set_ylabel(r'Rain [mm/hour]',color='blue')
+    ax[2].tick_params(axis='y', labelcolor='blue')
+    YL = ax[2].get_ylim()
+    ax[2].set_ylim((0,YL[1]))
+    ax[2].grid(True)
+
+    ax[3].plot(sim_data.time[f],sim_data.wind_speed[f],color='green',label="measurements")
+    ax[3].axhline(y=sim_data.wind_speed[f].mean(),color='green',ls='--',label = "Average")
+    label_str = r'Wind Speed [$m\,/\,s$]'
+    ax[3].set_ylabel(label_str,color='green')
+    ax[3].set_xlabel('Date')
+    ax[3].tick_params(axis='y', labelcolor='green')
+    ax[3].grid(True)
+    ax[3].legend()
+
+    return fig,ax
 
 class base_model:
     def __init__(self,file_params,dust_measurement_type=None):
@@ -381,7 +431,7 @@ class dust:
         self.TSP = np.trapz(self.pdfM,np.log10(self.D)) 
         self.PM10 = np.trapz(self.pdfM[self.D<=10],np.log10(self.D[self.D<=10]))  # PM10 = np.trapz(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
 
-        if dust_measurement_type != None: # another concetration is of interest (possibly because we have PMX measurements)
+        if dust_measurement_type not in [None,"TSP"]: # another concentration is of interest (possibly because we have PMX measurements)
             X = dust_measurement_type[2::]
             if len(X) == 2: # integer, e.g. PM20
                 X = int(X)
