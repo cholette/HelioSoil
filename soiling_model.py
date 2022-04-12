@@ -128,6 +128,57 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index):
     ax[3].legend()
 
     return fig,ax
+def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,sheet_name=None,\
+    output_file_format="sample_{0:d}.xlsx",dt=np.timedelta64(3600,'s'),verbose=True):
+
+    # load in historical data files into a single pandas dataframe
+    df = pd.DataFrame()
+    for f in historical_files:
+        fi = pd.read_excel(f,sheet_name=sheet_name)
+
+        #check that time difference is equal to time grid
+        if not np.all( fi['Time'].diff()[1::] == dt ): # omit first time, which is NaT
+            raise ValueError("Time in file "+f+" is inconsistent with specified dt")
+
+        fi['day'] = fi['Time'].apply(lambda x:x.day) 
+        fi['month'] = fi['Time'].apply(lambda x:x.month)
+        fi['year'] = fi['Time'].apply(lambda x:x.year)
+        df = pd.concat((df,fi),ignore_index=True)
+
+    # Create N_sample_years by sampling days from the historical dataset around a windwow
+    t0 = pd.Timestamp( np.datetime64('now').astype('datetime64[Y]').astype('datetime64[m]') ) # t0 is the beginning of the current year
+    tf = pd.Timestamp( t0 + np.timedelta64(365,'D') ) # t0 is the beginning of the current year
+
+    dt_str = str(dt.astype('timedelta64[s]').astype('int'))+'s'
+    time_grid = pd.date_range(start=t0,end=tf,freq=dt_str)
+    day_grid = pd.date_range(start=t0,end=tf,freq="D")
+    
+    for n in range(N_sample_years):
+        samples = pd.DataFrame(columns=df.columns)
+        _print_if("Building sample {0:d} of {1:d}".format(n+1,N_sample_years),verbose)
+        for ii in range(len(day_grid)-1):
+            t = day_grid[ii]
+
+            # samples days in the window
+            sample_days = pd.date_range(start=t-window/2,end=t+window/2,freq="D")
+            idx = np.random.randint(0,high=len(sample_days))
+            sample_day = sample_days[idx]
+
+            # select a random year of the selected day
+            mask = (df.day==sample_day.day) & (df.month==sample_day.month)
+            sample_years = np.unique(df.year[mask])
+            idx_y = np.random.randint(0,high=len(sample_years))
+            sample_year = sample_years[idx_y]
+
+            # select 24-hour period that corresponds to the sampled dat in the historical database
+            sample_mask = (df.year==sample_year) & mask
+
+            samples = pd.concat((samples,df[sample_mask]),ignore_index=True)
+
+        samples['Time'] = time_grid[0:-1]
+        samples.set_index('Time',inplace=True)
+        samples.drop(labels=['day','month','year'],axis=1,inplace=True)
+        samples.to_excel(output_file_format.format(n),sheet_name=sheet_name)
 
 class base_model:
     def __init__(self,file_params,dust_measurement_type=None):
@@ -1436,12 +1487,12 @@ class cleaning_optimisation:
         self.simulation_data = sd
         self.plant = pl
 
-    def compute_total_cleaning_costs(self,simulation_inputs,n_trucks,n_cleans,\
+    def compute_total_cleaning_costs(self,n_trucks,n_cleans,\
         n_sectors_per_truck=1,verbose=True):
 
         field = self.field_model
         plant = self.plant
-        files = list(simulation_inputs.time.keys())
+        files = list(self.simulation_data.time.keys())
         N_files = len(files)
         
         # cleaning schedule, currently the same for all experiments/runs
@@ -1452,7 +1503,7 @@ class cleaning_optimisation:
                 n_sectors_per_truck=n_sectors_per_truck)
         
         # compute reflectance losses (updates field.helios.soiling_factor)
-        field.reflectance_loss(simulation_inputs,cleans,verbose=verbose) 
+        field.reflectance_loss(self.simulation_data,cleans,verbose=verbose) 
 
         C_deg = np.zeros(N_files)
         C_cl = np.zeros(N_files)        
@@ -1478,10 +1529,10 @@ class cleaning_optimisation:
                 sf[ind] = 0
             
             # costs and efficiencies
-            DNI = simulation_inputs.dni[f]
+            DNI = self.simulation_data.dni[f]
             eta_nom = field.helios.nominal_reflectance
             eta_clean = eta_nom*field.helios.optical_efficiency[f]
-            DT = simulation_inputs.dt[f]
+            DT = self.simulation_data.dt[f]
             alpha = eta_pb*(P-COM)*DT/3600.0
             
             # reflected power when perfectly clean
