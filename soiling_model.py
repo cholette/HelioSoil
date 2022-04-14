@@ -26,6 +26,7 @@ from scipy.interpolate import interp2d
 from scipy.optimize import minimize_scalar
 import copy
 from copylot import CoPylot
+import os
 
 tol = np.finfo(float).eps # machine floating point precision
 
@@ -128,7 +129,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index):
     ax[3].legend()
 
     return fig,ax
-def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,sheet_name=None,\
+def sample_simulation_inputs(historical_files,window=np.timedelta64(15,"D"),N_sample_years=10,sheet_name=None,\
     output_file_format="sample_{0:d}.xlsx",dt=np.timedelta64(3600,'s'),verbose=True):
 
     # load in historical data files into a single pandas dataframe
@@ -152,7 +153,7 @@ def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sa
     dt_str = str(dt.astype('timedelta64[s]').astype('int'))+'s'
     time_grid = pd.date_range(start=t0,end=tf,freq=dt_str)
     day_grid = pd.date_range(start=t0,end=tf,freq="D")
-    
+    w = (window-1)/2  
     for n in range(N_sample_years):
         samples = pd.DataFrame(columns=df.columns)
         _print_if("Building sample {0:d} of {1:d}".format(n+1,N_sample_years),verbose)
@@ -160,7 +161,7 @@ def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sa
             t = day_grid[ii]
 
             # samples days in the window
-            sample_days = pd.date_range(start=t-window/2,end=t+window/2,freq="D")
+            sample_days = pd.date_range(start=t-w,end=t+w,freq="D")
             idx = np.random.randint(0,high=len(sample_days))
             sample_day = sample_days[idx]
 
@@ -197,7 +198,7 @@ class base_model:
         self.constants.import_constants(file_params)
         self.dust.import_dust(file_params,dust_measurement_type=dust_measurement_type)
 
-    def deposition_flux(self,simulation_inputs,hrz0=None,verbose=True):
+    def deposition_flux(self,simulation_inputs,hrz0=None,verbose=True,on_disk=False,path="data/"):
 
         sim_in = simulation_inputs
         helios = self.helios
@@ -264,19 +265,33 @@ class base_model:
             vt = 1/(np.transpose(matlib.repmat(aerodynamic_resistance,len(D_meters),1))\
                 +boundary_layer_resistance)   # [m/s]
             
-            # computation of vertical deposition velocity
+            # computation of vertical deposition velocity for each diameter
             Nhelios = helios.tilt[f].shape[0]
             Ntimes = sim_in.time[f].shape[0]
             Nd = D_meters.shape[0]
-            helios.pdfqN[f] = np.empty((Nhelios,Ntimes,Nd))
+            if on_disk: # save to disk instead of RAM
+                _print_if("Using numpy.memmap to save pdfqN array on disk instead of in memory",verbose)
+                file_name = path+"pdfqN_"+str(f)
+                pdfqN = np.memmap(file_name,dtype='float64',mode='w+',shape=(Nhelios,Ntimes,Nd))
+            else:
+                pdfqN = np.empty((Nhelios,Ntimes,Nd))
+            
             vz = (vg + vt).transpose() # [m/s]
             for idx in range(helios.tilt[f].shape[0]):
                 Fd = np.cos(rad(helios.tilt[f][idx,:]))*vz   # Flux per unit concentration at each time, for each heliostat [m/s] (Eq. 28 in [1] without Cd)
                 if Fd.min() < 0:
                     warn("Deposition velocity is negative (min value: "+str(Fd.min())+"). Setting negative components to zero.")
                     Fd[Fd<0]=0
-                helios.pdfqN[f][idx,:,:] = Fd.transpose()*dust.pdfN*1e6  # Dust flux pdf, i.e. [dq[particles/(s*m^2)]/dLog_{10}(D[µm]) ] deposited on 1m2. 1e6 for cm^3->m^3 
+
+                pdfqN[idx,:,:] = Fd.transpose()*dust.pdfN*1e6  # Dust flux pdf, i.e. [dq[particles/(s*m^2)]/dLog_{10}(D[µm]) ] deposited on 1m2. 1e6 for cm^3->m^3 
             
+            if on_disk:
+                helios.pdfqN[f] = file_name
+                pdfqN.flush()
+                pdfqN._mmap.close()
+            else:
+                helios.pdfqN[f] = pdfqN
+                
         self.helios = helios
         
     def adhesion_removal(self,verbose=True):
@@ -296,18 +311,21 @@ class base_model:
         F_gravity = dust.rho*np.pi/6*constants.g*D_meters**3                                # [N] weight force   
         
         for f in files:
+            
+            pdfqN = helios._load_pdfqN(f,Nd=len(D_meters))
+
             if helios.stow_tilt == None: # No common stow angle supplied. Need to use raw tilts to compute removal moments
                 _print_if("  No common stow_tilt. Use values in helios.tilt to compute removal moments. This might take some time.",verbose)
                 Nhelios = helios.tilt[f].shape[0]
                 Ntimes = helios.tilt[f].shape[1]
-                helios.pdfqN[f] = np.cumsum(helios.pdfqN[f],axis=1) # Accumulate in time so that we ensure we reomove all dust present on mirror if removal condition is satisfied at a particular time
+                pdfqN = np.cumsum(pdfqN[f],axis=1) # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
                 for h in range(Nhelios):
                     for k in range(Ntimes):
                         mom_removal = np.sin(rad(helios.tilt[f][h,k]))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity at each tilt for each diameter
                         mom_adhesion =  (F_adhesion+F_gravity*np.cos(rad(helios.tilt[f][h,k])))*radius_sep             # [Nm] adhesion moment  
-                        helios.pdfqN[f][h,k,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
+                        pdfqN[h,k,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
                 
-                helios.pdfqN[f] = np.diff(helios.pdfqN[f],axis=1,prepend=0) # Take difference again so that pdfqN is the difference in dust deposited at each diameter
+                # helios.pdfqN[f] = np.diff(helios.pdfqN[f],axis=1,prepend=0) # Take difference again so that pdfqN is the difference in dust deposited at each diameter
 
             else: # common stow angle at night for all heliostats. Assumes tilt at night is close to vertical at night.
                 # Since the heliostats are stowed at a large tilt angle at night, we assume that any dust that falls off at this stow
@@ -315,7 +333,7 @@ class base_model:
                 _print_if("  Using common stow_tilt. Assumes all heliostats are stored at helios.stow_tilt at night.",verbose)
                 mom_removal = np.sin(rad(helios.stow_tilt))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity
                 mom_adhesion =  (F_adhesion+F_gravity*np.cos(rad(helios.stow_tilt)))*radius_sep             # [Nm] adhesion moment
-                helios.pdfqN[f][:,:,mom_adhesion<mom_removal] = 0 # Remove this diameter from consideration
+                pdfqN[:,:,mom_adhesion<mom_removal] = 0 # Remove this diameter from consideration
         
         self.helios = helios
     
@@ -345,9 +363,10 @@ class base_model:
             # Compute the area coverage by dust at each time step
             N_helios = helios.tilt[f].shape[0]
             N_times = helios.tilt[f].shape[1]
+            pdfqN = helios._load_pdfqN(f,Nd=len(D_meters))
             for ii in range(N_helios):
                 for jj in range(N_times):
-                    helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.trapz(helios.pdfqN[f][ii,jj,:]*(np.pi/4*D_meters**2)*sim_in.dt[f],np.log10(dust.D))
+                    helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.trapz(pdfqN[ii,jj,:]*(np.pi/4*D_meters**2)*sim_in.dt[f],np.log10(dust.D))
 
             # predict confidence interval if sigma_deposition is defined
             if sigma_dep != None:
@@ -578,9 +597,10 @@ class helios:
         self.stow_tilt = {}                 # [deg] tilt at which heliostats are stowed at night
         self.optical_efficiency = {}        # [ - ] average total optical efficiency of the sector represented by the heliostat
         
-        # Properties of dust on heliostat (dicts of 3D arrays, indexed by [heliostat_index, time, diameter] with experiment numbers as keys)
+        # Properties of dust on heliostat (dicts of arrays indexed by heliostat_index, time, and possibly by
+        # diameter with experiment numbers as keys):
         self.pdfqN = {}
-        self.delta_soiled_area = {}         # [m^2/m^2] "pdf" of projected area of dust deposited on mirror for each time interval & each diameter
+        self.delta_soiled_area = {}         # [m^2/m^2] area of dust deposited on mirror for each time interval & each diameter
         self.mom_removal = {}
         self.mom_adhesion = {}
         self.soiling_factor = {}
@@ -764,6 +784,20 @@ class helios:
             plt.ylabel('distance from receiver -y [m]')
             plt.title('Solar Field Sectors')
             plt.show()
+
+    def _load_pdfqN(self,f,Nd=None):
+        if isinstance(self.pdfqN[f],str):
+            Nhelios = self.tilt[f].shape[0]
+            Ntimes = self.tilt[f].shape[1]
+            pdfqN = np.memmap(self.pdfqN[f],mode='r+',shape=(Nhelios,Ntimes,Nd))
+        else:
+            pdfqN = self.pdfqN[f]
+        
+        return pdfqN
+
+    def delete_temporary_files(self):
+        for f in self.pdfqN.keys():
+            os.remove(self.pdfqN[f])
 
 class plant:
     def __init__(self):
@@ -1459,7 +1493,7 @@ class fitting_experiment(base_model):
 
 class cleaning_optimisation:
     def __init__(self,params,solar_field,weather_files,climate_file,num_sectors,\
-        dust_type=None,n_az=10,n_el=10,second_surface=True):
+        dust_type=None,n_az=10,n_el=10,second_surface=True,on_disk=False,path=None):
         self.truck = {  'operator_salary':[],
                         'operators_per_truck_per_day':[],
                         'purchase_cost':[],
@@ -1478,7 +1512,11 @@ class cleaning_optimisation:
         sd = simulation_inputs(weather_files,dust_type=dust_type)
         fm.sun_angles(sd)
         fm.helios_angles(pl,second_surface=second_surface)
-        fm.deposition_flux(sd)
+        
+        if on_disk:
+            assert path != None, "Must supply path to use on_disk storage of pdfqN"
+        fm.deposition_flux(sd,on_disk=on_disk,path=path)
+
         fm.adhesion_removal()
         fm.calculate_delta_soiled_area(sd)
         fm.optical_efficiency(pl,sd,climate_file,n_az=n_az,n_el=n_el)
