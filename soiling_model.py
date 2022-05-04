@@ -950,7 +950,7 @@ class field_model(base_model):
             THETA_m = 0.5*np.arccos(s_m.dot(t_m))
             THETA_m = np.transpose(THETA_m)                                                 # incident angle (the angle a ray of sun makes with the normal to the surface of the mirrors) in radians
             helios.incidence_angle[f] = np.degrees(THETA_m)                                    # incident angle in degrees
-            helios.incidence_angle[f][:,sun.elevation[f]<=stowangle] = 0                          # heliostats are stored vertically at night facing north
+            helios.incidence_angle[f][:,sun.elevation[f]<=stowangle] = np.nan                         # heliostats are stored vertically at night facing north
             
             # apply the formula (Guo et al.) to obtain the components of the normal for each mirror
             A_norm = np.zeros((len(helios.x),max(s_m.shape),min(s_m.shape)))
@@ -1468,7 +1468,12 @@ class cleaning_optimisation:
         
         for fi in range(N_files):
             f = files[fi]
-            sf = field.helios.soiling_factor[f]
+            sf = field.helios.soiling_factor[f].copy()
+
+
+            # nans are when the sun is below the stowangle. Since the optical efficiency is zero during these times,
+            # we simply set sf to an arbitrary value just to ensure that we get zero instead of nan when summing.
+            sf[np.isnan(sf)] = 1 
             
             # ensure that soiling factor is positive
             if np.any(sf<=0):
