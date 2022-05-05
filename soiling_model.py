@@ -198,7 +198,7 @@ class base_model:
         self.constants.import_constants(file_params)
         self.dust.import_dust(file_params,dust_measurement_type=dust_measurement_type)
 
-    def deposition_flux(self,simulation_inputs,hrz0=None,verbose=True,on_disk=False,path="data/"):
+    def deposition_flux(self,simulation_inputs,hrz0=None,verbose=True,use_disk=False,path="tmp/"):
 
         sim_in = simulation_inputs
         helios = self.helios
@@ -269,7 +269,7 @@ class base_model:
             Nhelios = helios.tilt[f].shape[0]
             Ntimes = sim_in.time[f].shape[0]
             Nd = D_meters.shape[0]
-            if on_disk: # save to disk instead of RAM
+            if use_disk: # save to disk instead of RAM
                 _print_if("Using numpy.memmap to save pdfqN array on disk instead of in memory",verbose)
                 file_name = path+"pdfqN_"+str(f)
                 pdfqN = np.memmap(file_name,dtype='float64',mode='w+',shape=(Nhelios,Ntimes,Nd))
@@ -285,7 +285,7 @@ class base_model:
 
                 pdfqN[idx,:,:] = Fd.transpose()*dust.pdfN*1e6  # Dust flux pdf, i.e. [dq[particles/(s*m^2)]/dLog_{10}(D[µm]) ] deposited on 1m2. 1e6 for cm^3->m^3 
             
-            if on_disk:
+            if use_disk:
                 helios.pdfqN[f] = file_name
                 pdfqN.flush()
                 pdfqN._mmap.close()
@@ -318,7 +318,7 @@ class base_model:
                 _print_if("  No common stow_tilt. Use values in helios.tilt to compute removal moments. This might take some time.",verbose)
                 Nhelios = helios.tilt[f].shape[0]
                 Ntimes = helios.tilt[f].shape[1]
-                pdfqN = np.cumsum(pdfqN[f],axis=1) # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
+                pdfqN = np.cumsum(pdfqN,axis=1) # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
                 for h in range(Nhelios):
                     for k in range(Ntimes):
                         mom_removal = np.sin(rad(helios.tilt[f][h,k]))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity at each tilt for each diameter
@@ -1493,7 +1493,7 @@ class fitting_experiment(base_model):
 
 class cleaning_optimisation:
     def __init__(self,params,solar_field,weather_files,climate_file,num_sectors,\
-        dust_type=None,n_az=10,n_el=10,second_surface=True,on_disk=False,path=None):
+        dust_type=None,n_az=10,n_el=10,second_surface=True,use_disk=False,path=None):
         self.truck = {  'operator_salary':[],
                         'operators_per_truck_per_day':[],
                         'purchase_cost':[],
@@ -1513,9 +1513,9 @@ class cleaning_optimisation:
         fm.sun_angles(sd)
         fm.helios_angles(pl,second_surface=second_surface)
         
-        if on_disk:
-            assert path != None, "Must supply path to use on_disk storage of pdfqN"
-        fm.deposition_flux(sd,on_disk=on_disk,path=path)
+        if use_disk:
+            assert path != None, "Must supply path to use use_disk storage of pdfqN"
+        fm.deposition_flux(sd,use_disk=use_disk,path=path)
 
         fm.adhesion_removal()
         fm.calculate_delta_soiled_area(sd)
