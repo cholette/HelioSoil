@@ -313,19 +313,25 @@ class base_model:
         for f in files:
             
             pdfqN = helios._load_pdfqN(f,Nd=len(D_meters))
-
             if helios.stow_tilt == None: # No common stow angle supplied. Need to use raw tilts to compute removal moments
                 _print_if("  No common stow_tilt. Use values in helios.tilt to compute removal moments. This might take some time.",verbose)
                 Nhelios = helios.tilt[f].shape[0]
                 Ntimes = helios.tilt[f].shape[1]
-                pdfqN = np.cumsum(pdfqN,axis=1) # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
+                pdfqN_cumulative = np.cumsum(pdfqN,axis=1) # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
                 for h in range(Nhelios):
                     for k in range(Ntimes):
                         mom_removal = np.sin(rad(helios.tilt[f][h,k]))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity at each tilt for each diameter
                         mom_adhesion =  (F_adhesion+F_gravity*np.cos(rad(helios.tilt[f][h,k])))*radius_sep             # [Nm] adhesion moment  
-                        pdfqN[h,k,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
+                        pdfqN_cumulative[h,k,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
                 
-                # helios.pdfqN[f] = np.diff(helios.pdfqN[f],axis=1,prepend=0) # Take difference again so that pdfqN is the difference in dust deposited at each diameter
+                pdfqN_new = np.diff(pdfqN_cumulative,axis=1,prepend=0) # Take difference again so that pdfqN is the difference in dust deposited at each diameter
+                if isinstance(helios.pdfqN[f],str): # memmap needs to be flushed to write changes
+                    pdfqN[:] = pdfqN_new[:]
+                    pdfqN.flush()
+                    pdfqN._mmap.close()
+                else:
+                    helios.pdfqN[f] = pdfqN_new
+                
 
             else: # common stow angle at night for all heliostats. Assumes tilt at night is close to vertical at night.
                 # Since the heliostats are stowed at a large tilt angle at night, we assume that any dust that falls off at this stow
@@ -334,7 +340,12 @@ class base_model:
                 mom_removal = np.sin(rad(helios.stow_tilt))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity
                 mom_adhesion =  (F_adhesion+F_gravity*np.cos(rad(helios.stow_tilt)))*radius_sep             # [Nm] adhesion moment
                 pdfqN[:,:,mom_adhesion<mom_removal] = 0 # Remove this diameter from consideration
-        
+                if isinstance(helios.pdfqN[f],str): # memmap needs to be flushed to write changes
+                    pdfqN.flush()
+                    pdfqN._mmap.close()
+                else:
+                    helios.pdfqN[f] = pdfqN
+
         self.helios = helios
     
     def calculate_delta_soiled_area(self,simulation_inputs,sigma_dep=None,verbose=True): 
@@ -789,7 +800,7 @@ class helios:
         if isinstance(self.pdfqN[f],str):
             Nhelios = self.tilt[f].shape[0]
             Ntimes = self.tilt[f].shape[1]
-            pdfqN = np.memmap(self.pdfqN[f],mode='r+',shape=(Nhelios,Ntimes,Nd))
+            pdfqN = np.memmap(self.pdfqN[f],mode='r+',dtype='float64',shape=(Nhelios,Ntimes,Nd))
         else:
             pdfqN = self.pdfqN[f]
         
@@ -1035,7 +1046,7 @@ class field_model(base_model):
             THETA_m = 0.5*np.arccos(s_m.dot(t_m))
             THETA_m = np.transpose(THETA_m)                                                 # incident angle (the angle a ray of sun makes with the normal to the surface of the mirrors) in radians
             helios.incidence_angle[f] = np.degrees(THETA_m)                                    # incident angle in degrees
-            helios.incidence_angle[f][:,sun.elevation[f]<=stowangle] = 0                          # heliostats are stored vertically at night facing north
+            helios.incidence_angle[f][:,sun.elevation[f]<=stowangle] = np.nan                         # heliostats are stored vertically at night facing north
             
             # apply the formula (Guo et al.) to obtain the components of the normal for each mirror
             A_norm = np.zeros((len(helios.x),max(s_m.shape),min(s_m.shape)))
@@ -1202,7 +1213,7 @@ class field_model(base_model):
             _print_if("Computing optical efficiency time series for file "+str(f),verbose)
             helios.optical_efficiency[f] = np.zeros((Ns,T))
             for ll in range(Ns):
-                opt_fun = interp2d(el_grid,az_grid,eff_grid[ll,:,:],fill_value=0)
+                opt_fun = interp2d(el_grid,az_grid,eff_grid[ll,:,:],fill_value=np.nan)
                 helios.optical_efficiency[f][ll,:] = np.array( [opt_fun(sun.elevation[f][tt],sun.azimuth[f][tt])[0] \
                     for tt in range(T)] )
             _print_if("Done!",verbose)
@@ -1267,14 +1278,14 @@ class fitting_experiment(base_model):
         
         self.helios = helios
 
-    def predict_reflectance(self,simulation_inputs,hrz0=None,sigma_dep=None,verbose=True):
+    def predict_reflectance(self,simulation_inputs,hrz0=None,sigma_dep=None,verbose=True,use_disk=False,path="tmp/"):
 
-        self.deposition_flux(simulation_inputs,hrz0=hrz0,verbose=verbose)
+        self.deposition_flux(simulation_inputs,hrz0=hrz0,verbose=verbose,use_disk=use_disk,path=path)
         self.adhesion_removal(verbose=verbose)
         self.calculate_delta_soiled_area(simulation_inputs,sigma_dep=sigma_dep,verbose=verbose)
         self.reflectance_loss()
 
-    def _sse(self,hrz0,simulation_inputs,reflectance_data):
+    def _sse(self,hrz0,simulation_inputs,reflectance_data,**kwargs):
         pi = reflectance_data.prediction_indices
         meas = reflectance_data.average
         r0 = reflectance_data.rho0
@@ -1284,7 +1295,7 @@ class fitting_experiment(base_model):
 
         sse = 0
         self.update_model_parameters(hrz0)
-        self.predict_reflectance(simulation_inputs,verbose=False)
+        self.predict_reflectance(simulation_inputs,verbose=False,**kwargs)
         sf = self.helios.soiling_factor
         files = list(sf.keys())
         for f in files:
@@ -1292,12 +1303,12 @@ class fitting_experiment(base_model):
             sse += np.sum( (rho_prediction -meas[f] )**2 )
         return sse  
 
-    def fit_hrz0_least_squares(self,simulation_inputs,reflectance_data,verbose=True):
+    def fit_hrz0_least_squares(self,simulation_inputs,reflectance_data,verbose=True,**kwargs):
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
 
-        fun = lambda x: self._sse(x,simulation_inputs,reflectance_data)
+        fun = lambda x: self._sse(x,simulation_inputs,reflectance_data,**kwargs)
         _print_if("Fitting hrz0 with least squares ...",verbose)
         xL = 1e-6 + 1.0
         xU = 1000 
@@ -1557,7 +1568,13 @@ class cleaning_optimisation:
         
         for fi in range(N_files):
             f = files[fi]
-            sf = field.helios.soiling_factor[f]
+            sf = field.helios.soiling_factor[f].copy()
+            opt_eff = field.helios.optical_efficiency[f].copy()
+
+            # nans are when the sun is below the stowangle. Set the optical efficiency to zero during these times
+            # and the sf to an arbitrary value just to ensure that we get zero instead of nan when summing.
+            sf[np.isnan(sf)] = 1 
+            opt_eff[np.isnan(opt_eff)] = 0
             
             # ensure that soiling factor is positive
             if np.any(sf<=0):
@@ -1569,7 +1586,7 @@ class cleaning_optimisation:
             # costs and efficiencies
             DNI = self.simulation_data.dni[f]
             eta_nom = field.helios.nominal_reflectance
-            eta_clean = eta_nom*field.helios.optical_efficiency[f]
+            eta_clean = eta_nom*opt_eff
             DT = self.simulation_data.dt[f]
             alpha = eta_pb*(P-COM)*DT/3600.0
             
