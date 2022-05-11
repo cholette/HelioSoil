@@ -1220,6 +1220,185 @@ class fitting_experiment(base_model):
         _print_if("... done! \n hrz0 = "+str(res.x),verbose)
         return res.x, res.fun
 
+    def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,reflectance_data=None,figsize=None,\
+        reflectance_std='measurements',save_path=None,fig_title=None):
+        sim_in = simulation_inputs
+        samples = posterior_predictive_distribution_samples # not used yet, but will be in a future release
+        files = list(sim_in.time.keys())
+        N_mirrors = np.array([self.helios.tilt[f].shape[0] for f in files])
+        if np.all(N_mirrors==N_mirrors[0]):
+            N_mirrors = N_mirrors[0]
+        else:
+            raise ValueError("Number of mirrors must be the same for each experiment to use this function.")
+
+        if reflectance_data != None:
+            # check to ensure that reflectance_data and simulation_input keys correspond to the same files
+            _check_keys(sim_in,reflectance_data)
+        
+        N_experiments = sim_in.N_simulations
+        ws_max = max([max(sim_in.wind_speed[f]) for f in files]) # max wind speed for setting y-axes
+        mean_predictions        =  {f: np.array([]) for f in files} 
+        CI_upper_predictions    =  {f: np.array([]) for f in files}
+        CI_lower_predictions    =  {f: np.array([]) for f in files}
+        
+        fig,ax = plt.subplots(N_mirrors+1,N_experiments,figsize = figsize,sharex="col")
+        #fig.suptitle(fig_title, fontsize=16)
+        ax_wind = []
+        for ii in range(N_experiments):
+            f = files[ii]
+            N_times = self.helios.tilt[f].shape[1]
+            mean_predictions[f]     =  np.zeros(shape=(N_mirrors,N_times)) 
+            CI_upper_predictions[f] =  np.zeros(shape=(N_mirrors,N_times))
+            CI_lower_predictions[f] =  np.zeros(shape=(N_mirrors,N_times))
+
+            dust_conc = sim_in.dust_concentration[f]
+            ws = sim_in.wind_speed[f]
+            dust_type = sim_in.dust_type[f]
+            ts = sim_in.time[f]
+            if reflectance_data != None:
+                tr = reflectance_data.times[f]
+
+            for jj in range(0,N_mirrors):
+                if jj == 0:
+                    tilt_str = r"Experiment "+str(ii+1)+ r", tilt = ${0:.0f}^{{\circ}}$"
+                else:
+                    tilt_str = r"tilt = ${0:.0f}^{{\circ}}$"
+
+                # get the axis handles
+                if N_experiments == 1:
+                    a = ax[jj] # experiment ii, mirror jj plot
+                    a2 = ax[-1] # weather plot
+                    am = ax[0] # plot to put legend on
+                else:
+                    a = ax[jj,ii]
+                    a2 = ax[-1,ii]
+                    am = ax[0,0]
+
+
+                if reflectance_data != None: # plot predictions and reflectance data
+                    m = reflectance_data.average[f][:,jj]
+                    m0 = m[0]
+
+                    if reflectance_std == 'measurements':
+                        s = reflectance_data.sigma[f][:,jj]
+                    elif reflectance_std == 'mean':
+                        s = reflectance_data.sigma_of_the_mean[f][:,jj]
+                    else:
+                        raise ValueError("reflectance_std="+reflectance_std+" not recognized. Must be either \"measurements\" or \"mean\" ")
+
+                    # measurement plots
+                    error_two_sigma = 1.96*s
+                    a.errorbar(tr,m,yerr=error_two_sigma,label="Measurement mean")
+
+                    # mean prediction plot
+                    if samples == None: # use soiling factor in helios
+                        ym = m0*self.helios.soiling_factor[f][jj,:]
+                        a.plot(sim_in.time[f],ym,label='Reflectance Prediction',color='black')                        
+                    else:
+                        y = m0*samples[f][jj,:,:]
+                        ym = y.mean(axis=1)
+                        a.plot(sim_in.time[f],ym,label='Reflectance Prediction (Bayesian)',color='red')                      
+
+                    tilt = reflectance_data.tilts[f][jj]
+                    if all(tilt==tilt[0]):
+                        a.set_title(tilt_str.format(tilt[0]),fontsize=20)
+                    else:
+                        a.set_title(tilt_str.format(tilt.mean())+" (average)",fontsize=20)
+                else: # plot soiling factor predictions only
+                    m0 = 1.0
+                    if samples == None: 
+                        ym = self.helios.soiling_factor[f][jj,:]  # no m0 is set to 1 since there are no measurements. Output is soiling factor only.  
+                        a.plot(sim_in.time[f],ym,label='Soiling Factor Prediction',color='black')
+                    else:
+                        y = samples[f][jj,:,:]
+                        ym = y.mean(y,axis=1)
+                        a.plot(sim_in.time[f],ym,label='Soiling Factor Prediction (Bayesian)',color='red')
+                    
+                    tilt = self.helios.tilt[f][jj,:]
+                    if all(tilt==tilt[0]):
+                        a.set_title(tilt_str.format(tilt[0]))            
+                    else:
+                        a.set_title(tilt_str.format(tilt.mean())+" (average)")
+
+                # The below plots prediction confidence intervals for a stochastic model. Not used yet, but will be in a future release. 
+                if samples==None and len(self.helios.delta_soiled_area_variance)>0: # add +/- 2 sigma limits to the predictions, is sigma_dep is set
+                    var_predict = self.helios.delta_soiled_area_variance[f][jj,:]
+                    sigma_predict = np.sqrt( var_predict)
+                    Lp = ym - m0*1.96*sigma_predict
+                    Up = ym + m0*1.96*sigma_predict
+                    a.fill_between(ts,Lp,Up,color='black',alpha=0.1,label=r'$\pm 2\sigma$ CI')
+                elif samples != None: # use percentiles of posterior predictive samples for confidence intervals
+                    Lp = np.percentile(y,2.5,axis=1)
+                    Up = np.percentile(y,97.5,axis=1)
+                    a.fill_between(ts,Lp,Up,color='red',alpha=0.1,label=r'$\pm 2\sigma$ Bayesian CI')
+                
+                a.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval  
+                a.tick_params(axis ='y', labelsize=12)          
+                
+                if reflectance_data!=None: # reflectance is computed at reflectometer incidence angle
+                    ang = reflectance_data.reflectometer_incidence_angle[f]
+                    s = a.set_ylabel(r"$\rho(t)$ at "+str(ang)+"$^{{\circ}}$",fontsize=15)
+                else: # reflectance is computed at heliostat incidence angle. Put average incidence angle on axis label
+                    ang = np.mean( self.helios.incidence_angle[f] )
+                    s = a.set_ylabel(r"soiling factor at "+str(ang)+"$^{{\circ}}$ \n (average)",fontsize=15)
+
+                # set mean and CIs for output
+                try:
+                    mean_predictions[f][jj,:] = ym
+                    CI_upper_predictions[f][jj,:] = Up
+                    CI_lower_predictions[f][jj,:] = Lp 
+                except:
+                    mean_predictions[f][jj,:] = ym
+            
+            am.legend(fontsize=15)
+            label_str = dust_type + r" (mean = {0:.2f} $\mu g$/$m^3$)" 
+            a2.plot(ts,dust_conc,label=label_str.format(dust_conc.mean()), color='blue')
+            a2.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval
+            myFmt = mdates.DateFormatter('%d-%m-%Y')
+            a2.xaxis.set_major_formatter(myFmt)
+            a2.tick_params(axis ='y', labelcolor = 'blue', labelsize=12)
+            a2.tick_params(axis='x', labelsize=14)
+            
+            a2a = a2.twinx()
+            p = a2a.plot(ts,ws,color='green',label="Wind Speed ({0:.2f} m/s)".format(ws.mean()))
+            ax_wind.append(a2a)
+            a2a.tick_params(axis ='y', labelcolor = 'green', labelsize=12)
+            a2a.set_ylim((0,ws_max))
+            if ii == 0: # ylabel for TSP on leftmost plot only
+                fs = r"{0:s} $\frac{{\mu}}{{m^3}}$"
+                a2.set_ylabel(fs.format(dust_type),color='blue',fontsize=15)
+            if ii == N_experiments-1: # ylabel for wind speed on rightmost plot only
+                a2a.set_ylabel('Wind Speed (m/s)', color='green',fontsize=15) 
+            #a2.set_title(label_str.format(dust_conc.mean())+", Wind Speed ({0:.2f} m/s)".format(ws.mean()))
+        
+        if N_experiments > 1:
+
+            # share y axes for all reflectance measurments
+            ymax = max([x.get_ylim()[1] for x in ax[0:-1,:].flatten()])
+            ymin = min([x.get_ylim()[0] for x in ax[0:-1,:].flatten()])
+            for a in ax[0:-1,:].flatten(): 
+                a.set_ylim(ymin,1)
+
+            # share y axes for weather variables of the same type
+            ymax_dust = max([x.get_ylim()[1] for x in ax[-1,:]])
+            ymax_wind = max([x.get_ylim()[1] for x in ax_wind])
+            for a in ax[-1,:]:
+                a.set_ylim(0,1.1*ymax_dust)
+            for a in ax_wind:
+                a.set_ylim(0,1.1*ymax_wind)
+        else:
+            ymax = max([x.get_ylim()[1] for x in ax[0:-1].flatten()])
+            ymin = min([x.get_ylim()[0] for x in ax[0:-1].flatten()])
+            for a in ax[0:-1]:
+                a.set_ylim(ymin,ymax)
+
+        fig.autofmt_xdate()
+        if save_path != None:
+            fig.savefig(save_path+"output.png")
+
+        return mean_predictions,CI_lower_predictions,CI_upper_predictions
+    
+    
     def plot_soiling_factor_all(self,simulation_inputs,posterior_predictive_distribution_samples=None,reflectance_data=None,figsize=None,\
         reflectance_std='measurements',save_path=None,fig_title=None):
         sim_in = simulation_inputs
@@ -1238,7 +1417,7 @@ class fitting_experiment(base_model):
         ws_max = max([max(sim_in.wind_speed[f]) for f in files]) # max wind speed for setting y-axes
         
         fig,ax = plt.subplots(1+1,N_experiments,figsize = figsize,sharex="col")
-        fig.suptitle(fig_title, fontsize=16)
+        fig.suptitle(fig_title, fontsize=25)
         ax_wind = []
 
         for ii in range(N_experiments):
@@ -1279,9 +1458,9 @@ class fitting_experiment(base_model):
 
                     tilt = reflectance_data.tilts[f][jj]
                     if all(tilt==tilt[0]):
-                        a.set_title("Wodonga Experiments",fontsize=15)
+                        a.set_title("Mirror Reflectance",fontsize=20)
                     else:
-                        a.set_title(tilt_str.format(tilt.mean())+" (average)")
+                        a.set_title(tilt_str.format(tilt.mean())+" (average)",fontsize=20)
                     
                     # measurement plots
                     error_two_sigma = 1.96*s
@@ -1292,35 +1471,41 @@ class fitting_experiment(base_model):
                     raise ValueError("This function requires experimental reflectance data")
 
                 a.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval
+                a.tick_params(axis ='y', labelsize=15)
                              
                 
                 if reflectance_data!=None: # reflectance is computed at reflectometer incidence angle
                     ang = reflectance_data.reflectometer_incidence_angle[f]
-                    s = a.set_ylabel(r"$\rho(t)$ at "+str(ang)+"$^{{\circ}}$")
+                    s = a.set_ylabel(r"$\rho(t)$ at "+str(ang)+"$^{{\circ}}$", fontsize=15)
                 else: 
                     raise ValueError("This function requires experimental reflectance data")
 
-            am.legend()
+            plt.grid(False)
+            am.legend(fontsize=20)
             label_str = dust_type + r" (mean = {0:.2f} $\mu g$/$m^3$)" 
             a2.plot(ts,dust_conc,label=label_str.format(dust_conc.mean()), color='blue')
             a2.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval
             myFmt = mdates.DateFormatter('%d-%m-%Y')
             a2.xaxis.set_major_formatter(myFmt)
             a2.tick_params(axis ='y', labelcolor = 'blue')
+            a2.tick_params(axis ='y', labelcolor = 'blue', labelsize=15)
+            a2.tick_params(axis='x', labelsize=14)
 
             a2a = a2.twinx()
             p = a2a.plot(ts,ws,color='green',label="Wind Speed"+r" (mean = {0:.2f} m/s)".format(ws.mean()))
             ax_wind.append(a2a)
-            a2a.tick_params(axis ='y', labelcolor = 'green')
+            a2a.tick_params(axis ='y', labelcolor = 'green', labelsize=15)
             a2a.set_ylim((0,ws_max))
+            a2a.tick_params(axis='x', labelsize=14)
+            plt.grid(False)
             
             if ii == 0: # ylabel for TSP on leftmost plot only
                 fs = r"{0:s} $\frac{{\mu}}{{m^3}}$"
-                a2.set_ylabel(fs.format(dust_type),color='blue')
+                a2.set_ylabel(fs.format(dust_type),color='blue', fontsize=15)
             if ii == N_experiments-1: # ylabel for wind speed on rightmost plot only
-                a2a.set_ylabel('Wind Speed (m/s)', color='green') 
+                a2a.set_ylabel('Wind Speed (m/s)', color='green', fontsize=15) 
             
-            a2.set_title(label_str.format(dust_conc.mean())+", Wind Speed"+r" (mean = {0:.2f} m/s)".format(ws.mean()),fontsize=15)
+            a2.set_title(label_str.format(dust_conc.mean())+", Wind Speed"+r" (mean = {0:.2f} m/s)".format(ws.mean()),fontsize=17)
 
         if N_experiments > 1:
 
