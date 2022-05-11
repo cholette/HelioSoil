@@ -1220,10 +1220,9 @@ class fitting_experiment(base_model):
         _print_if("... done! \n hrz0 = "+str(res.x),verbose)
         return res.x, res.fun
 
-    def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,reflectance_data=None,figsize=None,\
+    def plot_soiling_factor_all(self,simulation_inputs,posterior_predictive_distribution_samples=None,reflectance_data=None,figsize=None,\
         reflectance_std='measurements',save_path=None,fig_title=None):
         sim_in = simulation_inputs
-        samples = posterior_predictive_distribution_samples # not used yet, but will be in a future release
         files = list(sim_in.time.keys())
         N_mirrors = np.array([self.helios.tilt[f].shape[0] for f in files])
         if np.all(N_mirrors==N_mirrors[0]):
@@ -1237,19 +1236,14 @@ class fitting_experiment(base_model):
         
         N_experiments = sim_in.N_simulations
         ws_max = max([max(sim_in.wind_speed[f]) for f in files]) # max wind speed for setting y-axes
-        mean_predictions        =  {f: np.array([]) for f in files} 
-        CI_upper_predictions    =  {f: np.array([]) for f in files}
-        CI_lower_predictions    =  {f: np.array([]) for f in files}
         
-        fig,ax = plt.subplots(N_mirrors+1,N_experiments,figsize = figsize,sharex="col")
+        fig,ax = plt.subplots(1+1,N_experiments,figsize = figsize,sharex="col")
         fig.suptitle(fig_title, fontsize=16)
         ax_wind = []
+
         for ii in range(N_experiments):
             f = files[ii]
             N_times = self.helios.tilt[f].shape[1]
-            mean_predictions[f]     =  np.zeros(shape=(N_mirrors,N_times)) 
-            CI_upper_predictions[f] =  np.zeros(shape=(N_mirrors,N_times))
-            CI_lower_predictions[f] =  np.zeros(shape=(N_mirrors,N_times))
 
             dust_conc = sim_in.dust_concentration[f]
             ws = sim_in.wind_speed[f]
@@ -1259,23 +1253,20 @@ class fitting_experiment(base_model):
                 tr = reflectance_data.times[f]
 
             for jj in range(0,N_mirrors):
-                if jj == 0:
-                    tilt_str = r"Experiment "+str(ii+1)+ r", tilt = ${0:.0f}^{{\circ}}$"
-                else:
-                    tilt_str = r"tilt = ${0:.0f}^{{\circ}}$"
+                tilt_str = r"tilt = ${0:.0f}^{{\circ}}$"
 
                 # get the axis handles
                 if N_experiments == 1:
-                    a = ax[jj] # experiment ii, mirror jj plot
+                    a = ax[0] # experiment ii, mirror jj plot
                     a2 = ax[-1] # weather plot
-                    am = ax[0] # plot to put legend on
+                    am = a # plot to put legend on
                 else:
-                    a = ax[jj,ii]
+                    a = ax[0,ii]
                     a2 = ax[-1,ii]
-                    am = ax[0,0]
+                    am = a
 
 
-                if reflectance_data != None: # plot predictions and reflectance data
+                if reflectance_data != None: # plot reflectance data
                     m = reflectance_data.average[f][:,jj]
                     m0 = m[0]
 
@@ -1286,69 +1277,29 @@ class fitting_experiment(base_model):
                     else:
                         raise ValueError("reflectance_std="+reflectance_std+" not recognized. Must be either \"measurements\" or \"mean\" ")
 
-                    # measurement plots
-                    error_two_sigma = 1.96*s
-                    a.errorbar(tr,m,yerr=error_two_sigma,label="Measurement mean")
-
-                    # mean prediction plot
-                    if samples == None: # use soiling factor in helios
-                        ym = m0*self.helios.soiling_factor[f][jj,:]
-                        a.plot(sim_in.time[f],ym,label='Reflectance Prediction',color='black')
-                    else:
-                        y = m0*samples[f][jj,:,:]
-                        ym = y.mean(axis=1)
-                        a.plot(sim_in.time[f],ym,label='Reflectance Prediction (Bayesian)',color='red')
-
                     tilt = reflectance_data.tilts[f][jj]
                     if all(tilt==tilt[0]):
-                        a.set_title(tilt_str.format(tilt[0]))
+                        a.set_title("Wodonga Experiments",fontsize=15)
                     else:
                         a.set_title(tilt_str.format(tilt.mean())+" (average)")
-                else: # plot soiling factor predictions only
-                    m0 = 1.0
-                    if samples == None: 
-                        ym = self.helios.soiling_factor[f][jj,:]  # no m0 is set to 1 since there are no measurements. Output is soiling factor only.  
-                        a.plot(sim_in.time[f],ym,label='Soiling Factor Prediction',color='black')
-                    else:
-                        y = samples[f][jj,:,:]
-                        ym = y.mean(y,axis=1)
-                        a.plot(sim_in.time[f],ym,label='Soiling Factor Prediction (Bayesian)',color='red')
                     
-                    tilt = self.helios.tilt[f][jj,:]
-                    if all(tilt==tilt[0]):
-                        a.set_title(tilt_str.format(tilt[0]))            
-                    else:
-                        a.set_title(tilt_str.format(tilt.mean())+" (average)")
+                    # measurement plots
+                    error_two_sigma = 1.96*s
+                    a.errorbar(tr,m,yerr=error_two_sigma,label=tilt_str.format(tilt[0]))
 
-                # The below plots prediction confidence intervals for a stochastic model. Not used yet, but will be in a future release. 
-                if samples==None and len(self.helios.delta_soiled_area_variance)>0: # add +/- 2 sigma limits to the predictions, is sigma_dep is set
-                    var_predict = self.helios.delta_soiled_area_variance[f][jj,:]
-                    sigma_predict = np.sqrt( var_predict)
-                    Lp = ym - m0*1.96*sigma_predict
-                    Up = ym + m0*1.96*sigma_predict
-                    a.fill_between(ts,Lp,Up,color='black',alpha=0.1,label=r'$\pm 2\sigma$ CI')
-                elif samples != None: # use percentiles of posterior predictive samples for confidence intervals
-                    Lp = np.percentile(y,2.5,axis=1)
-                    Up = np.percentile(y,97.5,axis=1)
-                    a.fill_between(ts,Lp,Up,color='red',alpha=0.1,label=r'$\pm 2\sigma$ Bayesian CI')
-                
-                a.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval               
+
+                else: 
+                    raise ValueError("This function requires experimental reflectance data")
+
+                a.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval
+                             
                 
                 if reflectance_data!=None: # reflectance is computed at reflectometer incidence angle
                     ang = reflectance_data.reflectometer_incidence_angle[f]
                     s = a.set_ylabel(r"$\rho(t)$ at "+str(ang)+"$^{{\circ}}$")
-                else: # reflectance is computed at heliostat incidence angle. Put average incidence angle on axis label
-                    ang = np.mean( self.helios.incidence_angle[f] )
-                    s = a.set_ylabel(r"soiling factor at "+str(ang)+"$^{{\circ}}$ \n (average)")
+                else: 
+                    raise ValueError("This function requires experimental reflectance data")
 
-                # set mean and CIs for output
-                try:
-                    mean_predictions[f][jj,:] = ym
-                    CI_upper_predictions[f][jj,:] = Up
-                    CI_lower_predictions[f][jj,:] = Lp 
-                except:
-                    mean_predictions[f][jj,:] = ym
-            
             am.legend()
             label_str = dust_type + r" (mean = {0:.2f} $\mu g$/$m^3$)" 
             a2.plot(ts,dust_conc,label=label_str.format(dust_conc.mean()), color='blue')
@@ -1358,7 +1309,7 @@ class fitting_experiment(base_model):
             a2.tick_params(axis ='y', labelcolor = 'blue')
 
             a2a = a2.twinx()
-            p = a2a.plot(ts,ws,color='green',label="Wind Speed ({0:.2f} m/s)".format(ws.mean()))
+            p = a2a.plot(ts,ws,color='green',label="Wind Speed"+r" (mean = {0:.2f} m/s)".format(ws.mean()))
             ax_wind.append(a2a)
             a2a.tick_params(axis ='y', labelcolor = 'green')
             a2a.set_ylim((0,ws_max))
@@ -1369,8 +1320,8 @@ class fitting_experiment(base_model):
             if ii == N_experiments-1: # ylabel for wind speed on rightmost plot only
                 a2a.set_ylabel('Wind Speed (m/s)', color='green') 
             
-            a2.set_title(label_str.format(dust_conc.mean())+", Wind Speed ({0:.2f} m/s)".format(ws.mean()),fontsize=10)
-        
+            a2.set_title(label_str.format(dust_conc.mean())+", Wind Speed"+r" (mean = {0:.2f} m/s)".format(ws.mean()),fontsize=15)
+
         if N_experiments > 1:
 
             # share y axes for all reflectance measurments
@@ -1395,8 +1346,6 @@ class fitting_experiment(base_model):
         fig.autofmt_xdate()
         if save_path != None:
             fig.savefig(save_path+"output.png")
-
-        return mean_predictions,CI_lower_predictions,CI_upper_predictions
 
     def update_model_parameters(self,x):
         if isinstance(x,list) or isinstance(x,np.ndarray) :
