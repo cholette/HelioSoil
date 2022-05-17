@@ -1400,7 +1400,7 @@ class fitting_experiment(base_model):
     
     
     def plot_soiling_factor_all(self,simulation_inputs,posterior_predictive_distribution_samples=None,reflectance_data=None,figsize=None,\
-        reflectance_std='measurements',save_path=None,fig_title=None):
+        reflectance_std='measurements',save_path=None,fig_title=None,font_size=None):
         sim_in = simulation_inputs
         files = list(sim_in.time.keys())
         N_mirrors = np.array([self.helios.tilt[f].shape[0] for f in files])
@@ -1417,7 +1417,7 @@ class fitting_experiment(base_model):
         ws_max = max([max(sim_in.wind_speed[f]) for f in files]) # max wind speed for setting y-axes
         
         fig,ax = plt.subplots(1+1,N_experiments,figsize = figsize,sharex="col")
-        fig.suptitle(fig_title, fontsize=25)
+        fig.suptitle(fig_title, fontsize=font_size)
         ax_wind = []
 
         for ii in range(N_experiments):
@@ -1458,9 +1458,9 @@ class fitting_experiment(base_model):
 
                     tilt = reflectance_data.tilts[f][jj]
                     if all(tilt==tilt[0]):
-                        a.set_title("Mirror Reflectance",fontsize=20)
+                        a.set_title("Mirror Reflectance",fontsize=font_size*4/5)
                     else:
-                        a.set_title(tilt_str.format(tilt.mean())+" (average)",fontsize=20)
+                        a.set_title(tilt_str.format(tilt.mean())+" (average)",fontsize=font_size*4/5)
                     
                     # measurement plots
                     error_two_sigma = 1.96*s
@@ -1471,41 +1471,41 @@ class fitting_experiment(base_model):
                     raise ValueError("This function requires experimental reflectance data")
 
                 a.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval
-                a.tick_params(axis ='y', labelsize=15)
+                a.tick_params(axis ='y', labelsize=font_size*3/5)
                              
                 
                 if reflectance_data!=None: # reflectance is computed at reflectometer incidence angle
                     ang = reflectance_data.reflectometer_incidence_angle[f]
-                    s = a.set_ylabel(r"$\rho(t)$ at "+str(ang)+"$^{{\circ}}$", fontsize=15)
+                    s = a.set_ylabel(r"$\rho(t)$ at "+str(ang)+"$^{{\circ}}$", fontsize=font_size*3/5)
                 else: 
                     raise ValueError("This function requires experimental reflectance data")
 
             plt.grid(False)
-            am.legend(fontsize=20)
+            am.legend(fontsize=font_size*3/5)
             label_str = dust_type + r" (mean = {0:.2f} $\mu g$/$m^3$)" 
             a2.plot(ts,dust_conc,label=label_str.format(dust_conc.mean()), color='blue')
             a2.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval
             myFmt = mdates.DateFormatter('%d-%m-%Y')
             a2.xaxis.set_major_formatter(myFmt)
             a2.tick_params(axis ='y', labelcolor = 'blue')
-            a2.tick_params(axis ='y', labelcolor = 'blue', labelsize=15)
-            a2.tick_params(axis='x', labelsize=14)
+            a2.tick_params(axis ='y', labelcolor = 'blue', labelsize=font_size*3/5)
+            a2.tick_params(axis='x', labelsize=font_size*3/5)
 
             a2a = a2.twinx()
             p = a2a.plot(ts,ws,color='green',label="Wind Speed"+r" (mean = {0:.2f} m/s)".format(ws.mean()))
             ax_wind.append(a2a)
-            a2a.tick_params(axis ='y', labelcolor = 'green', labelsize=15)
+            a2a.tick_params(axis ='y', labelcolor = 'green', labelsize=font_size*3/5)
             a2a.set_ylim((0,ws_max))
-            a2a.tick_params(axis='x', labelsize=14)
+            a2a.tick_params(axis='x', labelsize=font_size*3/5)
             plt.grid(False)
             
             if ii == 0: # ylabel for TSP on leftmost plot only
                 fs = r"{0:s} $\frac{{\mu}}{{m^3}}$"
-                a2.set_ylabel(fs.format(dust_type),color='blue', fontsize=15)
+                a2.set_ylabel(fs.format(dust_type),color='blue', fontsize=font_size*3/5)
             if ii == N_experiments-1: # ylabel for wind speed on rightmost plot only
-                a2a.set_ylabel('Wind Speed (m/s)', color='green', fontsize=15) 
+                a2a.set_ylabel('Wind Speed (m/s)', color='green', fontsize=font_size*3/5) 
             
-            a2.set_title(label_str.format(dust_conc.mean())+", Wind Speed"+r" (mean = {0:.2f} m/s)".format(ws.mean()),fontsize=17)
+            a2.set_title(label_str.format(dust_conc.mean())+", Wind Speed"+r" (mean = {0:.2f} m/s)".format(ws.mean()),fontsize=font_size*3.2/5)
 
         if N_experiments > 1:
 
@@ -1531,6 +1531,8 @@ class fitting_experiment(base_model):
         fig.autofmt_xdate()
         if save_path != None:
             fig.savefig(save_path+"output.png")
+
+        return fig
 
     def update_model_parameters(self,x):
         if isinstance(x,list) or isinstance(x,np.ndarray) :
