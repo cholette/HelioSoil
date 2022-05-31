@@ -498,7 +498,7 @@ class dust:
         diameter_grid_info = np.array(table.loc['D'].Value.split(';')) # [µm]
         diameter_end_points = np.log10(diameter_grid_info[0:2].astype('float'))
         spacing = diameter_grid_info[2].astype('int')
-        self.D = np.logspace(diameter_end_points[0],diameter_end_points[1],num=spacing)
+        self.D = np.logspace(diameter_end_points[0],diameter_end_points[1],num=spacing) # in µm 
         self.Nd = np.array(table.loc['Nd'].Value.split(';')).astype('float')
         self.log10_mu = np.log10(np.array(table.loc['mu'].Value.split(';')).astype('float'))
         self.log10_sig = np.log10(np.array(table.loc['sigma'].Value.split(';')).astype('float'))
@@ -509,6 +509,7 @@ class dust:
             nNd[:,ii] = self.Nd[ii]/(np.sqrt(2*np.pi)*self.log10_sig[ii])*np.exp(-(np.log10(self.D)-self.log10_mu[ii])**2/(2*self.log10_sig[ii]**2))
         self.pdfN = np.sum(nNd,axis=1) # pdfN (number) distribution dN[cm^-3]/dLog10(D[µm])
         self.pdfM = self.pdfN*(self.rho*np.pi/6*self.D**3)*1e-3 # pdfm (mass) dm[µg/m^3]/dLog10(D[µm]), 1e-3 factor from { D^3(µm^3->m^3) 1e-18 , m(kg->µg) 1e9 , V(cm^3->m^3) 1e6 }
+        self.pdfA = self.pdfN*(np.pi/4*self.D**2)*1e-6 # pdfA (area) dm[m^2/m^3]/dLog10(D[µm]), 1e-6 factor from { D^2(µm^2->m^2) 1e-12 , V(cm^3->m^3) 1e6 }
         self.TSP = np.trapz(self.pdfM,np.log10(self.D)) 
         self.PM10 = np.trapz(self.pdfM[self.D<=10],np.log10(self.D[self.D<=10]))  # PM10 = np.trapz(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
 
@@ -553,6 +554,25 @@ class dust:
         ax2.set_title("Number and Mass PDFs")
         ax2.set_xticks(10.0**np.arange(np.log10(D_dust[0]),np.log10(D_dust[-1]),1))
         return ax1,ax2
+    
+    def plot_area_distribution(self,ax=None):
+        D_dust = self.D
+        pdfA = self.pdfA
+
+        if ax==None:
+            _,ax1 = plt.subplots()
+        else:
+            ax1 = ax
+        
+        color = 'black'
+        ax1.set_xlabel("D [$\mu$m]")
+        ax1.set_ylabel(r'$\frac{dA [m^2/m^3] }{dLog(D \;[\mu m])}$', color=color,size=20)
+        ax1.plot(D_dust,pdfA, color=color)
+        ax1.tick_params(axis='y', labelcolor=color)
+        plt.xscale('log')
+        ax1.set_title("Area PDF")
+        ax1.set_xticks(10.0**np.arange(np.log10(D_dust[0]),np.log10(D_dust[-1]),1))
+        return ax1
 
 class sun:
     def __init__(self):
