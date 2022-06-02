@@ -433,7 +433,7 @@ class dust:
 
         if dust_measurement_type not in [None,"TSP"]: # another concentration is of interest (possibly because we have PMX measurements)
             X = dust_measurement_type[2::]
-            if len(X) == 2: # integer, e.g. PM20
+            if len(X) in [1,2]: # integer, e.g. PM20
                 X = int(X)
                 att = "PM{0:d}".format(X)
             elif len(X)==3: # decimal, e.g. PM2.5
