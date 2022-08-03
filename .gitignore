@@ -1,5 +1,7 @@
 .vscode/
-__pycache__/
+.empty/
+tmp/
+*__pycache__*
 .ipynb_checkpoints/
 results/
 copylot.py
