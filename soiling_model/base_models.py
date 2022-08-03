@@ -1,136 +1,24 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Thu May 27 10:56:25 2021
-
-@authors: Giovanni Picotti, Michael E. Cholette
-
-References:
-    [1] Picotti, G., Borghesani, P., Manzolini, G., Cholette, M. E., & Wang, R. (2018). Development and experimental validation 
-        of a physical model for the soiling of mirrors for CSP industry applications. Solar Energy, 173, 1287–1305. 
-        https://doi.org/https://doi.org/10.1016/j.solener.2018.08.066
-        
-    [2] Picotti, G. Moretti, L., Cholette, M.E., Binotti, M., Simonetti, R.,Martelli, E., Steinberg, T.A., Manzolini, G., 
-        Optimization of cleaning strategies for heliostat fields in solar tower plants,Solar Energy,Volume 204,2020,Pages 501-514,
-        https://doi.org/10.1016/j.solener.2020.04.032
-        """
+from multiprocessing import dummy
 import numpy as np
-from numpy import radians as rad
 from numpy import matlib
+from numpy import radians as rad
+from numpy.linalg import inv
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.cm import turbo
 import matplotlib.dates as mdates
+from matplotlib.cm import get_cmap, turbo
 from warnings import warn
 import copy
 from scipy.interpolate import interp2d
+from soiling_model.utilities import _print_if,_ensure_list,_check_keys
 from scipy.optimize import minimize_scalar
 import copy
 from copylot import CoPylot
 
 tol = np.finfo(float).eps # machine floating point precision
 
-def _print_if(s,verbose):
-    # Helper function to control level of output display.
-    if verbose:
-        print(s)
-def _ensure_list(s):
-    if not isinstance(s,list):
-        s = [s]
-    return s
-def _check_keys(simulation_data,reflectance_data):
-    for ii in range(len(simulation_data.time.keys())):
-            if simulation_data.file_name[ii] != reflectance_data.file_name[ii]:
-                raise ValueError("Filenames in simulation data and reflectance do not match. Please ensure you imported the same list of files for both.")
-def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_per_truck=1):
-    T_days = 365
-    n_hours = int(T_days*(24/dt)) # number of hours between cleanings
-    clean_interval = np.floor(T_days/n_cleans)
-    min_clean_interval = np.ceil(n_sectors/n_trucks/n_sectors_per_truck)
-    if clean_interval < min_clean_interval:
-        clean_interval = min_clean_interval
-        n_cleans = int(np.floor(T_days/clean_interval))
-        print("Warning: Cannot clean that many times. Setting number of cleans = "+str(n_cleans))
-
-    # evenly space cleaning ends
-    clean_ends = np.linspace(0,n_hours-1,num=n_cleans+1,dtype=int)
-    clean_ends = np.delete(clean_ends,-1) # remove the last clean since (clean at 0 takes care of this) 
-    
-    # shift schedule
-    cleans = np.zeros((n_sectors,n_hours))
-    for ii in range(n_trucks*n_sectors_per_truck,n_sectors,n_trucks*n_sectors_per_truck):
-        idx0 = n_sectors-ii
-        idx1 = n_sectors-(ii-n_trucks*n_sectors_per_truck)
-        idx_col = clean_ends-(24/dt)*(int(ii/n_trucks/n_sectors_per_truck)-1)
-        for jj in idx_col.astype(int):
-            if jj<0:
-                cc = jj + 365*24
-                cleans[idx0:idx1,cc] = 1
-            else:
-                cleans[idx0:idx1,jj] = 1
-
-    # take care of remainder (first day of a field clean)
-    if idx0 != 0:
-        idx_col = clean_ends-(24/dt)*int(ii/n_trucks/n_sectors_per_truck)
-        for jj in idx_col.astype(int):
-            if jj<0:
-                cc = jj + 365*24
-                cleans[0:idx0,cc] = 1
-            else:
-                cleans[0:idx0,jj] = 1
-    return cleans
-def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,**mpl_kwargs):
-    sim_data = simulation_inputs
-    reflect_data = reflectance_data
-    f = experiment_index
-
-    fig,ax = plt.subplots(nrows=4,sharex=True,**mpl_kwargs)
-    fmt = r"${0:s}^\circ$"
-    ave = reflect_data.average[f]
-    t = reflect_data.times[f]
-    std = reflect_data.sigma[f]
-    names = ["M"+str(ii+1) for ii in range(ave.shape[1])]
-    for ii in range(ave.shape[1]):
-        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=fmt.format(names[ii]),marker='o',capsize=4.0)
-
-    ax[0].grid(True) 
-    label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data.reflectometer_incidence_angle[f]) 
-    ax[0].set_ylabel(label_str)
-    ax[0].legend()
-
-    ax[1].plot(sim_data.time[f],sim_data.dust_concentration[f],color='brown',label="measurements")
-    ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = "Average")
-    label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data.dust_type[0])
-    ax[1].set_ylabel(label_str,color='brown')
-    ax[1].tick_params(axis='y', labelcolor='brown')
-    ax[1].grid(True)
-    ax[1].legend()
-
-    # Rain intensity, if available
-    if len(sim_data.rain_intensity)>0: # rain intensity is not an empty dict
-        ax[2].plot(sim_data.time[f],sim_data.rain_intensity[f])
-    else:
-        rain_nan = np.nan*np.ones(sim_data.time[f].shape)
-        ax[2].plot(sim_data.time[f],rain_nan)
-    
-    ax[2].set_ylabel(r'Rain [mm/hour]',color='blue')
-    ax[2].tick_params(axis='y', labelcolor='blue')
-    YL = ax[2].get_ylim()
-    ax[2].set_ylim((0,YL[1]))
-    ax[2].grid(True)
-
-    ax[3].plot(sim_data.time[f],sim_data.wind_speed[f],color='green',label="measurements")
-    ax[3].axhline(y=sim_data.wind_speed[f].mean(),color='green',ls='--',label = "Average")
-    label_str = r'Wind Speed [$m\,/\,s$]'
-    ax[3].set_ylabel(label_str,color='green')
-    ax[3].set_xlabel('Date')
-    ax[3].tick_params(axis='y', labelcolor='green')
-    ax[3].grid(True)
-    ax[3].legend()
-
-    return fig,ax
-
 class base_model:
-    def __init__(self,file_params,dust_measurement_type=None):
+    def __init__(self,file_params):
         table = pd.read_excel(file_params,index_col="Parameter")
         self.latitude = float(table.loc['latitude'].Value)                  # latitude in degrees of site
         self.longitude = float(table.loc['longitude'].Value)                # longitude in degrees of site
@@ -139,18 +27,93 @@ class base_model:
 
         self.constants = constants()
         self.helios = helios()
-        self.dust = dust()
+        # self.dust = dust() # trying to put into simulation inputs now
 
         self.sigma_dep = None
+        self.Ra = None
 
         self.constants.import_constants(file_params)
-        self.dust.import_dust(file_params,dust_measurement_type=dust_measurement_type)
+        # self.dust.import_dust(file_params,dust_measurement_type=dust_measurement_type)
 
-    def deposition_flux(self,simulation_inputs,hrz0=None,verbose=True):
+    def deposition_velocity(self,dust,wind_speed=None,air_temp=None,hrz0=None,verbose=True,Ra=True):
+        dust = dust
+        constants = self.constants
+        if hrz0 == None: # hrz0 from constants file
+            hrz0 = self.hrz0
+            _print_if("No value for hrz0 supplied. Using value in self.hrz0 = "+str(self.hrz0)+".",verbose)
+        else:
+            _print_if("Value for hrz0 = "+str(hrz0)+" supplied. Value in self.hrz0 ignored.",verbose)
 
+        # N_sims = sim_in.N_simulations
+        # _print_if("Calculating deposition velocity for each of the "+str(N_sims)+" simulations",verbose)
+
+        
+        D_meters = dust.D[0]*1e-6  # µm --> m
+        Ntimes = len(wind_speed) #.shape[0]
+
+        Cc = 1+2*(constants.air_lambda_p/D_meters)* \
+                (constants.A_slip[0]+constants.A_slip[1]*\
+                    np.exp(-constants.A_slip[2]*D_meters/constants.air_lambda_p)) # slip correction factor
+                
+        # computation of the gravitational settling velocity
+        vg = (constants.g*(D_meters**2)*Cc*(dust.rho[0]))/(18*constants.air_mu);    # terminal velocity [m/s] if Re<0.1 
+        Re = constants.air_rho*vg*D_meters/constants.air_mu                      # Reynolds number for vg(Re<0.1)
+        for ii in range(constants.N_iter):
+            Cd_g = 24/Re
+            Cd_g[Re>constants.Re_Limit[0]] = 24/Re[Re>constants.Re_Limit[0]] * \
+                (1 + 3/16*Re[Re>constants.Re_Limit[0]] + 9/160*(Re[Re>constants.Re_Limit[0]]**2)*\
+                    np.log(2*Re[Re>constants.Re_Limit[0]]))
+            Cd_g[Re>constants.Re_Limit[1]] = 24/Re[Re>constants.Re_Limit[1]] * (1 + 0.15*Re[Re>constants.Re_Limit[1]]**0.687)      
+            Cd_g[Re>constants.Re_Limit[2]] = 0.44;      
+            vnew = np.sqrt(4*constants.g*D_meters*Cc*dust.rho[0]/(3*Cd_g*constants.air_rho))
+            if max(abs(vnew-vg)/vnew)<constants.tol:
+                vg = vnew
+                break
+            vg = vnew
+            Re = constants.air_rho*vg*D_meters/constants.air_mu
+        if ii == constants.N_iter:
+            _print_if('Max iter reached in Reynolds calculation for gravitational settling velocity',verbose)
+            
+        # computation of the settling velocity due to inertia and diffusion
+        u_friction = constants.k_von_Karman*wind_speed/np.log(hrz0)                                           # [m/s] friction velocity
+        diffusivity = constants.k_Boltzman/(3*np.pi*constants.air_mu)* \
+            np.transpose(matlib.repmat(air_temp+273.15,len(D_meters),1))* \
+                matlib.repmat(Cc/D_meters,Ntimes,1)                                                      # [m^2/s] brownian diffusivity (Stokes-Einstein expression)
+        Schmidt_number = constants.air_nu/diffusivity                                                               # Schmidt number
+        Stokes_number = np.transpose(matlib.repmat((u_friction**2),len(D_meters),1))* \
+            vg/constants.air_nu/constants.g                                                                         # Stokes number
+        Cd_momentum = constants.k_von_Karman**2/((np.log(hrz0))**2)                                                # drag coefficient for momentum
+        E_brownian = Schmidt_number**(-2/3)                                                                         # Brownian factor
+        E_impaction = (Stokes_number**constants.beta_EIM)/(constants.alpha_EIM+Stokes_number**constants.beta_EIM)   # Impaction factor (Giorgi, 1986)
+        E_interception = 0                                                                                          # Interception factor (=0 in this model)
+        R1 = np.exp(-np.sqrt(Stokes_number))                                                                        # 'stick' factor for boundary layer resistance computation
+        R1[R1<=tol]=tol                                                                                             # to avoid division by 0
+        if Ra:
+            aerodynamic_resistance = 1/(Cd_momentum*wind_speed) 
+            _print_if('Aerodynamic resistance is considered',verbose)                                                   # [s/m] 
+        elif not Ra:
+            aerodynamic_resistance = 0
+            _print_if('Aerodynamic resistance is neglected',verbose)
+        else:
+            _print_if('Choose whether or not considering the aerodynamic resistance',verbose)
+        
+        boundary_layer_resistance = 1/(constants.eps0*\
+            np.transpose(matlib.repmat((u_friction),len(D_meters),1))*R1*\
+                (E_brownian+E_impaction+E_interception)) # [s/m]
+        
+        # Rt = np.transpose(matlib.repmat(aerodynamic_resistance,len(D_meters),1))+boundary_layer_resistance
+        
+        vt = 1/(np.transpose(matlib.repmat(aerodynamic_resistance,len(D_meters),1))\
+            +boundary_layer_resistance)   # [m/s]
+
+        vz = (vg + vt).transpose() # [m/s]
+
+        return(aerodynamic_resistance,boundary_layer_resistance,vg,vt,vz)
+
+    def deposition_flux(self,simulation_inputs,hrz0=None,verbose=True,Ra=True):
         sim_in = simulation_inputs
         helios = self.helios
-        dust = self.dust
+        dust = sim_in.dust
         constants = self.constants
         if hrz0 == None: # hrz0 from constants file
             hrz0 = self.hrz0
@@ -160,10 +123,10 @@ class base_model:
 
         N_sims = sim_in.N_simulations
         _print_if("Calculating deposition velocity for each of the "+str(N_sims)+" simulations",verbose)
-        D_meters = dust.D*1e-6  # µm --> m
 
         files = list(sim_in.wind_speed.keys())
         for f in list(files):
+            D_meters = dust.D[f]*1e-6  # µm --> m
             Ntimes = len(sim_in.wind_speed[f]) #.shape[0]
             Nhelios = helios.tilt[f].shape[0] 
             Nd = D_meters.shape[0]
@@ -173,7 +136,7 @@ class base_model:
                         np.exp(-constants.A_slip[2]*D_meters/constants.air_lambda_p)) # slip correction factor
                     
             # computation of the gravitational settling velocity
-            vg = (constants.g*(D_meters**2)*Cc*(dust.rho))/(18*constants.air_mu);    # terminal velocity [m/s] if Re<0.1 
+            vg = (constants.g*(D_meters**2)*Cc*(dust.rho[f]))/(18*constants.air_mu);    # terminal velocity [m/s] if Re<0.1 
             Re = constants.air_rho*vg*D_meters/constants.air_mu                      # Reynolds number for vg(Re<0.1)
             for ii in range(constants.N_iter):
                 Cd_g = 24/Re
@@ -182,7 +145,7 @@ class base_model:
                         np.log(2*Re[Re>constants.Re_Limit[0]]))
                 Cd_g[Re>constants.Re_Limit[1]] = 24/Re[Re>constants.Re_Limit[1]] * (1 + 0.15*Re[Re>constants.Re_Limit[1]]**0.687)      
                 Cd_g[Re>constants.Re_Limit[2]] = 0.44;      
-                vnew = np.sqrt(4*constants.g*D_meters*Cc*dust.rho/(3*Cd_g*constants.air_rho))
+                vnew = np.sqrt(4*constants.g*D_meters*Cc*dust.rho[f]/(3*Cd_g*constants.air_rho))
                 if max(abs(vnew-vg)/vnew)<constants.tol:
                     vg = vnew
                     break
@@ -205,7 +168,14 @@ class base_model:
             E_interception = 0                                                                                          # Interception factor (=0 in this model)
             R1 = np.exp(-np.sqrt(Stokes_number))                                                                        # 'stick' factor for boundary layer resistance computation
             R1[R1<=tol]=tol                                                                                             # to avoid division by 0
-            aerodynamic_resistance = 1/(Cd_momentum*sim_in.wind_speed[f])                                                    # [s/m] 
+            if Ra:
+                aerodynamic_resistance = 1/(Cd_momentum*sim_in.wind_speed[f]) 
+                _print_if('Aerodynamic resistance is considered',verbose)                                                   # [s/m] 
+            elif not Ra:
+                aerodynamic_resistance = 0
+                _print_if('Aerodynamic resistance is neglected',verbose)
+            else:
+                _print_if('Choose whether or not considering the aerodynamic resistance',verbose)
             
             boundary_layer_resistance = 1/(constants.eps0*\
                 np.transpose(matlib.repmat((u_friction),len(D_meters),1))*R1*\
@@ -217,34 +187,35 @@ class base_model:
                 +boundary_layer_resistance)   # [m/s]
             
             # computation of vertical deposition velocity
-            helios.pdfqN[f] = np.empty((Nhelios,Ntimes,Nd))
             vz = (vg + vt).transpose() # [m/s]
+            
+            helios.pdfqN[f] = np.empty((Nhelios,Ntimes,Nd))
             for idx in range(helios.tilt[f].shape[0]):
                 Fd = np.cos(rad(helios.tilt[f][idx,:]))*vz   # Flux per unit concentration at each time, for each heliostat [m/s] (Eq. 28 in [1] without Cd)
                 if Fd.min() < 0:
                     warn("Deposition velocity is negative (min value: "+str(Fd.min())+"). Setting negative components to zero.")
                     Fd[Fd<0]=0
-                helios.pdfqN[f][idx,:,:] = Fd.transpose()*dust.pdfN*1e6  # Dust flux pdf, i.e. [dq[particles/(s*m^2)]/dLog_{10}(D[µm]) ] deposited on 1m2. 1e6 for cm^3->m^3 
+                helios.pdfqN[f][idx,:,:] = Fd.transpose()*dust.pdfN[f]*1e6  # Dust flux pdf, i.e. [dq[particles/(s*m^2)]/dLog_{10}(D[µm]) ] deposited on 1m2. 1e6 for cm^3->m^3 
             
         self.helios = helios
         
-    def adhesion_removal(self,verbose=True):
+    def adhesion_removal(self,simulation_inputs,verbose=True):
         _print_if("Calculating adhesion/removal balance",verbose)
         helios = self.helios
-        dust = self.dust
+        dust = simulation_inputs.dust
         constants = self.constants
-        D_meters = dust.D*1e-6  # Change to µm
-        files = list(helios.tilt.keys())
-        
-        youngs_modulus_composite = 4/3*((1-dust.poisson**2)/dust.youngs_modulus + \
-                 (1-helios.poisson**2)/helios.youngs_modulus)**(-1);                        # [N/m2] composite Young modulus 
-        hamaker_system = np.sqrt(dust.hamaker*helios.hamaker)                               # [J] system Hamaker constant (Israelachvili)
-        work_adh = hamaker_system/(12*np.pi*constants.D0**2)                                # [J/m^2] work of adhesion
-        radius_sep = ((3*np.pi*work_adh*D_meters**2)/(8*youngs_modulus_composite))**(1/3)   # [m] contact radius at separation (JKR model)
-        F_adhesion = 3/4*np.pi*work_adh*D_meters                                            # [N] van der Waals adhesion force (JKR model)
-        F_gravity = dust.rho*np.pi/6*constants.g*D_meters**3                                # [N] weight force   
+        files = list(simulation_inputs.time.keys())
         
         for f in files:
+            D_meters = dust.D[f]*1e-6  # Change to µm
+            youngs_modulus_composite = 4/3*((1-dust.poisson[f]**2)/dust.youngs_modulus[f] + \
+                (1-helios.poisson**2)/helios.youngs_modulus)**(-1);                             # [N/m2] composite Young modulus 
+            hamaker_system = np.sqrt(dust.hamaker[f]*helios.hamaker)                            # [J] system Hamaker constant (Israelachvili)
+            work_adh = hamaker_system/(12*np.pi*constants.D0**2)                                # [J/m^2] work of adhesion
+            radius_sep = ((3*np.pi*work_adh*D_meters**2)/(8*youngs_modulus_composite))**(1/3)   # [m] contact radius at separation (JKR model)
+            F_adhesion = 3/4*np.pi*work_adh*D_meters                                            # [N] van der Waals adhesion force (JKR model)
+            F_gravity = dust.rho[f]*np.pi/6*constants.g*D_meters**3                             # [N] weight force   
+
             if helios.stow_tilt == None: # No common stow angle supplied. Need to use raw tilts to compute removal moments
                 _print_if("  No common stow_tilt. Use values in helios.tilt to compute removal moments. This might take some time.",verbose)
                 Nhelios = helios.tilt[f].shape[0]
@@ -272,14 +243,15 @@ class base_model:
         _print_if("Calculating soil deposited in a timestep [m^2/m^2]",verbose)
         sim_in = simulation_inputs
         helios = self.helios
-        dust = self.dust
-        D_meters = dust.D*1e-6
+        dust = sim_in.dust
+        
         files = list(sim_in.wind_speed.keys())
         
         for f in files:
+            D_meters = dust.D[f]*1e-6
             helios.delta_soiled_area[f] = np.empty((helios.tilt[f].shape[0],helios.tilt[f].shape[1]))
             
-            if sigma_dep != None or self.sigma_dep != None:
+            if sigma_dep is not None or self.sigma_dep is not None:
                 helios.delta_soiled_area_variance[f] = np.empty((helios.tilt[f].shape[0],helios.tilt[f].shape[1]))
 
             # compute alpha
@@ -289,45 +261,55 @@ class base_model:
                 raise ValueError("Dust measurement = "+sim_in.dust_type[f]+\
                     " not present in dust class. Use dust_type="+sim_in.dust_type[f]+\
                         " option when initializing the model")
-            alpha = sim_in.dust_concentration[f]/den
+            alpha = sim_in.dust_concentration[f]/den[f]
 
             # Compute the area coverage by dust at each time step
             N_helios = helios.tilt[f].shape[0]
             N_times = helios.tilt[f].shape[1]
             for ii in range(N_helios):
                 for jj in range(N_times):
-                    helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.trapz(helios.pdfqN[f][ii,jj,:]*(np.pi/4*D_meters**2)*sim_in.dt[f],np.log10(dust.D))
+                    helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.trapz(helios.pdfqN[f][ii,jj,:]*\
+                        (np.pi/4*D_meters**2)*sim_in.dt[f],np.log10(dust.D[f]))
 
-            # predict confidence interval if sigma_deposition is defined
+            # variance of noise for each measurement
             if sigma_dep != None:
                 theta = np.radians(self.helios.tilt[f])
-                helios.delta_soiled_area_variance[f] = sigma_dep**2*helios.inc_ref_factor[f]*\
-                    np.cumsum(alpha**2*np.cos(theta)**2,axis=1)
+                helios.delta_soiled_area_variance[f] = sigma_dep**2* (alpha**2*np.cos(theta)**2) 
+                # sigma_dep**2*helios.inc_ref_factor[f]*np.cumsum(alpha**2*np.cos(theta)**2,axis=1)
             elif self.sigma_dep != None:
                 theta = np.radians(self.helios.tilt[f])
-                helios.delta_soiled_area_variance[f] = self.sigma_dep**2*helios.inc_ref_factor[f]*\
-                    np.cumsum(alpha**2*np.cos(theta)**2,axis=1)
+                helios.delta_soiled_area_variance[f] = self.sigma_dep**2 * (alpha**2*np.cos(theta)**2)
 
         self.helios = helios
-
-    def plot_area_flux(self,air_temp=None,wind_speed=None,tilt=0.0,hrz0=None,ax=None):
+    
+    def plot_area_flux(self,dust_file,air_temp,wind_speed,tilt=0.0,hrz0=None,constants=None,ax=None,Ra=True):
         dummy_sim = simulation_inputs()
+        dummy_sim.dust.import_dust(dust_file,verbose=False,dust_measurement_types="PM10")
         dummy_sim.air_temp = {0:np.array([air_temp])}
         dummy_sim.wind_speed = {0:np.array([wind_speed])}
         dummy_sim.dt = {0:1.0}
-        dummy_sim.dust_type = {0:"PM10"}        
-        dummy_sim.dust_concentration = {0:np.array([1.0])}   
+        dummy_sim.dust_type = {0:"PM10"}                    # this doesn't matter for this function
+        dummy_sim.dust_concentration = {0:np.array([dummy_sim.dust.PM10[0]])}   # makes alpha = 1
         dummy_sim.N_simulations = 1
 
-        self.helios = helios()
-        self.helios.tilt = {0:np.array([[tilt]])}
-
+        dummy_model = copy.deepcopy(self)
+        dummy_model.helios = helios()
+        dummy_model.helios.tilt = {0:np.array([[tilt]])}
+        dummy_model.sigma_dep = None
+        
+        fmt = "Setting constants.{0:s} to {1:s} (was {2:s})"
+        if constants is not None:
+            for kk in constants.keys():
+                temp = str(getattr(dummy_model.constants,kk))
+                print(fmt.format(str(kk), str(constants[kk]),temp))
+                setattr(dummy_model.constants,kk,constants[kk])
+        
         if hrz0 is None:
             _print_if("No hrz0 supplied. Using base_model.hrz0.")
-            hrz0 = self.hrz0
+            hrz0 = dummy_model.hrz0
         
-        self.deposition_flux(dummy_sim,hrz0=hrz0)
-        self.calculate_delta_soiled_area(dummy_sim)
+        dummy_model.deposition_flux(dummy_sim,hrz0=hrz0,Ra=Ra)
+        dummy_model.calculate_delta_soiled_area(dummy_sim)
 
         if ax is None:
             _,ax1 = plt.subplots()
@@ -335,15 +317,15 @@ class base_model:
             ax1 = ax
 
         title = 'Area loss rate for given dust distribution at wind_speed= {0:.1f} m/s, air_temperature={1:.1f} C \n (Area loss is {2:.2e} $m^2$/($s\cdot m^2$))'
-        ax1.plot(self.dust.D,self.helios.pdfqN[0][0,0,:]*np.pi/4*self.dust.D**2*1e-12)
-        ax1.set_title(title.format(wind_speed,air_temp,self.helios.delta_soiled_area[0][0,0]))
+        ax1.plot(dummy_sim.dust.D[0],dummy_model.helios.pdfqN[0][0,0,:]*np.pi/4*dummy_sim.dust.D[0]**2*1e-12)
+        ax1.set_title(title.format(wind_speed,air_temp,dummy_model.helios.delta_soiled_area[0][0,0]))
         ax1.set_xlabel(r"D [$\mu$m]")
         ax1.set_ylabel(r'$\frac{dA [m^2/m^2/s] }{dLog(D \;[\mu m])}$', color='black',size=20)
         plt.xscale('log')   
         ax1.set_xticks([0.001,0.01,0.1,1,2.5,4,10,20,100])
 
 class simulation_inputs:
-    def __init__(self,experiment_files=None,k_factors=None,dust_type="PM10",verbose=True):
+    def __init__(self,experiment_files=None,k_factors=None,dust_types=None,verbose=True):
 
         # the below will be dictionaries of 1D arrays with file numbers as keys 
         self.file_name = {}             # name of the input file
@@ -356,8 +338,11 @@ class simulation_inputs:
         self.wind_speed = {}            # [m/s] wind speed
         self.dust_concentration = {}    # [µg/m3] PM10 or TSP concentration in air
         self.rain_intensity = {}        # [mm/hr] rain intensity
-        self.dust_type = {}             # Either "TSP" or "PM10", depending on which measurement is available
+        self.dust_type = {}             # Usually either "TSP" or "PM10", but coule be any PMX or PMX.X
         self.dni = {}                   # [W/m^2] Direct Normal Irradiance
+        self.relative_humidity = {}     # [%] relative humidity
+
+        self.dust = dust()              # dust properties will be per experiment
 
         # if experiment files are supplied, import
         if experiment_files is not None:
@@ -372,10 +357,15 @@ class simulation_inputs:
                 raise ValueError("Please specify a k-factor for each weather file")
 
             self.k_factors = {ii:k_factors[ii] for ii in range(self.N_simulations)} 
-            self.import_weather(experiment_files,dust_type=dust_type,verbose=verbose)
+            self.import_weather(experiment_files,dust_types,verbose=verbose)
 
-    def import_weather(self,files,dust_type=None,verbose=True):
+            dust_types = _ensure_list(dust_types)
+            self.dust.import_dust(experiment_files,verbose=verbose,dust_measurement_types=dust_types)
+
+    def import_weather(self,files,dust_types,verbose=True):
         
+        dust_types = _ensure_list(dust_types)
+        assert len(dust_types) == len(files),"Please supply a dust_type for each file."
         for ii in range(len(files)):
 
             self.file_name[ii] = files[ii]
@@ -387,7 +377,7 @@ class simulation_inputs:
             self.end_datetime[ii] = time[-1] # pd.to_datetime(weather['Time'].iloc[-1]).to_numpy()
             # time =  pd.date_range(self.start_datetime[ii],self.end_datetime[ii],freq='1H').to_numpy(dtype = 'datetime64[s]')  # allow for flexible frequency later
                     
-            _print_if("Importing site data (weather,time). Using dust_type = "+dust_type+", test_length = "+\
+            _print_if("Importing site data (weather,time). Using dust_type = "+dust_types[ii]+", test_length = "+\
                 str( ((self.end_datetime[ii]-self.start_datetime[ii]) + np.timedelta64(1,'h')).astype('timedelta64[h]') ),verbose)
             
             self.time[ii] = time
@@ -407,14 +397,20 @@ class simulation_inputs:
                 _print_if("No DNI data to import. Skipping.",verbose)
                 
             # import dust measurements
-            self.dust_concentration[ii] = self.k_factors[ii]*np.array(weather.loc[:,dust_type])
-            self.dust_type[ii] = dust_type
+            self.dust_concentration[ii] = self.k_factors[ii]*np.array(weather.loc[:,dust_types[ii]])
+            self.dust_type[ii] = dust_types[ii]
 
             if "RainIntensity" in weather:
                 _print_if("Importing rain intensity data...",verbose)
                 self.rain_intensity[ii] = np.array(weather.loc[:,'RainIntensity'])
             else:
                 _print_if("No rain intensity data to import.",verbose)
+
+            if "RH" in weather:
+                _print_if("Importing relative humidity data...",verbose)
+                self.relative_humidity[ii] = np.array(weather.loc[:,'RH'])
+            else:
+                _print_if("No relative humidity data to import.",verbose)
 
     def get_experiment_subset(self,idx):
         attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes
@@ -429,110 +425,135 @@ class simulation_inputs:
 
 class dust:
     def __init__(self):
-        self.D     = []          # [µm] dust particles diameter 
-        self.rho   = []          # [kg/m^3] particle material density
-        self.pdfN  = []          # "pdf" of dust number d(N [1/cm3])/d(log10(D[µm]))
-        self.pdfM  = []          # "pdf" of dust mass dm[µg/m3]/dLog10(D[µm])
-        self.hamaker = []        # [J] hamaker constant of dust  
-        self.poisson = []        # [-] poisson ratio of dust
-        self.youngs_modulus = [] # [Pa] young's modulus of dust
-        self.PM10 = []           # [µg/m^3] PM10 concentration computed with the given dust size distribution
-        self.TSP = []            # [µg/m^3] TSP concentration computed with the given dust size distribution
-        self.Nd = []
-        self.log10_mu = []
-        self.log10_sig = []
+        self.D     = {}          # [µm] dust particles diameter 
+        self.rho   = {}          # [kg/m^3] particle material density
+        self.pdfN  = {}          # "pdf" of dust number d(N [1/cm3])/d(log10(D[µm]))
+        self.pdfM  = {}          # "pdf" of dust mass dm[µg/m3]/dLog10(D[µm])
+        self.pdfA  = {}          # "pdf" of dust mass dm[µg/m3]/dLog10(D[µm])
+        self.hamaker = {}        # [J] hamaker constant of dust  
+        self.poisson = {}        # [-] poisson ratio of dust
+        self.youngs_modulus = {} # [Pa] young's modulus of dust
+        self.PM10 = {}           # [µg/m^3] PM10 concentration computed with the given dust size distribution
+        self.TSP = {}            # [µg/m^3] TSP concentration computed with the given dust size distribution
+        self.Nd = {}
+        self.log10_mu = {}
+        self.log10_sig = {}
     
-    def import_dust(self,file_params,verbose=True,dust_measurement_type=None):
-        _print_if("Importing dust",verbose)
-        table = pd.read_excel(file_params,index_col="Parameter")
-        self.rho = float(table.loc['rho'].Value)
+    def import_dust(self,experiment_files,verbose=True,dust_measurement_types=None):
+        _print_if("Importing dust properties for each experiment",verbose)
 
-        # definition of parameters to compute the dust size distribution
-        diameter_grid_info = np.array(table.loc['D'].Value.split(';')) # [µm]
-        diameter_end_points = np.log10(diameter_grid_info[0:2].astype('float'))
-        spacing = diameter_grid_info[2].astype('int')
-        self.D = np.logspace(diameter_end_points[0],diameter_end_points[1],num=spacing)
+        experiment_files = _ensure_list(experiment_files)
+        dust_measurement_types = _ensure_list(dust_measurement_types)
+        assert len(experiment_files) == len(dust_measurement_types), "Please supply a dust measruement type for each experiment. "
         
-        if isinstance(table.loc['Nd'].Value,str): # if this is imported as a string, we need to split it.
-            self.Nd = np.array(table.loc['Nd'].Value.split(';'),dtype=float)
-            self.log10_mu = np.log10(np.array(table.loc['mu'].Value.split(';'),dtype=float))
-            self.log10_sig = np.log10(np.array(table.loc['sigma'].Value.split(';'),dtype=float))
-        elif isinstance(table.loc['Nd'].Value,float): # handle single-component case
-            self.Nd = np.array([table.loc['Nd'].Value])
-            self.log10_mu = np.log10([np.array(table.loc['mu'].Value)])
-            self.log10_sig = np.log10([np.array(table.loc['sigma'].Value)])
-        else:
-            raise ValueError("Format of dust distribution components is not recognized in file {0:s}".format(file_params))
-               
-        # computation of the dust size distribution
-        nNd = np.zeros((len(self.D),len(self.Nd)))
-        for ii in range(len(self.Nd)):
-            nNd[:,ii] = self.Nd[ii]/(np.sqrt(2*np.pi)*self.log10_sig[ii])*np.exp(-(np.log10(self.D)-self.log10_mu[ii])**2/(2*self.log10_sig[ii]**2))
-        self.pdfN = np.sum(nNd,axis=1) # pdfN (number) distribution dN[cm^-3]/dLog10(D[µm])
-        self.pdfA = self.pdfN*(np.pi/4*self.D**2)*1e-6 # pdfA (area) dA[m^2/m^3]/dLog10(D[µm]), 1e-6 factor from { D^2(µm^2->m^2) 1e-12 , V(cm^3->m^3) 1e6 }
-        self.pdfM = self.pdfN*(self.rho*np.pi/6*self.D**3)*1e-3 # pdfm (mass) dm[µg/m^3]/dLog10(D[µm]), 1e-3 factor from { D^3(µm^3->m^3) 1e-18 , m(kg->µg) 1e9 , V(cm^3->m^3) 1e6 }
-        self.TSP = np.trapz(self.pdfM,np.log10(self.D)) 
-        self.PM10 = np.trapz(self.pdfM[self.D<=10],np.log10(self.D[self.D<=10]))  # PM10 = np.trapz(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
+        for ii,f in enumerate(experiment_files):
+            table = pd.read_excel(f,sheet_name="Dust",index_col="Parameter")
+            rhoii = float(table.loc['rho'].Value)
+            self.rho[ii] = rhoii
 
-        if dust_measurement_type not in [None,"TSP"]: # another concentration is of interest (possibly because we have PMX measurements)
-            X = dust_measurement_type[2::]
-            if len(X) in [1,2]: # integer, e.g. PM20
-                X = int(X)
-                att = "PM{0:d}".format(X)
-            elif len(X)==3: # decimal, e.g. PM2.5
-                att = "PM"+"_".join(X.split('.'))
-                X = float(X)
+            # definition of parameters to compute the dust size distribution
+            diameter_grid_info = np.array(table.loc['D'].Value.split(';')) # [µm]
+            diameter_end_points = np.log10(diameter_grid_info[0:2].astype('float'))
+            spacing = diameter_grid_info[2].astype('int')
+            Dii = np.logspace(diameter_end_points[0],diameter_end_points[1],num=spacing)
+            self.D[ii] = Dii
+            
+            if isinstance(table.loc['Nd'].Value,str): # if this is imported as a string, we need to split it.
+                self.Nd[ii] = np.array(table.loc['Nd'].Value.split(';'),dtype=float)
+                self.log10_mu[ii] = np.log10(np.array(table.loc['mu'].Value.split(';'),dtype=float))
+                self.log10_sig[ii] = np.log10(np.array(table.loc['sigma'].Value.split(';'),dtype=float))
+            elif isinstance(table.loc['Nd'].Value,float): # handle single-component case
+                self.Nd[ii] = np.array([table.loc['Nd'].Value])
+                self.log10_mu[ii] = np.log10([np.array(table.loc['mu'].Value)])
+                self.log10_sig[ii] = np.log10([np.array(table.loc['sigma'].Value)])
+            else:
+                raise ValueError("Format of dust distribution components is not recognized in file {0:s}".format(f))
+                
+            # computation of the dust size distribution
+            N_components = len(self.Nd[ii])
+            nNd = np.zeros((len(Dii),N_components))
+            for jj in range(N_components):
+                Ndjj = self.Nd[ii][jj]
+                lsjj = self.log10_sig[ii][jj]
+                lmjj = self.log10_mu[ii][jj]
+                nNd[:,jj] = Ndjj/(np.sqrt(2*np.pi)*lsjj)*np.exp(-(np.log10(Dii)-lmjj)**2/(2*lsjj**2))
 
-            setattr(self,att,np.trapz(self.pdfM[self.D<=X],np.log10(self.D[self.D<=X])))
-            _print_if("Added "+att+" attribute to dust class.",verbose)
+            pdfNii = np.sum(nNd,axis=1) # pdfN (number) distribution dN[cm^-3]/dLog10(D[µm])
+            self.pdfN[ii] = pdfNii
+            self.pdfA[ii] = pdfNii*(np.pi/4*Dii**2)*1e-6 # pdfA (area) dA[m^2/m^3]/dLog10(D[µm]), 1e-6 factor from { D^2(µm^2->m^2) 1e-12 , V(cm^3->m^3) 1e6 }
+            self.pdfM[ii] = pdfNii*(rhoii*np.pi/6*Dii**3)*1e-3 # pdfm (mass) dm[µg/m^3]/dLog10(D[µm]), 1e-3 factor from { D^3(µm^3->m^3) 1e-18 , m(kg->µg) 1e9 , V(cm^3->m^3) 1e6 }
+            self.TSP[ii] = np.trapz(self.pdfM[ii],np.log10(Dii)) 
+            self.PM10[ii] = np.trapz(self.pdfM[ii][Dii<=10],np.log10(Dii[Dii<=10]))  # PM10 = np.trapz(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
 
-        self.hamaker = float(table.loc['hamaker_dust'].Value)
-        self.poisson = float(table.loc['poisson_dust'].Value)
-        self.youngs_modulus = float(table.loc['youngs_modulus_dust'].Value)
+            self.hamaker[ii] = float(table.loc['hamaker_dust'].Value)
+            self.poisson[ii] = float(table.loc['poisson_dust'].Value)
+            self.youngs_modulus[ii] = float(table.loc['youngs_modulus_dust'].Value)
 
-    def plot_distributions(self,ax=None):
-        D_dust = self.D
-        pdfN = self.pdfN
-        pdfM = self.pdfM
+        # add dust measurements if they are PMX
+        for dt in dust_measurement_types:
+            if dt not in [None,"TSP"]: # another concentration is of interest (possibly because we have PMX measurements)
+                X = dt[2::]
+                if len(X) in [1,2]: # integer, e.g. PM20
+                    X = int(X)
+                    att = "PM{0:d}".format(X)
+                elif len(X)==3: # decimal, e.g. PM2.5
+                    att = "PM"+"_".join(X.split('.'))
+                    X = float(X)
+            
+                new_meas = {f: None for f,_ in enumerate(experiment_files)}
+                for ii,_ in enumerate(experiment_files):
+                    new_meas[ii] = np.trapz(self.pdfM[ii][Dii<=X],np.log10(Dii[Dii<=X]))
+            
+                setattr(self,att,new_meas)
+                _print_if("Added "+att+" attribute to dust class to all experiment dust classes",verbose)
 
-        if ax==None:
-            _,ax1 = plt.subplots()
-        else:
-            ax1 = ax
+    def plot_distributions(self,figsize=(5,5)):
+        N_files = len(self.D)
+        _,ax1 = plt.subplots(nrows=N_files,sharex=True,squeeze=False,figsize=figsize)
 
-        color = 'tab:red'
-        ax1.set_xlabel("D [$\mu$m]")
-        ax1.set_ylabel(r'$\frac{dN [cm^{{-3}} ] }{dLog(D \;[\mu m])}$', color=color,size=20)
-        ax1.plot(D_dust,pdfN, color=color)
-        ax1.tick_params(axis='y', labelcolor=color)
+        ax2 = []
+        for ff in range(N_files):
+            D_dust = self.D[ff]
+            pdfN = self.pdfN[ff]
+            pdfM = self.pdfM[ff]
 
-        ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
-        color = 'tab:blue'
-        ax2.set_ylabel(r'$\frac{dm \; [\mu g \, m^{{-3}} ] }{dLog(D \; [\mu m])}$', color=color,size=20)  # we already handled the x-label with ax1
-        ax2.plot(D_dust,pdfM, color=color)
-        ax2.tick_params(axis='y', labelcolor=color)
+            color = 'tab:red'
+            ax1[ff,0].set_xlabel("D [$\mu$m]")
+            ax1[ff,0].set_ylabel(r'$\frac{dN [cm^{{-3}} ] }{dLog(D \;[\mu m])}$', color=color,size=20)
+            ax1[ff,0].plot(D_dust,pdfN, color=color)
+            ax1[ff,0].tick_params(axis='y', labelcolor=color)
+            ax1[ff,0].grid('on')
+
+            ax2.append(ax1[ff,0].twinx())  # instantiate a second axes that shares the same x-axis
+            color = 'tab:blue'
+            ax2[ff].set_ylabel(r'$\frac{dm \; [\mu g \, m^{{-3}} ] }{dLog(D \; [\mu m])}$', color=color,size=20)  # we already handled the x-label with ax1
+            ax2[ff].plot(D_dust,pdfM, color=color)
+            ax2[ff].tick_params(axis='y', labelcolor=color)
+            ax2[ff].set_title("Number and Mass PDFs")
+            ax2[ff].grid('on')
+        
         plt.xscale('log')
-        ax2.set_title("Number and Mass PDFs")
-        ax2.set_xticks(10.0**np.arange(np.log10(D_dust[0]),np.log10(D_dust[-1]),1))
+        ax2[-1].set_xticks(10.0**np.arange(np.log10(D_dust[0]),np.log10(D_dust[-1]),1))
+
         return ax1,ax2
 
-    def plot_area_distribution(self,ax=None):
-        D_dust = self.D
-        pdfA = self.pdfA
-
-        if ax==None:
-            _,ax1 = plt.subplots()
-        else:
-            ax1 = ax
+    def plot_area_distribution(self,figsize=(5,5)):
+        N_files = len(self.D)
+        _,ax1 = plt.subplots(nrows=N_files,sharex=True,squeeze=False,figsize=figsize)
         
-        color = 'black'
-        ax1.set_xlabel("D [$\mu$m]")
-        ax1.set_ylabel(r'$\frac{dA [m^2/m^3] }{dLog(D \;[\mu m])}$', color=color,size=20)
-        ax1.plot(D_dust,pdfA, color=color)
-        ax1.tick_params(axis='y', labelcolor=color)
-        plt.xscale('log')
-        ax1.set_title("Area PDF")
-        ax1.set_xticks(10.0**np.arange(np.log10(D_dust[0]),np.log10(D_dust[-1]),1))
+        for ii in range(N_files):
+            D_dust = self.D[ii]
+            pdfA = self.pdfA[ii]
+
+            color = 'black'
+            ax1[ii,0].set_xlabel("D [$\mu$m]")
+            ax1[ii,0].set_ylabel(r'$\frac{dA [m^2/m^3] }{dLog(D \;[\mu m])}$', color=color,size=20)
+            ax1[ii,0].plot(D_dust,pdfA, color=color)
+            ax1[ii,0].tick_params(axis='y', labelcolor=color)
+            plt.xscale('log')
+            ax1[ii,0].set_title("Area PDF")
+            ax1[ii,0].set_xticks(10.0**np.arange(np.log10(D_dust[0]),np.log10(D_dust[-1]),1))
+
         return ax1
 
 class sun:
@@ -599,6 +620,7 @@ class helios:
         self.velocity = {}                  # [m/s] velocity of falling dust for each diameter
         self.pdfqN = {}                     # dq[particles/(s*m^2)]/dLog_{10}(D[µm]) "pdf" of dust flux 1 m2 of mirror (constant for each time interval) at each diameter
         self.delta_soiled_area_variance = {}
+        self.soiling_factor_prediction_variance = {}
 
     def import_helios(self,file_params,file_solar_field=None,num_sectors=None,verbose=True):
         
@@ -1011,8 +1033,8 @@ class field_model(base_model):
             s_m = np.transpose(s_m)
             THETA_m = 0.5*np.arccos(s_m.dot(t_m))
             THETA_m = np.transpose(THETA_m)                                                 # incident angle (the angle a ray of sun makes with the normal to the surface of the mirrors) in radians
-            helios.incidence_angle[f] = np.degrees(THETA_m)                                    # incident angle in degrees
-            helios.incidence_angle[f][:,sun.elevation[f]<=stowangle] = np.nan                         # heliostats are stored vertically at night facing north
+            helios.incidence_angle[f] = np.degrees(THETA_m)                                 # incident angle in degrees
+            helios.incidence_angle[f][:,sun.elevation[f]<=stowangle] = np.nan               # heliostats are stored vertically at night facing north
             
             # apply the formula (Guo et al.) to obtain the components of the normal for each mirror
             A_norm = np.zeros((len(helios.x),max(s_m.shape),min(s_m.shape)))
@@ -1186,9 +1208,9 @@ class field_model(base_model):
         self.helios = helios
 
 class fitting_experiment(base_model):
-    def __init__(self,file_params,dust_type=None):
+    def __init__(self,file_params):
         table = pd.read_excel(file_params,index_col="Parameter")
-        super().__init__(file_params,dust_measurement_type=dust_type)
+        super().__init__(file_params)
         self.helios.hamaker = float(table.loc['hamaker_glass'].Value)
         self.helios.poisson = float(table.loc['poisson_glass'].Value)
         self.helios.youngs_modulus = float(table.loc['youngs_modulus_glass'].Value)
@@ -1247,9 +1269,18 @@ class fitting_experiment(base_model):
     def predict_reflectance(self,simulation_inputs,hrz0=None,sigma_dep=None,verbose=True):
 
         self.deposition_flux(simulation_inputs,hrz0=hrz0,verbose=verbose)
-        self.adhesion_removal(verbose=verbose)
+        self.adhesion_removal(simulation_inputs,verbose=verbose)
         self.calculate_delta_soiled_area(simulation_inputs,sigma_dep=sigma_dep,verbose=verbose)
         self.reflectance_loss()
+
+        # prediction variance
+        if self.sigma_dep is not None:
+            for f in self.helios.soiling_factor.keys():
+                inc_factor = self.helios.inc_ref_factor[f]
+                dsav = self.helios.delta_soiled_area_variance[f]
+                self.helios.soiling_factor_prediction_variance[f] = np.cumsum( inc_factor**2 * dsav,axis=1 )
+        else:
+            self.helios.soiling_factor_prediction_variance = {}
 
     def _sse(self,hrz0,simulation_inputs,reflectance_data):
         pi = reflectance_data.prediction_indices
@@ -1282,10 +1313,35 @@ class fitting_experiment(base_model):
         _print_if("... done! \n hrz0 = "+str(res.x),verbose)
         return res.x, res.fun
 
+    def transform_scale(self,x,likelihood_hessian=None,direction="inverse"):
+        # direction is either "forward" (to log-scaled space) or "inverse" (back to original scale)
+        x = np.array(x)
+        if direction == "inverse":
+            z = np.array( [np.exp(np.exp(x[0])),np.exp(x[1])] )
+        elif direction == "forward":
+            z = np.array( [np.log(np.log(x[0])),np.log(x[1])] )
+        else:
+            raise ValueError("Transformation direction not recognized.")
+
+        if not isinstance(likelihood_hessian,np.ndarray): # can't use likelihood_hessian == None because it is an array if supplied
+            return z
+        else:
+            #Jacobian for transformation. See Reparameterization at https://en.wikipedia.org/wiki/Fisher_information 
+            J = np.array([  [np.exp(np.exp(x[0])),0],\
+                            [0, np.exp(x[1])]   ])
+
+            if direction == "inverse":
+                Ji = inv(J)                            
+                z_cov = inv( Ji.transpose() @ likelihood_hessian @ Ji ) 
+            elif direction == "forward":
+                z_cov = inv( J.transpose() @ likelihood_hessian @ J ) 
+
+            return z,z_cov 
+
     def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,reflectance_data=None,figsize=None,\
-        reflectance_std='measurements',save_path=None,fig_title=None):
+        reflectance_std='measurements',save_path=None,fig_title=None,return_handles=False):
         sim_in = simulation_inputs
-        samples = posterior_predictive_distribution_samples # not used yet, but will be in a future release
+        samples = posterior_predictive_distribution_samples
         files = list(sim_in.time.keys())
         N_mirrors = np.array([self.helios.tilt[f].shape[0] for f in files])
         if np.all(N_mirrors==N_mirrors[0]):
@@ -1337,7 +1393,7 @@ class fitting_experiment(base_model):
                     am = ax[0,0]
 
 
-                if reflectance_data != None: # plot predictions and reflectance data
+                if reflectance_data is not None: # plot predictions and reflectance data
                     m = reflectance_data.average[f][:,jj]
                     m0 = m[0]
 
@@ -1382,9 +1438,9 @@ class fitting_experiment(base_model):
                     else:
                         a.set_title(tilt_str.format(tilt.mean())+" (average)")
 
-                # The below plots prediction confidence intervals for a stochastic model. Not used yet, but will be in a future release. 
-                if samples==None and len(self.helios.delta_soiled_area_variance)>0: # add +/- 2 sigma limits to the predictions, is sigma_dep is set
-                    var_predict = self.helios.delta_soiled_area_variance[f][jj,:]
+                if samples==None and len(self.helios.soiling_factor_prediction_variance)>0: # add +/- 2 sigma limits to the predictions, is sigma_dep is set
+                    # var_predict = self.helios.delta_soiled_area_variance[f][jj,:]
+                    var_predict = self.helios.soiling_factor_prediction_variance[f][jj,:]
                     sigma_predict = np.sqrt( var_predict)
                     Lp = ym - m0*1.96*sigma_predict
                     Up = ym + m0*1.96*sigma_predict
@@ -1392,7 +1448,7 @@ class fitting_experiment(base_model):
                 elif samples != None: # use percentiles of posterior predictive samples for confidence intervals
                     Lp = np.percentile(y,2.5,axis=1)
                     Up = np.percentile(y,97.5,axis=1)
-                    a.fill_between(ts,Lp,Up,color='red',alpha=0.1,label=r'$\pm 2\sigma$ Bayesian CI')
+                    a.fill_between(ts,Lp,Up,color='red',alpha=0.1,label=r'95% Bayesian CI')
                 
                 a.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval               
                 
@@ -1456,9 +1512,13 @@ class fitting_experiment(base_model):
 
         fig.autofmt_xdate()
         if save_path != None:
-            fig.savefig(save_path+"output.png")
+            fig.savefig(save_path)
 
-        return mean_predictions,CI_lower_predictions,CI_upper_predictions
+        fig.tight_layout()
+        if return_handles:
+            return fig,ax,mean_predictions,CI_lower_predictions,CI_upper_predictions
+        else:
+            return mean_predictions,CI_lower_predictions,CI_upper_predictions
 
     def update_model_parameters(self,x):
         if isinstance(x,list) or isinstance(x,np.ndarray) :
@@ -1467,134 +1527,29 @@ class fitting_experiment(base_model):
                 self.sigma_dep = x[1]
         else:
             self.hrz0 = x
+            self.sigma_dep = None
 
-class cleaning_optimisation:
-    def __init__(self,params,solar_field,weather_files,climate_file,num_sectors,\
-        dust_type=None,n_az=10,n_el=10,second_surface=True):
-        self.truck = {  'operator_salary':[],
-                        'operators_per_truck_per_day':[],
-                        'purchase_cost':[],
-                        'maintenance_costs':[],
-                        'useful_life': [],
-                        'fuel_cost': [],
-                        'water_cost': []
-                    }
-        self.electricty_price = []
-        plant_other_maintenace = [] 
+    def plot_traces(self,idata,estimates=None,priors=None):
+        # plot traces and vertical lines for each estimate
+        ax_trace = az.plot_trace(idata)
+        L = ax_trace.shape[0]
 
-        pl = plant()
-        pl.import_plant(params)
-
-        fm = field_model(params,solar_field,num_sectors=num_sectors)
-        sd = simulation_inputs(weather_files,dust_type=dust_type)
-        fm.sun_angles(sd)
-        fm.helios_angles(pl,second_surface=second_surface)
-        fm.deposition_flux(sd)
-        fm.adhesion_removal()
-        fm.calculate_delta_soiled_area(sd)
-        fm.optical_efficiency(pl,sd,climate_file,n_az=n_az,n_el=n_el)
-
-        self.field_model = fm
-        self.simulation_data = sd
-        self.plant = pl
-
-    def compute_total_cleaning_costs(self,simulation_inputs,n_trucks,n_cleans,\
-        n_sectors_per_truck=1,verbose=True):
-
-        field = self.field_model
-        plant = self.plant
-        files = list(simulation_inputs.time.keys())
-        N_files = len(files)
+        if not np.all(priors == None):
+            names = list(priors.keys())
+            for ii in range(L):
+                a = ax_trace[ii,0]
+                n = names[ii]
+                XL = a.get_xlim(),1e-16
+                x = np.linspace(XL[0],XL[1],1000)
+                a.plot(x,priors[n].pdf(x),color='blue',label=n) 
         
-        # cleaning schedule, currently the same for all experiments/runs
-        cleans = {k: [] for k in files}
-        for f in files:
-            n_helios = field.helios.tilt[f].shape[0]
-            cleans[f] = simple_annual_cleaning_schedule(n_helios,n_trucks,n_cleans,\
-                n_sectors_per_truck=n_sectors_per_truck)
-        
-        # compute reflectance losses (updates field.helios.soiling_factor)
-        field.reflectance_loss(simulation_inputs,cleans,verbose=verbose) 
+        if not np.all(estimates == None):
+            E = len(estimates)
+            cmap = get_cmap('viridis')
+            for ii in range(E):
+                for jj in range(L):
+                    a = ax_trace[jj,0]
+                    if len(estimates[ii]) > jj:
+                        a.axvline(estimates[ii][jj],color=cmap(ii/E),linestyle=':',label=n)
 
-        C_deg = np.zeros(N_files)
-        C_cl = np.zeros(N_files)        
-        Aj = field.helios.sector_area
-        Aj = Aj.reshape((len(Aj),1))
-        eta_pb = plant.power_block_efficiency
-        P = self.electricty_price
-        COM = self.plant_other_maintenace
-        Qloss = plant.receiver['thermal_losses']
-        Qmin = plant.receiver['thermal_min']
-        Qmax = plant.receiver['thermal_max']
-        fmt_str = "Results for simulation {0:d}: \n  TCC: {1:.2e}\n  C_deg: {2:.2e}\n  C_cl: {3:.2e}"
-        
-        for fi in range(N_files):
-            f = files[fi]
-            sf = field.helios.soiling_factor[f].copy()
-            opt_eff = field.helios.optical_efficiency[f].copy()
-
-            # nans are when the sun is below the stowangle. Since the optical efficiency is zero during these times,
-            # we simply set sf to an arbitrary value just to ensure that we get zero instead of nan when summing.
-            sf[np.isnan(sf)] = 1 
-            opt_eff[np.isnan(opt_eff)] = 0
-
-            
-            # ensure that soiling factor is positive
-            if np.any(sf<=0):
-                ind = np.where(sf<=0)[0]
-                _print_if("Warning: soiling factor is <= zero for {0:d} heliostats.".format(len(ind))+\
-                    "\n Setting these soiling factors equal to zero.",verbose)
-                sf[ind] = 0
-            
-            # costs and efficiencies
-            DNI = simulation_inputs.dni[f]
-            eta_nom = field.helios.nominal_reflectance
-            eta_clean = eta_nom*opt_eff
-            DT = simulation_inputs.dt[f]
-            alpha = eta_pb*(P-COM)*DT/3600.0
-            
-            # reflected power when perfectly clean
-            clean_sector_reflected_power = DNI*Aj*eta_clean
-        
-            clean_receiver_power = np.sum(clean_sector_reflected_power,axis=0)
-            clean_receiver_saturated = (clean_receiver_power>Qmax*1e6)
-            clean_receiver_off = (clean_receiver_power<Qmin*1e6)
-            clean_receiver_power[clean_receiver_saturated]=Qmax*1e6
-            clean_receiver_power[clean_receiver_off] = 0
-
-            dirty_receiver_power = np.clip(np.sum(clean_sector_reflected_power*sf,axis=0),None,Qmax*1e6)
-            dirty_receiver_saturated = (dirty_receiver_power>Qmax*1e6)
-            dirty_receiver_off = (dirty_receiver_power<Qmin*1e6)
-            dirty_receiver_power[dirty_receiver_saturated]=Qmax*1e6
-            dirty_receiver_power[dirty_receiver_off] = 0
-
-            stow_elevation = field.sun.stow_angle
-            sun_above_stow_elevation = (field.sun.elevation[f]>=stow_elevation)
-
-            _print_if("Number of time steps where sun is above stow elevation:{0:.1f} ({1:.1f} degrees)".format(sun_above_stow_elevation.sum(),stow_elevation),verbose)
-            _print_if("Number of time steps where clean receiver would be on: {0:.0f}".format( np.sum(~clean_receiver_off) ),verbose)
-            _print_if("Number of time steps where actual receiver is on: {0:.0f}".format( np.sum(~dirty_receiver_off) ),verbose)
-            
-            _print_if("Number of time steps where clean receiver would be saturated: {0:.0f}".format(clean_receiver_saturated.sum()),verbose)
-            _print_if("Number of time steps where actual receiver is saturated: {0:.0f}".format(dirty_receiver_saturated.sum()),verbose)
-
-            lost_power = clean_receiver_power-dirty_receiver_power
-            lost_power[dirty_receiver_off & (clean_receiver_off==False)] -= Qloss*1e6  # subtract losses so we lose only net power
-            C_deg[fi] = alpha*np.sum(lost_power) 
-
-            # compute direct costs
-            number_of_sectors_cleaned = cleans[f].sum()
-            depreciation_cost = self.truck['purchase_cost']/self.truck['useful_life']
-            operator_cost = self.truck['operators_per_truck_per_day']*self.truck['operator_salary']
-            C_cl_fix = (depreciation_cost+operator_cost+self.truck['maintenance_costs'])*n_trucks
-            C_cl_var = (self.truck['water_cost'] + self.truck['fuel_cost'])*number_of_sectors_cleaned
-            C_cl[fi] = C_cl_fix + C_cl_var
-            _print_if(fmt_str.format(fi,C_deg[fi]+C_cl[fi],C_deg[fi],C_cl[fi]),verbose)
-
-        TCC = (C_cl + C_deg)        
-        results = { 'total_cleaning_costs':TCC,
-                    'degradation_costs': C_deg,
-                    'direct_cleaning_costs': C_cl,
-                    'soiling_factor':field.helios.soiling_factor,
-                    'cleaning_actions':cleans}
-        return results
+        plt.show(block=False)
