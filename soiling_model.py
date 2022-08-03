@@ -1179,7 +1179,7 @@ class field_model(base_model):
             _print_if("Computing optical efficiency time series for file "+str(f),verbose)
             helios.optical_efficiency[f] = np.zeros((Ns,T))
             for ll in range(Ns):
-                opt_fun = interp2d(el_grid,az_grid,eff_grid[ll,:,:],fill_value=0)
+                opt_fun = interp2d(el_grid,az_grid,eff_grid[ll,:,:],fill_value=np.nan)
                 helios.optical_efficiency[f][ll,:] = np.array( [opt_fun(sun.elevation[f][tt],sun.azimuth[f][tt])[0] \
                     for tt in range(T)] )
             _print_if("Done!",verbose)
@@ -1531,11 +1531,13 @@ class cleaning_optimisation:
         for fi in range(N_files):
             f = files[fi]
             sf = field.helios.soiling_factor[f].copy()
-
+            opt_eff = field.helios.optical_efficiency[f].copy()
 
             # nans are when the sun is below the stowangle. Since the optical efficiency is zero during these times,
             # we simply set sf to an arbitrary value just to ensure that we get zero instead of nan when summing.
             sf[np.isnan(sf)] = 1 
+            opt_eff[np.isnan(opt_eff)] = 0
+
             
             # ensure that soiling factor is positive
             if np.any(sf<=0):
@@ -1547,7 +1549,7 @@ class cleaning_optimisation:
             # costs and efficiencies
             DNI = simulation_inputs.dni[f]
             eta_nom = field.helios.nominal_reflectance
-            eta_clean = eta_nom*field.helios.optical_efficiency[f]
+            eta_clean = eta_nom*opt_eff
             DT = simulation_inputs.dt[f]
             alpha = eta_pb*(P-COM)*DT/3600.0
             
