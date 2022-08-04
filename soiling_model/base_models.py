@@ -1482,7 +1482,7 @@ class fitting_experiment(base_model):
             a2a.set_ylim((0,ws_max))
             
             if ii == 0: # ylabel for TSP on leftmost plot only
-                fs = r"{0:s} $\frac{{\mu}}{{m^3}}$"
+                fs = r"{0:s} $\frac{{\mu g}}{{m^3}}$"
                 a2.set_ylabel(fs.format(dust_type),color='blue')
             if ii == N_experiments-1: # ylabel for wind speed on rightmost plot only
                 a2a.set_ylabel('Wind Speed (m/s)', color='green') 
