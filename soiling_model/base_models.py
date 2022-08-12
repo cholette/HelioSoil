@@ -305,7 +305,7 @@ class base_model:
                 setattr(dummy_model.constants,kk,constants[kk])
         
         if hrz0 is None:
-            _print_if("No hrz0 supplied. Using base_model.hrz0.")
+            _print_if("No hrz0 supplied. Using base_model.hrz0.",verbose=True)
             hrz0 = dummy_model.hrz0
         
         dummy_model.deposition_flux(dummy_sim,hrz0=hrz0,Ra=Ra)
