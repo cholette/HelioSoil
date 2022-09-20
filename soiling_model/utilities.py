@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import scipy.stats as sps
 import scipy.optimize as spo
 import numpy as np
+from copy import deepcopy
 
 def _print_if(s,verbose):
     # Helper function to control level of output display.
@@ -104,53 +105,61 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index):
     ax[3].legend()
 
     return fig,ax
-def trim_experiment_data(simulation_inputs,reflectance_data,trim_range):
-    sim_dat = simulation_inputs
-    ref_dat = reflectance_data
+def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
+    sim_dat = deepcopy(simulation_inputs)
+    ref_dat = deepcopy(reflectance_data)
     files = sim_dat.time.keys()
 
     for f in files:
-        if isinstance(trim_range,list) or isinstance(trim_range,np.ndarray):
-            lb = trim_range[0]
-            ub = trim_range[1]
-        elif trim_range=="reflectance_data":
+        if isinstance(trim_ranges,list):  
+            assert isinstance(trim_ranges[f],list) or isinstance(trim_ranges[f],np.ndarray), "trim_ranges must be a list of lists or a list of 1D np.arrays"
+            lb = trim_ranges[f][0]
+            ub = trim_ranges[f][1]
+        elif trim_ranges=="reflectance_data":
+            assert ref_dat is not None, "Reflectance data must be supplied for trim_ranges==""reflectance_data"""
             lb = ref_dat.times[f][0]
             ub = ref_dat.times[f][-1]
-        elif trim_range == "simulation_inputs":
+        elif trim_ranges == "simulation_inputs":
             lb = sim_dat.times[f][0]
             ub = sim_dat.times[f][-1]
         else:
-            raise ValueError("""Vale of trim_range not recognized. Must be one of [lb,ub], """+\
+            raise ValueError("""Value of trim_ranges not recognized. Must be a list of lists/np.array [lb,ub], """+\
                 """ "reflectance_data" or "simulation_inputs" """)
 
         # trim simulation data
         mask = (sim_dat.time[f]>=lb) & (sim_dat.time[f]<=ub)
+        if all(mask==0):
+            raise ValueError("Provided date range excludes all data.")
+            
         sim_dat.time[f] = sim_dat.time[f][mask]
         sim_dat.time_diff[f] = sim_dat.time_diff[f][mask]
         sim_dat.air_temp[f] = sim_dat.air_temp[f][mask]
         sim_dat.wind_speed[f] = sim_dat.wind_speed[f][mask]
         sim_dat.dust_concentration[f] = sim_dat.dust_concentration[f][mask]
-
-        if len(ref_dat.tilts)>0:
-            ref_dat.tilts[f] = ref_dat.tilts[f][:,mask]
         if len(sim_dat.rain_intensity)>0:
             sim_dat.rain_intensity[f] = sim_dat.rain_intensity[f][mask]
+        if len(sim_dat.dni)>0:
+            sim_dat.dni[f] = sim_dat.dni[f][mask]
+        if len(sim_dat.relative_humidity)>0:
+            sim_dat.relative_humidity[f] = sim_dat.relative_humidity[f][mask]
         
-        # trim reflectance data
-        mask = (ref_dat.times[f]>=lb) & (ref_dat.times[f]<=ub)
-        ref_dat.times[f] = ref_dat.times[f][mask] 
-        ref_dat.average[f] = ref_dat.average[f][mask,:]
-        ref_dat.sigma[f] = ref_dat.sigma[f][mask,:]
-        ref_dat.sigma_of_the_mean[f] = ref_dat.sigma_of_the_mean[f][mask,:]
-        
+        if reflectance_data is not None:
+            # trim reflectance data
+            if len(ref_dat.tilts)>0:
+                ref_dat.tilts[f] = ref_dat.tilts[f][:,mask]
+            mask = (ref_dat.times[f]>=lb) & (ref_dat.times[f]<=ub)
+            ref_dat.times[f] = ref_dat.times[f][mask] 
+            ref_dat.average[f] = ref_dat.average[f][mask,:]
+            ref_dat.sigma[f] = ref_dat.sigma[f][mask,:]
+            ref_dat.sigma_of_the_mean[f] = ref_dat.sigma_of_the_mean[f][mask,:]
 
-        ref_dat.prediction_indices[f] = []
-        ref_dat.prediction_times[f] = []
-        time_grid = sim_dat.time[f]
-        for m in ref_dat.times[f]:
-            ref_dat.prediction_indices[f].append(np.argmin(np.abs(m-time_grid)))        
-            ref_dat.prediction_times[f].append(time_grid[ref_dat.prediction_indices[f]])
-            ref_dat.rho0[f] = ref_dat.average[f][0,:]
+            ref_dat.prediction_indices[f] = []
+            ref_dat.prediction_times[f] = []
+            time_grid = sim_dat.time[f]
+            for m in ref_dat.times[f]:
+                ref_dat.prediction_indices[f].append(np.argmin(np.abs(m-time_grid)))        
+                ref_dat.prediction_times[f].append(time_grid[ref_dat.prediction_indices[f]])
+                ref_dat.rho0[f] = ref_dat.average[f][0,:]
     
     return sim_dat,ref_dat
 def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,sheet_name=None,\
