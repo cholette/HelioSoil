@@ -12,6 +12,7 @@ import copy
 from scipy.interpolate import interp2d
 from soiling_model.utilities import _print_if,_ensure_list,_check_keys
 from scipy.optimize import minimize_scalar
+from scipy.integrate import cumtrapz
 import copy
 from copylot import CoPylot
 
@@ -203,6 +204,7 @@ class base_model:
         _print_if("Calculating adhesion/removal balance",verbose)
         helios = self.helios
         dust = simulation_inputs.dust
+        dt = simulation_inputs.dt
         constants = self.constants
         files = list(simulation_inputs.time.keys())
         
@@ -220,14 +222,14 @@ class base_model:
                 _print_if("  No common stow_tilt. Use values in helios.tilt to compute removal moments. This might take some time.",verbose)
                 Nhelios = helios.tilt[f].shape[0]
                 Ntimes = helios.tilt[f].shape[1]
-                helios.pdfqN[f] = np.cumsum(helios.pdfqN[f],axis=1) # Accumulate in time so that we ensure we reomove all dust present on mirror if removal condition is satisfied at a particular time
+                helios.pdfqN[f] = cumtrapz(y=helios.pdfqN[f],dx=dt[f],axis=1,initial=0) # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
                 for h in range(Nhelios):
                     for k in range(Ntimes):
                         mom_removal = np.sin(rad(helios.tilt[f][h,k]))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity at each tilt for each diameter
                         mom_adhesion =  (F_adhesion+F_gravity*np.cos(rad(helios.tilt[f][h,k])))*radius_sep             # [Nm] adhesion moment  
-                        helios.pdfqN[f][h,k,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
+                        helios.pdfqN[f][h,k::,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
                 
-                helios.pdfqN[f] = np.diff(helios.pdfqN[f],axis=1,prepend=0) # Take difference again so that pdfqN is the difference in dust deposited at each diameter
+                helios.pdfqN[f] = np.gradient(helios.pdfqN[f],dt[f],axis=1) # Take derivative so that pdfqN is the rate at wich dust is deposited at each diameter
 
             else: # common stow angle at night for all heliostats. Assumes tilt at night is close to vertical at night.
                 # Since the heliostats are stowed at a large tilt angle at night, we assume that any dust that falls off at this stow
@@ -611,7 +613,6 @@ class helios:
         self.optical_efficiency = {}        # [ - ] average total optical efficiency of the sector represented by the heliostat
         
         # Properties of dust on heliostat (dicts of 3D arrays, indexed by [heliostat_index, time, diameter] with experiment numbers as keys)
-        self.pdfqN = {}
         self.delta_soiled_area = {}         # [m^2/m^2] "pdf" of projected area of dust deposited on mirror for each time interval & each diameter
         self.mom_removal = {}
         self.mom_adhesion = {}
