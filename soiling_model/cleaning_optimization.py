@@ -21,11 +21,16 @@ class optimisation_problem():
         pl.import_plant(params)
 
         fm = field_model(params,solar_field,num_sectors=num_sectors)
+
+        if fm.loss_model=="mie":
+            ValueError("Field simulation using loss_model==""mie"" not yet available.")
+
         sd = simulation_inputs(weather_files,dust_types=dust_type)
         fm.sun_angles(sd)
         fm.helios_angles(pl,second_surface=second_surface)
         fm.deposition_flux(sd)
         fm.adhesion_removal(sd)
+        sd.compute_extinction_weights(loss_model=fm.loss_model)
         fm.calculate_delta_soiled_area(sd)
         fm.optical_efficiency(pl,sd,climate_file,n_az=n_az,n_el=n_el,verbose=verbose)
 

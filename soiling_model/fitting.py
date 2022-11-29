@@ -380,7 +380,7 @@ class semi_physical(base_model):
 
             for jj in range(0,N_mirrors):
                 if jj == 0:
-                    tilt_str = r"Experiment "+str(ii+1)+ r", tilt = ${0:.0f}^{{\circ}}$"
+                    tilt_str = r"Experiment "+str(ii)+ r", tilt = ${0:.0f}^{{\circ}}$"
                 else:
                     tilt_str = r"tilt = ${0:.0f}^{{\circ}}$"
 
@@ -521,7 +521,7 @@ class semi_physical(base_model):
             return fig,ax,mean_predictions,CI_lower_predictions,CI_upper_predictions
         else:
             return mean_predictions,CI_lower_predictions,CI_upper_predictions
-
+            
     def update_model_parameters(self,x):
         if isinstance(x,list) or isinstance(x,np.ndarray) :
             self.hrz0 = x[0]

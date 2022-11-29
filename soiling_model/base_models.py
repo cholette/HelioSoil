@@ -10,7 +10,7 @@ from matplotlib.cm import get_cmap, turbo
 from warnings import warn
 import copy
 from scipy.interpolate import interp2d
-from soiling_model.utilities import _print_if,_ensure_list,_check_keys
+from soiling_model.utilities import _print_if,_ensure_list,_extinction_function
 from scipy.optimize import minimize_scalar
 from scipy.integrate import cumtrapz
 import copy
@@ -25,6 +25,7 @@ class base_model:
         self.longitude = float(table.loc['longitude'].Value)                # longitude in degrees of site
         self.timezone_offset = float(table.loc['timezone_offset'].Value)    # [hrs from GMT] timezone of site
         self.hrz0 =float(table.loc['hr_z0'].Value)                          # [-] site roughness height ratio
+        self.loss_model = table.loc['loss_model'].Value                     # either "geometry" or "mie"
 
         self.constants = constants()
         self.helios = helios()
@@ -242,13 +243,16 @@ class base_model:
         self.helios = helios
     
     def calculate_delta_soiled_area(self,simulation_inputs,sigma_dep=None,verbose=True): 
+        
+        # info and error checking
         _print_if("Calculating soil deposited in a timestep [m^2/m^2]",verbose)
+        
         sim_in = simulation_inputs
         helios = self.helios
         dust = sim_in.dust
+        extinction_weighting = sim_in.extinction_weighting
         
         files = list(sim_in.wind_speed.keys())
-        
         for f in files:
             D_meters = dust.D[f]*1e-6
             helios.delta_soiled_area[f] = np.empty((helios.tilt[f].shape[0],helios.tilt[f].shape[1]))
@@ -270,8 +274,19 @@ class base_model:
             N_times = helios.tilt[f].shape[1]
             for ii in range(N_helios):
                 for jj in range(N_times):
-                    helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.trapz(helios.pdfqN[f][ii,jj,:]*\
-                        (np.pi/4*D_meters**2)*sim_in.dt[f],np.log10(dust.D[f]))
+
+                    # if loss_model == 'geometry':
+                    #     # The below two integrals are equivalent, but the version with the log10(D)
+                    #     # as the independent variable is used due to the log spacing of the diameter grid
+                    #     #
+                    #     # helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.trapz(helios.pdfqN[f][ii,jj,:]*\
+                    #     #     (np.pi/4*D_meters**2)*sim_in.dt[f]/dust.D[f]/np.log(10),dust.D[f])
+                        
+                    #     helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.pi/4 *np.trapz(helios.pdfqN[f][ii,jj,:]*\
+                    #         (D_meters**2)*sim_in.dt[f],np.log10(dust.D[f]))
+                    # else: # loss_model == "mie"
+                    helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.pi/4 * np.trapz(helios.pdfqN[f][ii,jj,:]*\
+                        (D_meters**2)*sim_in.dt[f]*extinction_weighting[f],np.log10(dust.D[f]))
 
             # variance of noise for each measurement
             if sigma_dep != None:
@@ -284,15 +299,31 @@ class base_model:
 
         self.helios = helios
     
-    def plot_area_flux(self,dust_file,air_temp,wind_speed,tilt=0.0,hrz0=None,constants=None,ax=None,Ra=True):
+    def plot_area_flux( self,sim_data,exp_idx,air_temp,wind_speed,
+                        tilt=0.0,hrz0=None,constants=None,dust=None,
+                        reflectometer_acceptance_angle=None,
+                        ax=None,Ra=True,verbose=True):
         dummy_sim = simulation_inputs()
-        dummy_sim.dust.import_dust(dust_file,verbose=False,dust_measurement_types="PM10")
+
+        for att_name in sim_data.dust.__dict__.keys():
+            val = {0:getattr(sim_data.dust,att_name)[exp_idx]}
+            setattr(dummy_sim.dust,att_name,val)
+        dummy_sim.extinction_weighting = {0:sim_data.extinction_weighting[exp_idx]}
+        
+        # dummy_sim.dust.import_dust(dust_file,verbose=False,dust_measurement_types="PM10")
         dummy_sim.air_temp = {0:np.array([air_temp])}
         dummy_sim.wind_speed = {0:np.array([wind_speed])}
         dummy_sim.dt = {0:1.0}
         dummy_sim.dust_type = {0:"PM10"}                    # this doesn't matter for this function
         dummy_sim.dust_concentration = {0:np.array([dummy_sim.dust.PM10[0]])}   # makes alpha = 1
         dummy_sim.N_simulations = 1
+
+        if self.loss_model == "mie":
+            dummy_sim.source_normalized_intensity = {0:sim_data.source_normalized_intensity[exp_idx]}
+            dummy_sim.source_wavelength = {0:sim_data.source_wavelength[exp_idx]}
+            _print_if("Loss model is ""mie"" ",verbose)
+        else:
+            _print_if("Loss model is ""geometry"". Extinction weights are unity for all diameters.",verbose)
 
         dummy_model = copy.deepcopy(self)
         dummy_model.helios = helios()
@@ -306,11 +337,36 @@ class base_model:
                 print(fmt.format(str(kk), str(constants[kk]),temp))
                 setattr(dummy_model.constants,kk,constants[kk])
         
+        fmt = "Setting simulation_data.dust.{0:s} to {1:s} (was {2:s})"
+        if dust is not None:
+            for kk in dust.keys():
+                temp = str(getattr(dummy_sim.dust,kk)[0])
+                print(fmt.format(str(kk), str(dust[kk]),temp))
+                setattr(dummy_sim.dust,kk,{0:dust[kk]})
+            _print_if("Recomputing extinction weights ... ",verbose)
+            
+            if 'm' in dust.keys():
+                if self.loss_model == "geometry":
+                    print("Warning: Any changes in the refractive index will not have any effect because loss_model = ""geometry"" ")
+                else:
+                    if reflectometer_acceptance_angle is None:
+                        raise ValueError(   " You have modified the refractive index and the " \
+                                            "\n extinction weights need to be re-computed. Please supply reflectometer_acceptance_angle.")
+                    else:
+                        dia = dummy_sim.dust.D[0]
+                        refractive_index = dummy_sim.dust.m[0]
+                        lam = dummy_sim.source_wavelength[0]
+                        intensities = dummy_sim.source_normalized_intensity[0]
+                        phia = reflectometer_acceptance_angle
+                        dummy_sim.extinction_weighting = {0:_extinction_function(dia,lam,intensities,phia,refractive_index,verbose=verbose)}
+
+
         if hrz0 is None:
-            _print_if("No hrz0 supplied. Using base_model.hrz0.",verbose=True)
-            hrz0 = dummy_model.hrz0
-        
-        dummy_model.deposition_flux(dummy_sim,hrz0=hrz0,Ra=Ra)
+            hrz0 = dummy_model.hrz0        
+            dummy_model.deposition_flux(dummy_sim,Ra=Ra)
+        else:
+            dummy_model.deposition_flux(dummy_sim,hrz0=hrz0,Ra=Ra)
+
         dummy_model.calculate_delta_soiled_area(dummy_sim)
 
         if ax is None:
@@ -319,7 +375,8 @@ class base_model:
             ax1 = ax
 
         title = 'Area loss rate for given dust distribution at wind_speed= {0:.1f} m/s, air_temperature={1:.1f} C \n (Area loss is {2:.2e} $m^2$/($s\cdot m^2$))'
-        ax1.plot(dummy_sim.dust.D[0],dummy_model.helios.pdfqN[0][0,0,:]*np.pi/4*dummy_sim.dust.D[0]**2*1e-12)
+        area_loss_rate = (dummy_model.helios.pdfqN[0][0,0,:]*np.pi/4*dummy_sim.dust.D[0]**2*1e-12*dummy_sim.extinction_weighting[0])
+        ax1.plot(dummy_sim.dust.D[0],area_loss_rate)
         ax1.set_title(title.format(wind_speed,air_temp,dummy_model.helios.delta_soiled_area[0][0,0]))
         ax1.set_xlabel(r"D [$\mu$m]")
         ax1.set_ylabel(r'$\frac{dA [m^2/m^2/s] }{dLog(D \;[\mu m])}$', color='black',size=20)
@@ -330,21 +387,23 @@ class simulation_inputs:
     def __init__(self,experiment_files=None,k_factors=None,dust_types=None,verbose=True):
 
         # the below will be dictionaries of 1D arrays with file numbers as keys 
-        self.file_name = {}             # name of the input file
-        self.dt = {}                    # [seconds] simulation time step
-        self.time = {}                  # absolute time (taken from 1st Jan)
-        self.time_diff = {}             # [days] delta_time since start date
-        self.start_datetime = {}        # datetime64 for start 
-        self.end_datetime = {}          # datetime64 for end
-        self.air_temp = {}              # [C] air temperature
-        self.wind_speed = {}            # [m/s] wind speed
-        self.dust_concentration = {}    # [µg/m3] PM10 or TSP concentration in air
-        self.rain_intensity = {}        # [mm/hr] rain intensity
-        self.dust_type = {}             # Usually either "TSP" or "PM10", but coule be any PMX or PMX.X
-        self.dni = {}                   # [W/m^2] Direct Normal Irradiance
-        self.relative_humidity = {}     # [%] relative humidity
+        self.file_name = {}                     # name of the input file
+        self.dt = {}                            # [seconds] simulation time step
+        self.time = {}                          # absolute time (taken from 1st Jan)
+        self.time_diff = {}                     # [days] delta_time since start date
+        self.start_datetime = {}                # datetime64 for start 
+        self.end_datetime = {}                  # datetime64 for end
+        self.air_temp = {}                      # [C] air temperature
+        self.wind_speed = {}                    # [m/s] wind speed
+        self.dust_concentration = {}            # [µg/m3] PM10 or TSP concentration in air
+        self.rain_intensity = {}                # [mm/hr] rain intensity
+        self.dust_type = {}                     # Usually either "TSP" or "PM10", but coule be any PMX or PMX.X
+        self.dni = {}                           # [W/m^2] Direct Normal Irradiance
+        self.relative_humidity = {}             # [%] relative humidity
+        self.source_normalized_intensity = {}   # [1/m^2/nm] normalized source intensity
+        self.source_wavelength = {}             # [nm] source wavelengths corersponding to source_intensity 
 
-        self.dust = dust()              # dust properties will be per experiment
+        self.dust = dust()                      # dust properties will be per experiment
 
         # if experiment files are supplied, import
         if experiment_files is not None:
@@ -363,6 +422,22 @@ class simulation_inputs:
 
             dust_types = _ensure_list(dust_types)
             self.dust.import_dust(experiment_files,verbose=verbose,dust_measurement_types=dust_types)
+
+            # will import source intensity if the sheet exists
+            self.import_source_intensity(experiment_files,verbose=verbose)
+
+    def import_source_intensity(self,files,verbose=True):
+        for ii,f in enumerate(files):
+            xl = pd.ExcelFile(f)
+            if "Source_Intensity" in xl.sheet_names:
+                _print_if(f"Loading source (normalized) intensity from {f}",verbose)
+                intensity = xl.parse("Source_Intensity")
+                self.source_wavelength[ii] = intensity['Wavelength (nm)'].to_numpy()
+                self.source_normalized_intensity[ii] = intensity['Source Intensity (W/m^2 nm)'].to_numpy()
+                norm = np.trapz(y=self.source_normalized_intensity[ii],x=self.source_wavelength[ii])
+                self.source_normalized_intensity[ii] = self.source_normalized_intensity[ii]/norm # make sure intensity is normalized for later computations
+            else:
+                self.source_normalized_intensity[ii] = None
 
     def import_weather(self,files,dust_types,verbose=True):
         
@@ -425,10 +500,83 @@ class simulation_inputs:
                         attr.pop(k)
         return self_out
 
+    def compute_extinction_weights(self,reflectance_data=None,loss_model=None,acceptance_angle=None,verbose=True):
+        files = list(self.file_name.keys())
+
+        self.extinction_weighting = {f:np.array([]) for f in files}
+        if loss_model == 'mie':
+            assert ( (reflectance_data is not None) or (acceptance_angle is not None) ), "Please supply either acceptance_angle or reflectance_data when loss_model == ""mie"" "
+            
+            if reflectance_data is not None:
+                ref_dat = reflectance_data
+                assert acceptance_angle is None, "Please supply only reflectance_data or accpetance_angle, but not both, when loss_model == ""mie"""
+            
+            _print_if("Loss Model is ""mie"". Computing extinction coefficients ... ",verbose)
+            
+            for ii,f in enumerate(files):
+                _print_if(f"\t ... for file {f}",verbose)
+
+                if ii > 0:
+                    same_diameters =  np.all(dia == self.dust.D[f])
+                    same_ref_ind =  (refractive_index == self.dust.m[f])
+                    same_lams =  np.all(lam == self.source_wavelength[f])
+                    same_intensity =  np.all(intensities == self.source_normalized_intensity[f])
+                    same_phia = (phia == ref_dat.reflectometer_acceptance_angle[f])
+                    same_everything = ( same_diameters and same_ref_ind and same_lams
+                                        and same_intensity and same_phia) 
+                else:
+                    same_everything = False
+                
+                if same_everything:
+                    _print_if("\t Using previously computed extinction weights.",verbose)
+                    self.extinction_weighting[f] = ext_weight
+                else:
+                    if ii > 0:
+                        if not same_diameters:
+                            _print_if("\t Diameter grid of {f} is different than {files[ii-1]}",verbose)
+                        elif not same_ref_ind:
+                            _print_if("\t Refractive index of {f} is different than {files[ii-1]}",verbose)
+                        elif not same_lams: 
+                            _print_if("\t Wavelength grid of {f} is different than {files[ii-1]}",verbose)
+                        elif not same_phia:
+                            _print_if(f"Acceptance angle of {f} is different than {files[ii-1]}",verbose)
+                        elif not same_intensity:
+                            _print_if(f"Source intensity of {f} is different than {files[ii-1]}",verbose)
+                    
+                    _print_if("\t Computing weights weights...",verbose)
+                    dia = self.dust.D[f]
+                    refractive_index = self.dust.m[f]
+                    lam = self.source_wavelength[f]
+                    intensities = self.source_normalized_intensity[f]
+                    phia = ref_dat.reflectometer_acceptance_angle[f]
+                    ext_weight = _extinction_function(  dia,lam,intensities,phia,
+                                                        refractive_index,verbose=verbose)
+                    self.extinction_weighting[f] = ext_weight
+                    _print_if("\t ... Done!",verbose)
+        else: #self.loss_model == 'geometry'
+            _print_if(f"Loss Model is ""geometry"". Setting extinction coefficients to unity for all files.",verbose)
+            for f in files:
+                dia = self.dust.D[f]
+                self.extinction_weighting[f] = np.ones(dia.shape)
+
+    def plot_extinction_weights(self,fig_kwargs={},plot_kwargs={}):
+        
+        files = list(self.file_name.keys())
+        fig,ax = plt.subplots(nrows=len(files),sharex=True,**fig_kwargs)
+
+        for ii,f in enumerate(files):
+            ax[ii].semilogx(self.dust.D[f],self.extinction_weighting[f],**plot_kwargs)
+            ax[ii].set_xlabel(r"Diameter ($\mu$ m)")
+            ax[ii].set_ylabel(r"Extinction area multiplier (-)")
+            ax[ii].grid(True)
+        
+        return fig,ax
+        
 class dust:
     def __init__(self):
         self.D     = {}          # [µm] dust particles diameter 
         self.rho   = {}          # [kg/m^3] particle material density
+        self.m     = {}          # [-] complex refractive index
         self.pdfN  = {}          # "pdf" of dust number d(N [1/cm3])/d(log10(D[µm]))
         self.pdfM  = {}          # "pdf" of dust mass dm[µg/m3]/dLog10(D[µm])
         self.pdfA  = {}          # "pdf" of dust mass dm[µg/m3]/dLog10(D[µm])
@@ -452,6 +600,8 @@ class dust:
             table = pd.read_excel(f,sheet_name="Dust",index_col="Parameter")
             rhoii = float(table.loc['rho'].Value)
             self.rho[ii] = rhoii
+            self.m[ii] = table.loc['refractive_index_real_part'].Value - \
+                            table.loc['refractive_index_imaginary_part'].Value*1j
 
             # definition of parameters to compute the dust size distribution
             diameter_grid_info = np.array(table.loc['D'].Value.split(';')) # [µm]
@@ -584,6 +734,8 @@ class helios:
         self.nominal_reflectance = [] #[-] as clean reflectance of the heliostat
         self.height = []
         self.width = []
+        self.num_radial_sectors = []
+        self.num_theta_sectors = []
         
         # Geometry of field (1D array indexed by heliostat_index)
         self.x = []                         # [m] x (east-west) position of representative heliostats
@@ -600,8 +752,6 @@ class helios:
                             'z':[],
                             'sector_id':[]
                         }                   # populated if representative heliostats are from a sectorization of a field
-        self.num_radial_sectors = []
-        self.num_theta_sectors = []
 
         # Movement properties (dicts of 2D array indexed by [heliostat_index, time] with weather file name keys )
         self.tilt = {}                      # [deg] tilt angle of the heliostat
@@ -861,8 +1011,9 @@ class constants:
         self.D0 = float(table.loc['D0'].Value)                          # [m] common value of separation distance (Ahmadi)
 
 class reflectance_measurements:
-    def __init__(self,reflectance_files,time_grids,number_of_measurements=None, reflectometer_incidence_angle=None,\
-        import_tilts=False,column_names_to_import=None):
+    def __init__(self,reflectance_files,time_grids,number_of_measurements=None, 
+                    reflectometer_incidence_angle=None,reflectometer_acceptance_angle=None,
+                    import_tilts=False,column_names_to_import=None):
         
         reflectance_files = _ensure_list(reflectance_files)
         reflectometer_incidence_angle = _ensure_list(reflectometer_incidence_angle)
@@ -872,6 +1023,9 @@ class reflectance_measurements:
         
         if reflectometer_incidence_angle == None:
             reflectometer_incidence_angle = [0]*N_experiments
+        
+        if reflectometer_acceptance_angle == None:
+            reflectometer_acceptance_angle = [0]*N_experiments
 
         self.file_name = {}
         self.times = {}
@@ -882,13 +1036,18 @@ class reflectance_measurements:
         self.prediction_times = {}
         self.rho0 = {}
         self.reflectometer_incidence_angle = {}
+        self.reflectometer_acceptance_angle = {}
+
         if import_tilts:
             self.tilts = {}
-        self.import_reflectance_data(reflectance_files,time_grids,number_of_measurements,reflectometer_incidence_angle,\
-            import_tilts=import_tilts,column_names_to_import=column_names_to_import)
+        self.import_reflectance_data(reflectance_files,time_grids,number_of_measurements,
+                                reflectometer_incidence_angle,reflectometer_acceptance_angle,
+                                import_tilts=import_tilts,column_names_to_import=column_names_to_import)
         
-    def import_reflectance_data(self,reflectance_files,time_grids,number_of_measurements,reflectometer_incidence_angle,\
-        import_tilts=False,column_names_to_import=None):
+    def import_reflectance_data(self,reflectance_files,time_grids,number_of_measurements,
+                                reflectometer_incidence_angle,reflectometer_acceptance_angle,
+                                import_tilts=False,column_names_to_import=None):
+
         for ii in range(len(reflectance_files)):
             
             self.file_name[ii] = reflectance_files[ii]
@@ -913,6 +1072,7 @@ class reflectance_measurements:
             # idx = reflectance_files.index(f) 
             self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
             self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(number_of_measurements)
+            self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
 
             if import_tilts:
                 if column_names_to_import != None: # extract relevant column names of the pandas dataframe

@@ -5,19 +5,24 @@ import scipy.stats as sps
 import scipy.optimize as spo
 import numpy as np
 from copy import deepcopy
+from openpyxl import load_workbook
+import miepython
 
 def _print_if(s,verbose):
     # Helper function to control level of output display.
     if verbose:
         print(s)
+
 def _ensure_list(s):
     if not isinstance(s,list):
         s = [s]
     return s
+
 def _check_keys(simulation_data,reflectance_data):
     for ii in range(len(simulation_data.time.keys())):
             if simulation_data.file_name[ii] != reflectance_data.file_name[ii]:
                 raise ValueError("Filenames in simulation data and reflectance do not match. Please ensure you imported the same list of files for both.")
+
 def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_per_truck=1):
     T_days = 365
     n_hours = int(T_days*(24/dt)) # number of hours between cleanings
@@ -55,6 +60,7 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
             else:
                 cleans[0:idx0,jj] = 1
     return cleans
+
 def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index):
     sim_data = simulation_inputs
     reflect_data = reflectance_data
@@ -105,6 +111,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index):
     ax[3].legend()
 
     return fig,ax
+
 def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
     sim_dat = deepcopy(simulation_inputs)
     ref_dat = deepcopy(reflectance_data)
@@ -129,7 +136,7 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
         # trim simulation data
         mask = (sim_dat.time[f]>=lb) & (sim_dat.time[f]<=ub)
         if all(mask==0):
-            raise ValueError("Provided date range excludes all data.")
+            raise ValueError(f"Provided date range of {lb} to {ub} for file {sim_dat.file_name[f]} excludes all data.")
             
         sim_dat.time[f] = sim_dat.time[f][mask]
         sim_dat.time_diff[f] = sim_dat.time_diff[f][mask]
@@ -162,6 +169,7 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
                 ref_dat.rho0[f] = ref_dat.average[f][0,:]
     
     return sim_dat,ref_dat
+
 def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,sheet_name=None,\
     output_file_format="sample_{0:d}.xlsx",dt=np.timedelta64(3600,'s'),verbose=True):
 
@@ -214,7 +222,42 @@ def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sa
         samples.drop(labels=['day','month','year'],axis=1,inplace=True)
         samples.to_excel(output_file_format.format(n),sheet_name=sheet_name)
 
+def _extinction_function(diameters,lambdas,intensities,acceptance_angle,refractive_index,grid_size_mu=int(1e4),grid_size_x=1000,verbose=False):
+    
+    # theta_s = np.radians(np.linspace(-180,180,grid_size_theta_s)) # angle of scattering (\theta=0 is direction of radiation)
+    m = refractive_index
+    lam = lambdas/1000 # nm -> µm
+    E = intensities*1000 #W/m^2/nm -> W/m^2/µm
+
+    # set up grids
+    # mu = np.sort(np.cos(theta_s)) 
+    aa_cos = np.cos(acceptance_angle)
+    mu = np.linspace(-1,aa_cos,num=grid_size_mu)
+    _print_if(f"Acceptance angle cosine = {aa_cos:.6f}",verbose)
+
+    # making lookup table in x
+    min_x = np.pi*np.min(diameters)/np.max(lam)
+    max_x = np.pi*np.max(diameters)/np.min(lam)
+    xg = np.logspace(np.log10(min_x),np.log10(max_x),grid_size_x)
+    Qxg = np.zeros(xg.shape)
+    for ii,x in enumerate(xg):
+        scat = miepython.i_unpolarized(m,x,mu,'qext')
+        Qxg[ii] = np.trapz(scat,mu)
+    
+    # apply look up table to data
+    Qx = np.zeros((len(diameters),len(lam)))
+    for ii,d in enumerate(diameters):
+        for jj,lamjj in enumerate(lam):
+            x = np.pi*d/lamjj
+            Qx[ii,jj] = np.interp(x,xg,Qxg)
+    gamma = 2*np.pi*np.trapz(Qx*E,x=lam,axis=1) # for unit irradiance
+    
+    return gamma
+
 class DustDistribution():
+    """
+        This needs a docstring :(
+    """
     def __init__(self,params=None,type=None):
         
         self.n_components = None
@@ -274,7 +317,7 @@ class DustDistribution():
         return np.sum( (self.cdf(log_diameter_values)-pm_values)**2 )
     
     def fit(self,params0,log_diameter_values,pm_values,tol=1e-3):
-        
+
         N = len(params0)/3
         assert np.abs(N-np.floor(N))<np.finfo(float).eps, \
             "Please specify parameters of each component as a 1D numpy.array([weights,mu,sigma])."
@@ -290,7 +333,16 @@ class DustDistribution():
         ub = [np.inf]*len(lb)
 
         bnds = spo.Bounds(lb=lb,ub=ub,keep_feasible=True)
-        res = spo.minimize(fun,params0,bounds=bnds)
+        res = spo.minimize(fun,params0,bounds=bnds,tol=1e-8)
+
+        params = res.x
+        N = int(np.floor(len(params)/3))
+        w,mu,sig = params[0:N],params[N:2*N],params[2*N::]
+        self.n_components = N
+        self.sub_dists = [sps.norm(loc=mu[ii],scale=sig[ii]) for ii in range(N)]
+        self.weights = w
+        self.type = "mass"
+        self._set_units()
 
         return res
 
@@ -302,10 +354,12 @@ class DustDistribution():
         elif self.type.lower() == "area":
             self.units = r"$\frac{ m^2 \cdot m^{{-3}}}{d(\log(D))}$"
 
-    def convert_to_number(self,rho):
+    def convert_to_number(self,rho=None):
+
         if self.type.lower() == "number":
             print("Type is already ""number"" ")
         elif self.type.lower()=="mass":
+            assert isinstance(rho,float), "Particle density must be a scalar float."
             new_subs = []
             new_weights = []
             for ii in range(self.n_components):
@@ -334,7 +388,7 @@ class DustDistribution():
                 si = self.sub_dists[ii].std()
 
                 mi = mbari-2*si**2/np.log10(np.e)
-                Ni = Ai/np.pi/rho*4 * np.exp((mi**2-(mi**2-si**2/np.log10(np.e))**2)/2/si**2)
+                Ni = Ai/np.pi*4 * np.exp((mi**2-(mi-si**2/np.log10(np.e))**2)/2/si**2)
 
                 new_weights.append(Ni*1e6)
                 ns = sps.norm(loc=mi,scale=si)
@@ -346,7 +400,7 @@ class DustDistribution():
             self._set_units()
 
     def convert_to_mass(self,rho):
-
+        assert isinstance(rho,float), "Particle density must be a scalar float."
         if self.type.lower() == "mass":
             print("Type is already ""mass"" ")
         elif self.type.lower() == "number":
@@ -370,9 +424,10 @@ class DustDistribution():
             self.type = "mass"
             self._set_units()
         elif self.type.lower()=="area":
-            print("Conver to number first. ")
+            print("Convert to number first. ")
 
     def convert_to_area(self,rho=None):
+
         if self.type.lower() == "area":
             print("Type is already ""area"" ")
         elif self.type.lower() == "number":
@@ -384,7 +439,7 @@ class DustDistribution():
                 si = self.sub_dists[ii].std()
 
                 mbari = mi+2*si**2/np.log10(np.e)
-                Ai = Ni*np.pi*rho/4 * np.exp(-(mi**2-(mi**2-si**2/np.log10(np.e))**2)/2/si**2)
+                Ai = Ni*np.pi/4*np.exp(-(mi**2-(mi+si**2/np.log10(np.e))**2)/2/si**2)
 
                 new_weights.append(Ai*1e-6)
                 ns = sps.norm(loc=mbari,scale=si)
@@ -396,6 +451,49 @@ class DustDistribution():
             self._set_units()
         elif self.type.lower() == "mass":
             if rho is None:
-                print("Rho cannot be none to convert from mass")
-                self.convert_to_number(rho)
-                self.convert_to_area()
+                raise ValueError("Rho cannot be None to convert from mass")
+            
+            assert isinstance(rho,float), "Particle density must be a scalar float."
+            self.convert_to_number(rho)
+            self.convert_to_area()
+
+    def write_to_file(self,file_name,sheet_name,kind='number',rho=None,verbose=True):
+        _print_if("Writing dust distribution to file "+file_name,verbose)
+        
+        # ensure kind is correct
+        if kind.lower() == 'number':
+            self.convert_to_number()
+        elif kind.lower() == 'mass':
+            self.convert_to_mass()
+        elif kind.lower() == 'area':
+            self.convert_to_area()
+        else:
+            raise ValueError("kind not recognized.")
+
+        # convert to strings and join with ";" delimiter
+        weight_str = [str(s)+";" for s in self.weights]
+        mu_str = [str(10**(self.sub_dists[ii].mean())) for ii in range(self.n_components)]
+        sig_str = [str(10**(self.sub_dists[ii].std())) for ii in range(self.n_components)]
+        weight_str = "".join(weight_str)[0:-1]
+        mu_str = "".join(mu_str)[0:-1]
+        sig_str = "".join(sig_str)[0:-1]
+
+        # write data
+        wb = load_workbook(file_name)
+        ws = wb[sheet_name]
+        for cell in ws['A']:
+            if cell.value == "N_size":
+                ws.cell(row=cell.row, column=2).value = self.n_components
+                ws.cell(row=cell.row, column=4).value = ""
+            elif cell.value == "Nd":
+                ws.cell(row=cell.row, column=2).value = weight_str
+                ws.cell(row=cell.row, column=4).value = ""
+            elif cell.value == "mu":
+                ws.cell(row=cell.row, column=2).value = mu_str
+                ws.cell(row=cell.row, column=4).value = ""
+            elif cell.value == "sigma":
+                ws.cell(row=cell.row, column=2).value = sig_str
+                ws.cell(row=cell.row, column=4).value = ""
+        
+        wb.save(filename=file_name)
+        wb.close()
