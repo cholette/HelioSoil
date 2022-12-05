@@ -27,20 +27,23 @@ class semi_physical(base_model):
     def helios_angles(self,simulation_inputs,reflectance_data,verbose=True,second_surface=True):
 
         sim_in = simulation_inputs
+        ref_dat = reflectance_data
         files = list(sim_in.time.keys())
         N_experiments = len(files)
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
-        _check_keys(sim_in,reflectance_data)
+        _check_keys(sim_in,ref_dat)
 
         _print_if("Setting tilts for "+str(N_experiments)+" experiments",verbose)
         helios = self.helios
         helios.tilt = {f: None for f in files} # clear the existing tilts
+        helios.acceptance_angles = {f: None for f in files} # clear the existing tilts
         for ii in range(N_experiments):
             f = files[ii]
-            tilts = reflectance_data.tilts[f]
+            tilts = ref_dat.tilts[f]
             N_times = len(sim_in.time[f])
             N_helios = tilts.shape[0]
+            self.helios.acceptance_angles[f] = [ref_dat.reflectometer_acceptance_angle[ii]]*N_helios
             
             helios.tilt[f] = np.zeros((0,N_times))
             for jj in range(N_helios):

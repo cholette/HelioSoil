@@ -10,7 +10,7 @@ from matplotlib.cm import get_cmap, turbo
 from warnings import warn
 import copy
 from scipy.interpolate import interp2d
-from soiling_model.utilities import _print_if,_ensure_list,_extinction_function
+from soiling_model.utilities import _print_if,_ensure_list,_extinction_function,_same_ext_coeff
 from scipy.optimize import minimize_scalar
 from scipy.integrate import cumtrapz
 import copy
@@ -250,7 +250,7 @@ class base_model:
         sim_in = simulation_inputs
         helios = self.helios
         dust = sim_in.dust
-        extinction_weighting = sim_in.extinction_weighting
+        extinction_weighting = helios.extinction_weighting
         
         files = list(sim_in.wind_speed.keys())
         for f in files:
@@ -286,7 +286,7 @@ class base_model:
                     #         (D_meters**2)*sim_in.dt[f],np.log10(dust.D[f]))
                     # else: # loss_model == "mie"
                     helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.pi/4 * np.trapz(helios.pdfqN[f][ii,jj,:]*\
-                        (D_meters**2)*sim_in.dt[f]*extinction_weighting[f],np.log10(dust.D[f]))
+                        (D_meters**2)*sim_in.dt[f]*extinction_weighting[f][ii,:],np.log10(dust.D[f]))
 
             # variance of noise for each measurement
             if sigma_dep != None:
@@ -299,16 +299,16 @@ class base_model:
 
         self.helios = helios
     
-    def plot_area_flux( self,sim_data,exp_idx,air_temp,wind_speed,
-                        tilt=0.0,hrz0=None,constants=None,dust=None,
-                        reflectometer_acceptance_angle=None,
+    def plot_area_flux(self,sim_data,exp_idx,air_temp,wind_speed,
+                        tilt=0.0,hrz0=None,constants=None,
+                        acceptance_angle=None,
                         ax=None,Ra=True,verbose=True):
+        
         dummy_sim = simulation_inputs()
 
         for att_name in sim_data.dust.__dict__.keys():
             val = {0:getattr(sim_data.dust,att_name)[exp_idx]}
             setattr(dummy_sim.dust,att_name,val)
-        dummy_sim.extinction_weighting = {0:sim_data.extinction_weighting[exp_idx]}
         
         # dummy_sim.dust.import_dust(dust_file,verbose=False,dust_measurement_types="PM10")
         dummy_sim.air_temp = {0:np.array([air_temp])}
@@ -329,6 +329,9 @@ class base_model:
         dummy_model.helios = helios()
         dummy_model.helios.tilt = {0:np.array([[tilt]])}
         dummy_model.sigma_dep = None
+        dummy_model.loss_model = self.loss_model
+        dummy_model.helios.acceptance_angles = [acceptance_angle]
+        dummy_model.helios.extinction_weighting = {0:np.atleast_2d(self.helios.extinction_weighting[exp_idx][0,:])}
         
         fmt = "Setting constants.{0:s} to {1:s} (was {2:s})"
         if constants is not None:
@@ -336,30 +339,6 @@ class base_model:
                 temp = str(getattr(dummy_model.constants,kk))
                 print(fmt.format(str(kk), str(constants[kk]),temp))
                 setattr(dummy_model.constants,kk,constants[kk])
-        
-        fmt = "Setting simulation_data.dust.{0:s} to {1:s} (was {2:s})"
-        if dust is not None:
-            for kk in dust.keys():
-                temp = str(getattr(dummy_sim.dust,kk)[0])
-                print(fmt.format(str(kk), str(dust[kk]),temp))
-                setattr(dummy_sim.dust,kk,{0:dust[kk]})
-            _print_if("Recomputing extinction weights ... ",verbose)
-            
-            if 'm' in dust.keys():
-                if self.loss_model == "geometry":
-                    print("Warning: Any changes in the refractive index will not have any effect because loss_model = ""geometry"" ")
-                else:
-                    if reflectometer_acceptance_angle is None:
-                        raise ValueError(   " You have modified the refractive index and the " \
-                                            "\n extinction weights need to be re-computed. Please supply reflectometer_acceptance_angle.")
-                    else:
-                        dia = dummy_sim.dust.D[0]
-                        refractive_index = dummy_sim.dust.m[0]
-                        lam = dummy_sim.source_wavelength[0]
-                        intensities = dummy_sim.source_normalized_intensity[0]
-                        phia = reflectometer_acceptance_angle
-                        dummy_sim.extinction_weighting = {0:_extinction_function(dia,lam,intensities,phia,refractive_index,verbose=verbose)}
-
 
         if hrz0 is None:
             hrz0 = dummy_model.hrz0        
@@ -375,7 +354,7 @@ class base_model:
             ax1 = ax
 
         title = 'Area loss rate for given dust distribution at wind_speed= {0:.1f} m/s, air_temperature={1:.1f} C \n (Area loss is {2:.2e} $m^2$/($s\cdot m^2$))'
-        area_loss_rate = (dummy_model.helios.pdfqN[0][0,0,:]*np.pi/4*dummy_sim.dust.D[0]**2*1e-12*dummy_sim.extinction_weighting[0])
+        area_loss_rate = (dummy_model.helios.pdfqN[0][0,0,:]*np.pi/4*dummy_sim.dust.D[0]**2*1e-12*dummy_model.helios.extinction_weighting[0][0,:])
         ax1.plot(dummy_sim.dust.D[0],area_loss_rate)
         ax1.set_title(title.format(wind_speed,air_temp,dummy_model.helios.delta_soiled_area[0][0,0]))
         ax1.set_xlabel(r"D [$\mu$m]")
@@ -500,78 +479,6 @@ class simulation_inputs:
                         attr.pop(k)
         return self_out
 
-    def compute_extinction_weights(self,reflectance_data=None,loss_model=None,acceptance_angle=None,verbose=True):
-        files = list(self.file_name.keys())
-
-        self.extinction_weighting = {f:np.array([]) for f in files}
-        if loss_model == 'mie':
-            assert ( (reflectance_data is not None) or (acceptance_angle is not None) ), "Please supply either acceptance_angle or reflectance_data when loss_model == ""mie"" "
-            
-            if reflectance_data is not None:
-                ref_dat = reflectance_data
-                assert acceptance_angle is None, "Please supply only reflectance_data or accpetance_angle, but not both, when loss_model == ""mie"""
-            
-            _print_if("Loss Model is ""mie"". Computing extinction coefficients ... ",verbose)
-            
-            for ii,f in enumerate(files):
-                _print_if(f"\t ... for file {f}",verbose)
-
-                if ii > 0:
-                    same_diameters =  np.all(dia == self.dust.D[f])
-                    same_ref_ind =  (refractive_index == self.dust.m[f])
-                    same_lams =  np.all(lam == self.source_wavelength[f])
-                    same_intensity =  np.all(intensities == self.source_normalized_intensity[f])
-                    same_phia = (phia == ref_dat.reflectometer_acceptance_angle[f])
-                    same_everything = ( same_diameters and same_ref_ind and same_lams
-                                        and same_intensity and same_phia) 
-                else:
-                    same_everything = False
-                
-                if same_everything:
-                    _print_if("\t Using previously computed extinction weights.",verbose)
-                    self.extinction_weighting[f] = ext_weight
-                else:
-                    if ii > 0:
-                        if not same_diameters:
-                            _print_if("\t Diameter grid of {f} is different than {files[ii-1]}",verbose)
-                        elif not same_ref_ind:
-                            _print_if("\t Refractive index of {f} is different than {files[ii-1]}",verbose)
-                        elif not same_lams: 
-                            _print_if("\t Wavelength grid of {f} is different than {files[ii-1]}",verbose)
-                        elif not same_phia:
-                            _print_if(f"Acceptance angle of {f} is different than {files[ii-1]}",verbose)
-                        elif not same_intensity:
-                            _print_if(f"Source intensity of {f} is different than {files[ii-1]}",verbose)
-                    
-                    _print_if("\t Computing weights weights...",verbose)
-                    dia = self.dust.D[f]
-                    refractive_index = self.dust.m[f]
-                    lam = self.source_wavelength[f]
-                    intensities = self.source_normalized_intensity[f]
-                    phia = ref_dat.reflectometer_acceptance_angle[f]
-                    ext_weight = _extinction_function(  dia,lam,intensities,phia,
-                                                        refractive_index,verbose=verbose)
-                    self.extinction_weighting[f] = ext_weight
-                    _print_if("\t ... Done!",verbose)
-        else: #self.loss_model == 'geometry'
-            _print_if(f"Loss Model is ""geometry"". Setting extinction coefficients to unity for all files.",verbose)
-            for f in files:
-                dia = self.dust.D[f]
-                self.extinction_weighting[f] = np.ones(dia.shape)
-
-    def plot_extinction_weights(self,fig_kwargs={},plot_kwargs={}):
-        
-        files = list(self.file_name.keys())
-        fig,ax = plt.subplots(nrows=len(files),sharex=True,**fig_kwargs)
-
-        for ii,f in enumerate(files):
-            ax[ii].semilogx(self.dust.D[f],self.extinction_weighting[f],**plot_kwargs)
-            ax[ii].set_xlabel(r"Diameter ($\mu$ m)")
-            ax[ii].set_ylabel(r"Extinction area multiplier (-)")
-            ax[ii].grid(True)
-        
-        return fig,ax
-        
 class dust:
     def __init__(self):
         self.D     = {}          # [µm] dust particles diameter 
@@ -737,7 +644,7 @@ class helios:
         self.num_radial_sectors = []
         self.num_theta_sectors = []
         
-        # Geometry of field (1D array indexed by heliostat_index)
+        # Properties of individual heliostats (1D array indexed by heliostat_index)
         self.x = []                         # [m] x (east-west) position of representative heliostats
         self.y = []                         # [m] y (north-south) position of representative heliostats
         self.rho = []                       # [m] radius for polar coordinates of representative heliostats
@@ -752,8 +659,13 @@ class helios:
                             'z':[],
                             'sector_id':[]
                         }                   # populated if representative heliostats are from a sectorization of a field
+        
+        self.acceptance_angles = []          # acceptance angle for receiver
 
-        # Movement properties (dicts of 2D array indexed by [heliostat_index, time] with weather file name keys )
+        # Mie extinction weighting (dict of 2D arrays indexed by heliostat index, dust diameter)
+        self.extinction_weighting = {}       
+        
+        # Movement properties (dicts of 2D arrays indexed by [heliostat_index, time] with weather file name keys )
         self.tilt = {}                      # [deg] tilt angle of the heliostat
         self.azimuth = {}                   # [deg] azimuth angle of the heliostat
         self.incidence_angle = {}           # [deg] incidence angle of solar rays
@@ -949,6 +861,80 @@ class helios:
             plt.title('Solar Field Sectors')
             plt.show()
 
+    def compute_extinction_weights(self,simulation_data,loss_model=None,verbose=True):
+        sim_dat = simulation_data
+        dust = sim_dat.dust
+        files = list(sim_dat.file_name.keys())
+        num_diameters = [len(dust.D[f]) for f in files]
+        num_heliostats = [len(self.tilt[f]) for f in files]
+        phia = self.acceptance_angles
+
+        self.extinction_weighting = {f:np.zeros((num_heliostats[f],num_diameters[f])) for f in files}
+        if loss_model == 'mie':
+            assert ( (phia is not None) and all( [len(phia[f])==num_heliostats[f] for f in files] ) ),\
+                 "When loss_model == ""mie"", please set helios.acceptance_angles as a list with a value for each heliostat"
+            _print_if("Loss Model is ""mie"". Computing extinction coefficients ... ",verbose)
+
+            same_ext = _same_ext_coeff(self,sim_dat)
+            computed = []
+            for f in files:
+                dia = sim_dat.dust.D[f]
+                refractive_index = sim_dat.dust.m[f]
+                lam = sim_dat.source_wavelength[f]
+                intensities = sim_dat.source_normalized_intensity[f]
+                for h in range(num_heliostats[f]):
+                    already_computed = [e in computed for _,e in enumerate(same_ext[f][h])]
+                    if any(already_computed):
+                        idx = already_computed.index(True)
+                        fe,he = same_ext[f][h][idx]                        
+                        _print_if(f"\t Using weights from file {fe}, mirror {he} for file {f}, mirror {h}...",verbose)
+                        self.extinction_weighting[f][h,:] = self.extinction_weighting[fe][he,:]
+                    else:
+                        _print_if(f"\t Computing weights for file {f}, heliostat {h}...",verbose)
+                        ext_weight = _extinction_function(  dia,lam,intensities,phia[f][h],
+                                                            refractive_index,verbose=verbose)
+                        self.extinction_weighting[f][h,:] = ext_weight
+                        computed.append((f,h))
+
+            _print_if("... Done!",verbose)
+
+        else: #self.loss_model == 'geometry'
+            _print_if(f"Loss Model is ""geometry"". Setting extinction coefficients to unity for all heliostats in all files.",verbose)
+            for f in files:
+                num_diameters = len(dust.D[f])
+                self.extinction_weighting[f] = np.ones((num_heliostats[f],num_diameters))
+
+    def plot_extinction_weights(self,simulation_data,fig_kwargs={},plot_kwargs={}):
+        
+        files = list(self.extinction_weighting.keys())
+        Nhelios = [len(self.tilt[f]) for f in files]
+        phia = [self.acceptance_angles[f] for f in files]
+        nrows = len(files)
+        ncols = max(Nhelios)
+        # fig,ax = plt.subplots(nrows=len(files),sharex=True,**fig_kwargs)
+        fig = plt.figure(**fig_kwargs)
+        ax = []
+        for ii,f in enumerate(files):
+            num_heliostats = Nhelios[f]
+            D = simulation_data.dust.D[f]
+            idx = ii*ncols+1
+            for jj in range(num_heliostats):
+                if jj > 0:
+                    ax1 = fig.add_subplot(nrows,ncols,idx,sharex=ax[ii-1],sharey=ax[ii-1])
+                else:
+                    ax1 = fig.add_subplot(nrows,ncols,idx)
+
+                ax.append(ax1)
+                ax1.semilogx(D,self.extinction_weighting[f][jj,:],**plot_kwargs)
+                ax1.set_xlabel(r"Diameter ($\mu$m)")
+                ax1.set_ylabel(r"Extinction area multiplier (-)")
+                ax1.set_title(f"File {f}, Acceptance Angle {phia[f][jj]:.2e} rad")
+                ax1.grid(True)
+                idx += 1
+        plt.tight_layout()
+        
+        return fig,ax
+        
 class plant:
     def __init__(self):
         self.receiver = {   'tower_height': [],

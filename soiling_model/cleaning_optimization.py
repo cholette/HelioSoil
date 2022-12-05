@@ -30,7 +30,7 @@ class optimisation_problem():
         fm.helios_angles(pl,second_surface=second_surface)
         fm.deposition_flux(sd)
         fm.adhesion_removal(sd)
-        sd.compute_extinction_weights(loss_model=fm.loss_model)
+        fm.helios.compute_extinction_weights(sd,fm.loss_model,verbose=True)
         fm.calculate_delta_soiled_area(sd)
         fm.optical_efficiency(pl,sd,climate_file,n_az=n_az,n_el=n_el,verbose=verbose)
 

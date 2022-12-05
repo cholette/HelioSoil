@@ -233,7 +233,7 @@ def _extinction_function(diameters,lambdas,intensities,acceptance_angle,refracti
     # mu = np.sort(np.cos(theta_s)) 
     aa_cos = np.cos(acceptance_angle)
     mu = np.linspace(-1,aa_cos,num=grid_size_mu)
-    _print_if(f"Acceptance angle cosine = {aa_cos:.6f}",verbose)
+    _print_if(f"\t Acceptance angle cosine = {aa_cos:.6f}",verbose)
 
     # making lookup table in x
     min_x = np.pi*np.min(diameters)/np.max(lam)
@@ -253,6 +253,50 @@ def _extinction_function(diameters,lambdas,intensities,acceptance_angle,refracti
     gamma = 2*np.pi*np.trapz(Qx*E,x=lam,axis=1) # for unit irradiance
     
     return gamma
+
+def _same_ext_coeff(helios,simulation_data):
+    
+    sim_dat = simulation_data
+    dust = sim_dat.dust
+    D = dust.D
+    refractive_index = dust.m
+    lam = sim_dat.source_wavelength
+    intensities = sim_dat.source_normalized_intensity
+    phia = helios.acceptance_angles
+
+    files = list(sim_dat.file_name.keys())
+    num_heliostats = [helios.tilt[f].shape[0] for f in files]
+    same_dust = np.zeros((len(files),len(files)))
+    same_ext = [ [[] for n in range(num_heliostats[f])] for f in files]
+                
+    for ii,f in enumerate(files):
+        for jj,g in enumerate(files):
+            if len(D[f]) == len(D[g]):
+                same_diameters =  np.all( D[f] == D[g])
+            else:
+                same_diameters = False
+
+            if len(lam[f]) == len(lam[g]):
+                same_lams =  np.all(lam[f] == sim_dat.source_wavelength[f])
+            else:
+                same_lams = False
+
+            if len(intensities[f]) == len(intensities[g]):
+                same_intensity =  np.all(intensities[f] == intensities[g])
+            
+            same_ref_ind =  (refractive_index[f] == refractive_index[g])
+            same_dust[ii,jj] = same_diameters and same_lams \
+                and same_intensity and same_ref_ind
+
+    for ii,f in enumerate(files):
+        for jj in range(num_heliostats[f]):
+            for kk,g in enumerate(files):
+                if same_dust[ii,kk]:
+                    a = phia[f][jj]
+                    idx = [(g,mm) for mm,pg in enumerate(phia[g]) if pg==a]
+                    same_ext[ii][jj].extend(idx)
+                
+    return same_ext
 
 class DustDistribution():
     """
