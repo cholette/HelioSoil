@@ -298,6 +298,40 @@ def _same_ext_coeff(helios,simulation_data):
                 
     return same_ext
 
+def set_extinction_coefficients(destination_model,extinction_weights,file_inds):
+    """
+    Directly set extinction weights, e.g. from another model.
+
+    This function sets the extinction weights directly. The input extinction_weights
+    is an H-by-D numpy.array, where H is the number of heliostats and D is the number of 
+    diameter bins. It primary use is to save time, since computation of the Mie 
+    extinction weights can be time-consuming. 
+    
+    The required argument file_inds is a list, and the extinction weights of those 
+    each of these files will be set to the np.array extinction_weights. Note that 
+    the zeroth dimension of extinction_weights must be the same as the number of heliostats 
+    in the destination file (determined by destination_model.helios.tilt). 
+    
+    """
+    dm = destination_model
+    ew = extinction_weights
+
+    for f in file_inds:
+        H = dm.helios.tilt[f].shape[0]
+        D = ew.shape[1]
+        if ew.shape[0] == H:
+            dm.helios.extinction_weighting[f] = ew
+        elif ew.shape[0] == 1:
+            print(  f"Warning: ext_weights had only one heliostat. Broadcasting up to {H} heliostats "+
+                    f"present in the destination_model.helios.tilt in file {f}.")
+            dm.helios.extinction_weighting[f] = np.zeros((H,D))
+            for h in range(H):
+                dm.helios.extinction_weighting[f][h,:] = ew
+        else:
+             raise ValueError(  "Number of heliostats in extinction_weights (dim0) must either be one or the same as "+
+                                "those in destination_model.helios.tilt")
+    return dm
+
 class DustDistribution():
     """
         This needs a docstring :(

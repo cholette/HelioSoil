@@ -44,6 +44,7 @@ class semi_physical(base_model):
             N_times = len(sim_in.time[f])
             N_helios = tilts.shape[0]
             self.helios.acceptance_angles[f] = [ref_dat.reflectometer_acceptance_angle[ii]]*N_helios
+            self.helios.extinction_weighting[f] = [] # reset extinction weighting since heliostats are "new"
             
             helios.tilt[f] = np.zeros((0,N_times))
             for jj in range(N_helios):
@@ -192,7 +193,7 @@ class semi_physical(base_model):
 
         return unnormalized_posterior
 
-    def fit_hrz0_least_squares(self,simulation_inputs,reflectance_data,verbose=True):
+    def fit_least_squares(self,simulation_inputs,reflectance_data,verbose=True):
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
@@ -215,7 +216,7 @@ class semi_physical(base_model):
         
         if np.all(x0 == None): # intialize using least squares and 1D MLE
             _print_if("Getting inital hrz0 guess via least squares",verbose)
-            h0,sse = self.fit_hrz0_least_squares(simulation_inputs,reflectance_data,verbose=False) 
+            h0,sse = self.fit_least_squares(simulation_inputs,reflectance_data,verbose=False) 
 
             _print_if("Getting inital sigma_dep guess via MLE (at least-squares hrz0)",verbose)
             nloglike1D = lambda y: self._negative_log_likelihood([h0,y],sim_in,ref_dat)
@@ -239,7 +240,8 @@ class semi_physical(base_model):
         if transform_to_original_scale:
             
             # Get standard errors using observed information
-            x_hat,x_cov = self.transform_scale(y,likelihood_hessian=H_log)
+            x_hat,H = self.transform_scale(y,likelihood_hessian=H_log)
+            x_cov = np.linalg.inv(H)
             
             # print estimates
             fmt = "hrz0 = {0:.2e}, sigma_dep = {1:.2e}"
@@ -294,7 +296,8 @@ class semi_physical(base_model):
 
         if transform_to_original_scale:
             _print_if("Getting covariance estimate ... ",verbose)
-            x_hat,x_cov = self.transform_scale(y,likelihood_hessian=H_log)
+            x_hat,H = self.transform_scale(y,likelihood_hessian=H_log)
+            x_cov = np.linalg.inv(H)
 
             # print estimates & confidence intervals
             s = np.sqrt(np.diag(x_cov))
@@ -332,19 +335,20 @@ class semi_physical(base_model):
             return z
         else:
             #Jacobian for transformation. See Reparameterization at https://en.wikipedia.org/wiki/Fisher_information 
-            J = np.array([  [np.exp(np.exp(x[0])),0],\
+            J = np.array([  [np.exp(x[0] + np.exp(x[0])),0],\
                             [0, np.exp(x[1])]   ])
 
             if direction == "inverse":
                 Ji = inv(J)                            
-                z_cov = inv( Ji.transpose() @ likelihood_hessian @ Ji ) 
+                H = Ji.transpose() @ likelihood_hessian @ Ji 
             elif direction == "forward":
-                z_cov = inv( J.transpose() @ likelihood_hessian @ J ) 
+                H = J.transpose() @ likelihood_hessian @ J 
 
-            return z,z_cov 
+            return z,H 
 
-    def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,reflectance_data=None,figsize=None,\
-        reflectance_std='measurements',save_path=None,fig_title=None,return_handles=False):
+    def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,reflectance_data=None,
+                            figsize=None,reflectance_std='measurements',save_path=None,fig_title=None,return_handles=False,
+                            repeat_y_labels=True):
         sim_in = simulation_inputs
         samples = posterior_predictive_distribution_samples
         files = list(sim_in.time.keys())
@@ -458,11 +462,18 @@ class semi_physical(base_model):
                 a.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval               
                 
                 if reflectance_data!=None: # reflectance is computed at reflectometer incidence angle
-                    ang = reflectance_data.reflectometer_incidence_angle[f]
-                    s = a.set_ylabel(r"$\rho(t)$ at "+str(ang)+"$^{{\circ}}$")
+                    if repeat_y_labels or (ii==0):
+                        ang = reflectance_data.reflectometer_incidence_angle[f]
+                        s = a.set_ylabel(r"$\rho(t)$ at "+str(ang)+"$^{{\circ}}$")
+                    else:
+                        a.set_yticklabels([])
+
                 else: # reflectance is computed at heliostat incidence angle. Put average incidence angle on axis label
-                    ang = np.mean( self.helios.incidence_angle[f] )
-                    s = a.set_ylabel(r"soiling factor at "+str(ang)+"$^{{\circ}}$ \n (average)")
+                    if repeat_y_labels or (ii>0):
+                        ang = np.mean( self.helios.incidence_angle[f] )
+                        s = a.set_ylabel(r"soiling factor at "+str(ang)+"$^{{\circ}}$ \n (average)")
+                    else:
+                        a.set_yticklabels([])
 
                 # set mean and CIs for output
                 try:
@@ -489,10 +500,15 @@ class semi_physical(base_model):
             if ii == 0: # ylabel for TSP on leftmost plot only
                 fs = r"{0:s} $\frac{{\mu g}}{{m^3}}$"
                 a2.set_ylabel(fs.format(dust_type),color='blue')
+            else:
+                a2.set_yticklabels([])
+
             if ii == N_experiments-1: # ylabel for wind speed on rightmost plot only
-                a2a.set_ylabel('Wind Speed (m/s)', color='green') 
+                a2a.set_ylabel('Wind Speed (m/s)', color='green')
+            else:
+                a2a.set_yticklabels([]) 
             
-            a2.set_title(label_str.format(dust_conc.mean())+", Wind Speed ({0:.2f} m/s)".format(ws.mean()),fontsize=10)
+            a2.set_title(label_str.format(dust_conc.mean())+" \n, Wind Speed ({0:.2f} m/s)".format(ws.mean()),fontsize=10)
         
         if N_experiments > 1:
 
@@ -603,7 +619,7 @@ class constant_mean_deposition_velocity(semi_physical):
         self.reflectance_loss()
         self.helios = helios
 
-    def fit_mu_tilde_least_squares(self,simulation_inputs,reflectance_data,verbose=True):
+    def fit_least_squares(self,simulation_inputs,reflectance_data,verbose=True):
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
@@ -709,11 +725,11 @@ class constant_mean_deposition_velocity(semi_physical):
 
                 if direction == "inverse":
                     Ji = inv(J)                            
-                    z_cov = inv( Ji.transpose() @ likelihood_hessian @ Ji ) 
+                    H = Ji.transpose() @ likelihood_hessian @ Ji
                 elif direction == "forward":
-                    z_cov = inv( J.transpose() @ likelihood_hessian @ J ) 
+                    H = J.transpose() @ likelihood_hessian @ J 
 
-                return z,z_cov  
+                return z,H  
 
         elif isinstance(x,az.data.inference_data.InferenceData):
             if likelihood_hessian != None:

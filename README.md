@@ -44,7 +44,7 @@ Either a first- or second-surface geometry model is used to evaluate reflectance
 The current cleaning optimization is quite simple: a number of trucks clean the field a certain number of times annually. More sophisticated policies may be added in future releases (e.g. the mixed-integer linear program from [3] or the condition-based policies from [7,8]).
 
 ## Acknowledgements
-<img style="float: left;background-color: white;margin-bottom:10px;margin-right:10px" src="doc/astri_logo.png" width="88" height="113">
+<img style="float: left;background-color: white;margin-bottom:10px;margin-right:10px" src="docs/astri_logo.png" width="88" height="113">
 
 This library was developed with the support of the Australian Government, through the Australian Renewable Energy Agency (ARENA) and within the framework of the Australian Solar Thermal Research Institute (ASTRI).
 

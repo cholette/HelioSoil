@@ -928,7 +928,7 @@ class helios:
                 ax1.semilogx(D,self.extinction_weighting[f][jj,:],**plot_kwargs)
                 ax1.set_xlabel(r"Diameter ($\mu$m)")
                 ax1.set_ylabel(r"Extinction area multiplier (-)")
-                ax1.set_title(f"File {f}, Acceptance Angle {phia[f][jj]:.2e} rad")
+                ax1.set_title(f"File {f}, Mirror {jj}, Acceptance Angle {phia[f][jj]:.2e} rad")
                 ax1.grid(True)
                 idx += 1
         plt.tight_layout()
