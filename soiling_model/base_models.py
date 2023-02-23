@@ -10,7 +10,9 @@ from matplotlib.cm import get_cmap, turbo
 from warnings import warn
 import copy
 from scipy.interpolate import interp2d
-from soiling_model.utilities import _print_if,_ensure_list,_extinction_function,_same_ext_coeff
+from soiling_model.utilities import _print_if,_ensure_list,\
+                                    _extinction_function,_same_ext_coeff,\
+                                    _import_option_helper,_parse_dust_str
 from scipy.optimize import minimize_scalar
 from scipy.integrate import cumtrapz
 import copy
@@ -262,7 +264,8 @@ class base_model:
 
             # compute alpha
             try:
-                den = getattr(dust,sim_in.dust_type[f]) # dust.(sim_in.dust_type[f])
+                attr = _parse_dust_str(sim_in.dust_type[f])
+                den = getattr(dust,attr) # dust.(sim_in.dust_type[f])
             except:
                 raise ValueError("Dust measurement = "+sim_in.dust_type[f]+\
                     " not present in dust class. Use dust_type="+sim_in.dust_type[f]+\
@@ -363,7 +366,7 @@ class base_model:
         ax1.set_xticks([0.001,0.01,0.1,1,2.5,4,10,20,100])
 
 class simulation_inputs:
-    def __init__(self,experiment_files=None,k_factors=None,dust_types=None,verbose=True):
+    def __init__(self,experiment_files=None,k_factors=None,dust_type=None,verbose=True):
 
         # the below will be dictionaries of 1D arrays with file numbers as keys 
         self.file_name = {}                     # name of the input file
@@ -374,6 +377,7 @@ class simulation_inputs:
         self.end_datetime = {}                  # datetime64 for end
         self.air_temp = {}                      # [C] air temperature
         self.wind_speed = {}                    # [m/s] wind speed
+        self.wind_direction = {}                    # [degrees] wind direction
         self.dust_concentration = {}            # [µg/m3] PM10 or TSP concentration in air
         self.rain_intensity = {}                # [mm/hr] rain intensity
         self.dust_type = {}                     # Usually either "TSP" or "PM10", but coule be any PMX or PMX.X
@@ -389,18 +393,20 @@ class simulation_inputs:
             experiment_files = _ensure_list(experiment_files)
             self.N_simulations = len(experiment_files)
 
-            if k_factors == None:
-                k_factors = [1.0]*len(experiment_files)
-            
-            k_factors = _ensure_list(k_factors)
-            if len(k_factors) != len(experiment_files):
-                raise ValueError("Please specify a k-factor for each weather file")
+            if k_factors == None: # import k-factors from parameter file
+                k_factors = []
+                for f in experiment_files:
+                    k_factors.append(pd.read_excel(f,sheet_name="Dust",index_col="Parameter").loc['k_factor'].values[0])
+                    # k_factors = [1.0]*len(experiment_files)
+            else:
+                k_factors = _import_option_helper(experiment_files,k_factors)
+                # k_factors = _ensure_list(k_factors)
+                if len(k_factors) != len(experiment_files):
+                    raise ValueError("Please specify a k-factor for each weather file")
 
             self.k_factors = {ii:k_factors[ii] for ii in range(self.N_simulations)} 
-            self.import_weather(experiment_files,dust_types,verbose=verbose)
-
-            dust_types = _ensure_list(dust_types)
-            self.dust.import_dust(experiment_files,verbose=verbose,dust_measurement_types=dust_types)
+            self.import_weather(experiment_files,dust_type,verbose=verbose)
+            self.dust.import_dust(experiment_files,verbose=verbose,dust_measurement_type=dust_type)
 
             # will import source intensity if the sheet exists
             self.import_source_intensity(experiment_files,verbose=verbose)
@@ -418,10 +424,10 @@ class simulation_inputs:
             else:
                 self.source_normalized_intensity[ii] = None
 
-    def import_weather(self,files,dust_types,verbose=True):
+    def import_weather(self,files,dust_type,verbose=True,smallest_windspeed=1e-6):
         
-        dust_types = _ensure_list(dust_types)
-        assert len(dust_types) == len(files),"Please supply a dust_type for each file."
+        files = _ensure_list(files)
+        dust_type = _import_option_helper(files,dust_type)
         for ii in range(len(files)):
 
             self.file_name[ii] = files[ii]
@@ -433,7 +439,7 @@ class simulation_inputs:
             self.end_datetime[ii] = time[-1] # pd.to_datetime(weather['Time'].iloc[-1]).to_numpy()
             # time =  pd.date_range(self.start_datetime[ii],self.end_datetime[ii],freq='1H').to_numpy(dtype = 'datetime64[s]')  # allow for flexible frequency later
                     
-            _print_if("Importing site data (weather,time). Using dust_type = "+dust_types[ii]+", test_length = "+\
+            _print_if("Importing site data (weather,time). Using dust_type = "+dust_type[ii]+", test_length = "+\
                 str( ((self.end_datetime[ii]-self.start_datetime[ii]) + np.timedelta64(1,'h')).astype('timedelta64[h]') ),verbose)
             
             self.time[ii] = time
@@ -445,7 +451,13 @@ class simulation_inputs:
             self.dt[ii] = np.diff(self.time[ii])[0].astype(float) # [s] assumed constant, in hours
             self.time_diff[ii] = (self.time[ii]-self.time[ii].astype('datetime64[D]')).astype('timedelta64[h]').astype('int')  # time difference from midnight in integer hours
             self.air_temp[ii] = np.array(weather.loc[:,'AirTemp'])
+            
+            # import windspeed and set a minimum value
             self.wind_speed[ii] = np.array(weather.loc[:,'WindSpeed'])
+            idx_too_low, = np.where(self.wind_speed[ii]==0)
+            if len(idx_too_low) > 0:
+                self.wind_speed[ii][idx_too_low] = smallest_windspeed
+                _print_if(f"Warning: some windspeeds were <= 0 and were set to {smallest_windspeed}",verbose)
 
             if 'DNI' in weather.columns: # only import DNI if it exists
                 self.dni[ii] = np.array(weather.loc[:,'DNI']) 
@@ -453,8 +465,8 @@ class simulation_inputs:
                 _print_if("No DNI data to import. Skipping.",verbose)
                 
             # import dust measurements
-            self.dust_concentration[ii] = self.k_factors[ii]*np.array(weather.loc[:,dust_types[ii]])
-            self.dust_type[ii] = dust_types[ii]
+            self.dust_concentration[ii] = self.k_factors[ii]*np.array(weather.loc[:,dust_type[ii]])
+            self.dust_type[ii] = dust_type[ii]
 
             if "RainIntensity" in weather:
                 _print_if("Importing rain intensity data...",verbose)
@@ -467,6 +479,12 @@ class simulation_inputs:
                 self.relative_humidity[ii] = np.array(weather.loc[:,'RH'])
             else:
                 _print_if("No relative humidity data to import.",verbose)
+
+            if "WD" in weather:
+                _print_if("Importing wind direction data ...",verbose)
+                self.wind_direction[ii] = np.array(weather.loc[:,'WD'])
+            else:
+                _print_if("No wind direction data to import.",verbose)
 
     def get_experiment_subset(self,idx):
         attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes
@@ -496,12 +514,11 @@ class dust:
         self.log10_mu = {}
         self.log10_sig = {}
     
-    def import_dust(self,experiment_files,verbose=True,dust_measurement_types=None):
+    def import_dust(self,experiment_files,verbose=True,dust_measurement_type=None):
+        
         _print_if("Importing dust properties for each experiment",verbose)
-
         experiment_files = _ensure_list(experiment_files)
-        dust_measurement_types = _ensure_list(dust_measurement_types)
-        assert len(experiment_files) == len(dust_measurement_types), "Please supply a dust measruement type for each experiment. "
+        dust_measurement_type = _import_option_helper(experiment_files,dust_measurement_type)
         
         for ii,f in enumerate(experiment_files):
             table = pd.read_excel(f,sheet_name="Dust",index_col="Parameter")
@@ -549,7 +566,7 @@ class dust:
             self.youngs_modulus[ii] = float(table.loc['youngs_modulus_dust'].Value)
 
         # add dust measurements if they are PMX
-        for dt in dust_measurement_types:
+        for dt in dust_measurement_type:
             if dt not in [None,"TSP"]: # another concentration is of interest (possibly because we have PMX measurements)
                 X = dt[2::]
                 if len(X) in [1,2]: # integer, e.g. PM20
@@ -999,19 +1016,25 @@ class constants:
 class reflectance_measurements:
     def __init__(self,reflectance_files,time_grids,number_of_measurements=None, 
                     reflectometer_incidence_angle=None,reflectometer_acceptance_angle=None,
-                    import_tilts=False,column_names_to_import=None):
+                    import_tilts=False,column_names_to_import=None,verbose=True):
         
         reflectance_files = _ensure_list(reflectance_files)
-        reflectometer_incidence_angle = _ensure_list(reflectometer_incidence_angle)
         N_experiments = len(reflectance_files)
         if number_of_measurements == None:
             number_of_measurements = [1.0]*N_experiments
+        else:
+            number_of_measurements = _import_option_helper(reflectance_files,number_of_measurements)
+
         
         if reflectometer_incidence_angle == None:
             reflectometer_incidence_angle = [0]*N_experiments
+        else:
+            reflectometer_incidence_angle = _import_option_helper(reflectance_files,reflectometer_incidence_angle)
         
         if reflectometer_acceptance_angle == None:
             reflectometer_acceptance_angle = [0]*N_experiments
+        else:
+            reflectometer_acceptance_angle = _import_option_helper(reflectance_files,reflectometer_acceptance_angle)
 
         self.file_name = {}
         self.times = {}
@@ -1057,7 +1080,7 @@ class reflectance_measurements:
 
             # idx = reflectance_files.index(f) 
             self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
-            self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(number_of_measurements)
+            self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(number_of_measurements[ii])
             self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
 
             if import_tilts:

@@ -6,6 +6,8 @@ import scipy.optimize as spo
 import numpy as np
 from copy import deepcopy
 from openpyxl import load_workbook
+import os
+import fnmatch
 import miepython
 
 def _print_if(s,verbose):
@@ -22,6 +24,14 @@ def _check_keys(simulation_data,reflectance_data):
     for ii in range(len(simulation_data.time.keys())):
             if simulation_data.file_name[ii] != reflectance_data.file_name[ii]:
                 raise ValueError("Filenames in simulation data and reflectance do not match. Please ensure you imported the same list of files for both.")
+
+def _import_option_helper(file_list,option):
+    if isinstance(option,(list,np.ndarray)):
+        assert len(file_list) == len(option), "Please supply a list for dust_measruement_type containing one string for each experiment. Or, supply a single global type by specifiying a string. "
+    else:
+        option = [option]*len(file_list)
+    
+    return option
 
 def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_per_truck=1):
     T_days = 365
@@ -61,12 +71,12 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
                 cleans[0:idx0,jj] = 1
     return cleans
 
-def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index):
+def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12)):
     sim_data = simulation_inputs
     reflect_data = reflectance_data
     f = experiment_index
 
-    fig,ax = plt.subplots(nrows=4,sharex=True)
+    fig,ax = plt.subplots(nrows=6,sharex=True,figsize=figsize)
     fmt = r"${0:s}^\circ$"
     ave = reflect_data.average[f]
     t = reflect_data.times[f]
@@ -109,6 +119,37 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index):
     ax[3].tick_params(axis='y', labelcolor='green')
     ax[3].grid(True)
     ax[3].legend()
+
+    if len(sim_data.relative_humidity)>0: 
+        ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='blue',label="measurements")
+        ax[4].axhline(y=sim_data.relative_humidity[f].mean(),color='blue',ls='--',label = "Average")
+    else:
+        rain_nan = np.nan*np.ones(sim_data.time[f].shape)
+        ax[4].plot(sim_data.time[f],rain_nan)
+    
+    label_str = r'Relative Humidity [%]'
+    ax[4].set_ylabel(label_str,color='blue')
+    ax[4].set_xlabel('Date')
+    ax[4].tick_params(axis='y', labelcolor='blue')
+    ax[4].grid(True)
+    ax[4].legend()
+    
+    if len(sim_data.wind_direction)>0: 
+        ax[5].plot(sim_data.time[f],sim_data.wind_direction[f],color='blue',label="measurements")
+        ax[5].axhline(y=sim_data.wind_direction[f].mean(),color='blue',ls='--',label = "Average")
+    else:
+        rain_nan = np.nan*np.ones(sim_data.time[f].shape)
+        ax[5].plot(sim_data.time[f],rain_nan)
+    
+    label_str = r'Wind Direction [deg]'
+    ax[5].set_ylabel(label_str,color='blue')
+    ax[5].set_xlabel('Date')
+    ax[5].tick_params(axis='y', labelcolor='blue')
+    ax[5].grid(True)
+    ax[5].legend()
+
+    fig.autofmt_xdate()
+    fig.tight_layout()
 
     return fig,ax
 
@@ -332,6 +373,55 @@ def set_extinction_coefficients(destination_model,extinction_weights,file_inds):
                                 "those in destination_model.helios.tilt")
     return dm
 
+def get_training_data(d,file_start,time_to_remove_at_end=0):
+    files = [f for f in os.listdir(d) if f.startswith(file_start)]
+
+    # get training time intervals
+    if np.isscalar(time_to_remove_at_end):
+        time_to_remove_at_end = [time_to_remove_at_end]*len(files)
+    training_intervals = []
+    parse_date = lambda x: np.datetime64(f"{x[0:4]}-{x[4:6]}-{x[6::]}T00:00:00")
+    for ii,f in enumerate(files):
+        f = f.split(".")[0]
+        dates = [parse_date(s) for s in f.split("_") if s.isnumeric()]
+        assert len(dates)==2, "File name must contain start and end dates in YYYYMMDD format."
+        s = min(dates)
+        e = max(dates)
+
+        e += np.timedelta64(1,'D') # since I'm appending midnight, need to use next day to get all data
+        e -= np.timedelta64(time_to_remove_at_end[ii],'h') # leave specified testing time at the end (in minutes)
+        training_intervals.append(np.array([s,e]))
+
+    training_intervals = np.stack(training_intervals).astype('datetime64[m]')
+
+    # get mirror names in each file
+    mirror_names = [ [] for f in files]
+    for ii,f in enumerate(files):
+        mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Reflectance_Average").columns[1::])
+
+    # get mirror names that show up in all files
+    common = []
+    for a in mirror_names:
+        for ele in a:
+            if all([(ele in S) and (ele not in common) for S in mirror_names]):
+                common.append(ele)
+
+    files = [d+f for f in files]
+
+    return files,training_intervals,mirror_names,common
+
+def _parse_dust_str(dust_type):
+    assert dust_type.startswith(("TSP","PM")), "dust_type must be PMX, PMX.X or TSP"
+    if dust_type.startswith("TSP"):
+        attr = "TSP"
+    else:
+        attr = dust_type[2::]
+        if "." not in attr: # integer, e.g. PM20
+            attr = f"PM{attr}"
+        else: # decimal, e.g. PM2.5
+            attr = "PM"+"_".join(attr.split('.'))
+    return attr
+    
 class DustDistribution():
     """
         This needs a docstring :(

@@ -1,5 +1,5 @@
 from soiling_model.base_models import *
-from soiling_model.utilities import _print_if,_check_keys
+from soiling_model.utilities import _print_if,_check_keys, _parse_dust_str
 import numpy as np
 from numpy import radians as rad
 from numpy.linalg import inv
@@ -112,7 +112,8 @@ class semi_physical(base_model):
 
             b = self.helios.inc_ref_factor[f] # fixed for fitting experiments at reflectometer incidence angle
             try:
-                den = getattr(sim_in.dust,sim_in.dust_type[f])
+                attr = _parse_dust_str(sim_in.dust_type[f])
+                den = getattr(sim_in.dust,attr) # dust.(sim_in.dust_type[f])
             except:
                 raise ValueError("Dust measurement "+sim_in.dust_type[f]+\
                     " not present in dust class. Use dust_type="+sim_in.dust_type[f]+\
@@ -369,7 +370,6 @@ class semi_physical(base_model):
         CI_lower_predictions    =  {f: np.array([]) for f in files}
         
         fig,ax = plt.subplots(N_mirrors+1,N_experiments,figsize = figsize,sharex="col")
-        fig.suptitle(fig_title, fontsize=16)
         ax_wind = []
         for ii in range(N_experiments):
             f = files[ii]
@@ -535,12 +535,13 @@ class semi_physical(base_model):
         if save_path != None:
             fig.savefig(save_path)
 
+        fig.suptitle(fig_title, fontsize=16)
         fig.tight_layout()
         if return_handles:
             return fig,ax,mean_predictions,CI_lower_predictions,CI_upper_predictions
         else:
             return mean_predictions,CI_lower_predictions,CI_upper_predictions
-            
+    
     def update_model_parameters(self,x):
         if isinstance(x,list) or isinstance(x,np.ndarray) :
             self.hrz0 = x[0]
@@ -578,19 +579,14 @@ class constant_mean_deposition_velocity(semi_physical):
 
             # compute alpha
             try:
-                den = getattr(dust,sim_in.dust_type[f])
+                attr = _parse_dust_str(sim_in.dust_type[f])
+                den = getattr(dust,attr) # dust.(sim_in.dust_type[f])
             except:
                 raise ValueError("Dust measurement = "+sim_in.dust_type[f]+\
                     " not present in dust class. Use dust_type="+sim_in.dust_type[f]+\
                         " option when initializing the model")
 
             alpha = sim_in.dust_concentration[f]/den[f]
-            # if sim_in.dust_type[f] == "PM10":
-            #     alpha = sim_in.dust_concentration[f]/dust.PM10 # dust_concentration(t)/PM10 scales from the chosen Size Distribution to the measurements
-            # elif sim_in.dust_type[f] == "TSP":
-            #     alpha = sim_in.dust_concentration[f]/dust.TSP # dust_concentration(t)/TSP scales from the chosen Size Distribution to the measurements
-            # else:
-            #     raise ValueError("dust_type not recognized.")
 
              # Compute the area coverage by dust at each time step
             N_helios = helios.tilt[f].shape[0]
@@ -599,7 +595,7 @@ class constant_mean_deposition_velocity(semi_physical):
                 for jj in range(N_times):
                     helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.cos(rad(helios.tilt[f][ii,jj]))*mu_tilde
 
-            # Predict confidence interval if sigma_dep is defined. Fixed tilt assumed. 
+            # Predict confidence interval if sigma_dep is defined. Fixed tilt assumed in this class. 
             if sigma_dep is not None:
                 theta = np.radians(self.helios.tilt[f])
                 inc_factor = self.helios.inc_ref_factor[f]
@@ -615,7 +611,6 @@ class constant_mean_deposition_velocity(semi_physical):
                 helios.delta_soiled_area_variance[f] = dsav
                 self.helios.soiling_factor_prediction_variance[f] = np.cumsum( inc_factor**2 * dsav,axis=1 )
                 
-
         self.reflectance_loss()
         self.helios = helios
 
@@ -676,7 +671,8 @@ class constant_mean_deposition_velocity(semi_physical):
 
         _print_if("========== MLE Estimates ======== ",verbose)
         if transform_to_original_scale:
-            x_hat,x_hat_cov = self.transform_scale(y,y_cov)
+            x_hat,H = self.transform_scale(y,y_cov)
+            x_hat_cov = np.linalg.inv(H)
 
             # print estimates
             fmt = "mu_tilde = {0:.2e}, sigma_dep = {1:.2e}"
