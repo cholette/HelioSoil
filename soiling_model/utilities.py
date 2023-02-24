@@ -421,7 +421,19 @@ def _parse_dust_str(dust_type):
         else: # decimal, e.g. PM2.5
             attr = "PM"+"_".join(attr.split('.'))
     return attr
+
+def wind_rose(simulation_data,exp_idx):
     
+    from windrose import WindroseAxes
+    fig = plt.figure()
+    wd = simulation_data.wind_direction[exp_idx]
+    ws = simulation_data.wind_speed[exp_idx]
+    wax = WindroseAxes.from_ax(fig=fig)
+    wax.bar(wd,ws,normed=True)
+    wax.set_legend()
+
+    return fig,wax
+
 class DustDistribution():
     """
         This needs a docstring :(

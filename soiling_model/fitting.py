@@ -349,7 +349,8 @@ class semi_physical(base_model):
 
     def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,reflectance_data=None,
                             figsize=None,reflectance_std='measurements',save_path=None,fig_title=None,return_handles=False,
-                            repeat_y_labels=True):
+                            repeat_y_labels=True,orientation_strings=None):
+        
         sim_in = simulation_inputs
         samples = posterior_predictive_distribution_samples
         files = list(sim_in.time.keys())
@@ -389,7 +390,10 @@ class semi_physical(base_model):
                 if jj == 0:
                     tilt_str = r"Experiment "+str(ii)+ r", tilt = ${0:.0f}^{{\circ}}$"
                 else:
-                    tilt_str = r"tilt = ${0:.0f}^{{\circ}}$"
+                    tilt_str = r"tilt = ${0:.0f}^{{\circ}}$" # tilt only
+                
+                if orientation_strings is not None:
+                    tilt_str += ", Orientation: "+orientation_strings[ii][jj]
 
                 # get the axis handles
                 if N_experiments == 1:
@@ -400,7 +404,6 @@ class semi_physical(base_model):
                     a = ax[jj,ii]
                     a2 = ax[-1,ii]
                     am = ax[0,0]
-
 
                 if reflectance_data is not None: # plot predictions and reflectance data
                     m = reflectance_data.average[f][:,jj]
