@@ -12,7 +12,7 @@ import numdifftools as ndt
 import scipy.stats as sps
 import arviz as az
 from time import time as ti
-import tqdm
+import pickle
 
 class semi_physical(base_model):
     def __init__(self,file_params):
@@ -194,7 +194,7 @@ class semi_physical(base_model):
 
         return unnormalized_posterior
 
-    def fit_least_squares(self,simulation_inputs,reflectance_data,verbose=True):
+    def fit_least_squares(self,simulation_inputs,reflectance_data,verbose=True,save_file=None):
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
@@ -207,7 +207,8 @@ class semi_physical(base_model):
         _print_if("... done! \n hrz0 = "+str(res.x),verbose)
         return res.x, res.fun
 
-    def fit_mle(self,simulation_inputs,reflectance_data,verbose=True,x0=None,transform_to_original_scale=False,**optim_kwargs):
+    def fit_mle(self,simulation_inputs,reflectance_data,verbose=True,x0=None,
+                transform_to_original_scale=False,save_file=None,**optim_kwargs):
         
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
@@ -254,8 +255,9 @@ class semi_physical(base_model):
             fmt = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
             _print_if(fmt.format("hrz0",x_ci[0,0],x_ci[1,0]),verbose)
             _print_if(fmt.format("sigma_dep",x_ci[0,1],x_ci[1,1]),verbose)
+            p_hat = x_hat
+            p_cov = x_cov
 
-            return x_hat,x_cov
         else:
             y_hat = y
             y_cov = np.linalg.inv(H_log) # Paramter covariance in the log space
@@ -270,10 +272,13 @@ class semi_physical(base_model):
             fmt = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
             _print_if(fmt.format("log(log(hrz0))",y_ci[0,0],y_ci[1,0]),verbose)
             _print_if(fmt.format("log(sigma_dep)",y_ci[0,1],y_ci[1,1]),verbose)
+            p_hat = y_hat
+            p_cov = y_cov
 
-            return y_hat,y_cov
+        return p_hat, p_cov
 
-    def fit_map(self,simulation_inputs,reflectance_data,priors,verbose=True,x0=None,transform_to_original_scale=True):
+    def fit_map(self,simulation_inputs,reflectance_data,priors,verbose=True,
+                x0=None,transform_to_original_scale=True,save_file=None):
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
@@ -554,6 +559,22 @@ class semi_physical(base_model):
             self.hrz0 = x
             self.sigma_dep = None
     
+    def save(self,file_name,log_p_hat=None,log_p_hat_cov=None,
+             training_simulation_data=None,training_reflectance_data=None):
+        with open(file_name,'wb') as f:
+            save_data = {'model':self,
+                         'type':'semi-physical'}
+            if log_p_hat is not None:
+                save_data['transformed_parameters'] = log_p_hat
+            if log_p_hat_cov is not None:
+                save_data['transformed_parameter_covariance'] = log_p_hat_cov
+            if training_simulation_data is not None:
+                save_data['simulation_data'] = training_simulation_data
+            if training_reflectance_data is not None:
+                save_data['reflectance_data'] = training_reflectance_data
+            
+            pickle.dump(save_data,f)
+
 class constant_mean_deposition_velocity(semi_physical):
     
     def __init__(self,file_params):
@@ -591,7 +612,7 @@ class constant_mean_deposition_velocity(semi_physical):
 
             alpha = sim_in.dust_concentration[f]/den[f]
 
-             # Compute the area coverage by dust at each time step
+            # Compute the area coverage by dust at each time step
             N_helios = helios.tilt[f].shape[0]
             N_times = helios.tilt[f].shape[1]
             for ii in range(N_helios):
@@ -617,7 +638,7 @@ class constant_mean_deposition_velocity(semi_physical):
         self.reflectance_loss()
         self.helios = helios
 
-    def fit_least_squares(self,simulation_inputs,reflectance_data,verbose=True):
+    def fit_least_squares(self,simulation_inputs,reflectance_data,verbose=True,save_file=None):
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
@@ -630,7 +651,8 @@ class constant_mean_deposition_velocity(semi_physical):
         _print_if("... done! \n mu_tilde = "+str(res.x),verbose)
         return res.x,res.fun
 
-    def fit_map(self, simulation_inputs, reflectance_data, priors, verbose=True, x0=None, transform_to_original_scale=False):
+    def fit_map(self, simulation_inputs, reflectance_data, priors, verbose=True, 
+                x0=None, transform_to_original_scale=False,save_file=None):
 
         _print_if("Getting MAP estimates ... ",verbose)
         y,y_cov = super().fit_map(simulation_inputs, reflectance_data, priors, verbose=False, x0=x0, transform_to_original_scale=False)
@@ -667,14 +689,16 @@ class constant_mean_deposition_velocity(semi_physical):
         
         return x_hat, x_hat_cov
 
-    def fit_mle(self, simulation_inputs, reflectance_data, verbose=True, x0=None, transform_to_original_scale=False):
+    def fit_mle(self, simulation_inputs, reflectance_data, verbose=True, x0=None, 
+                transform_to_original_scale=False,save_file=None):
 
         _print_if("Getting MLE estimates ... ",verbose)
         y,y_cov = super().fit_mle(simulation_inputs, reflectance_data, verbose=False, x0=x0, transform_to_original_scale=False)
+        H_log = np.linalg.inv(y_cov)
 
         _print_if("========== MLE Estimates ======== ",verbose)
         if transform_to_original_scale:
-            x_hat,H = self.transform_scale(y,y_cov)
+            x_hat,H = self.transform_scale(y,H_log)
             x_hat_cov = np.linalg.inv(H)
 
             # print estimates
@@ -753,3 +777,20 @@ class constant_mean_deposition_velocity(semi_physical):
                 self.sigma_dep = x[1]
         else:
             self.mu_tilde = x
+
+    def save(self,file_name,log_p_hat=None,log_p_hat_cov=None,
+             training_simulation_data=None,training_reflectance_data=None):
+        with open(file_name,'wb') as f:
+            save_data = {'model':self,
+                         'type':'constant-mean'}
+            if log_p_hat is not None:
+                save_data['transformed_parameters'] = log_p_hat
+            if log_p_hat_cov is not None:
+                save_data['transformed_parameter_covariance'] = log_p_hat_cov
+            if training_simulation_data is not None:
+                save_data['simulation_data'] = training_simulation_data
+            if training_reflectance_data is not None:
+                save_data['reflectance_data'] = training_reflectance_data
+            
+            pickle.dump(save_data,f)
+                

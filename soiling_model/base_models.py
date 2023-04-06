@@ -13,6 +13,7 @@ from scipy.interpolate import interp2d
 from soiling_model.utilities import _print_if,_ensure_list,\
                                     _extinction_function,_same_ext_coeff,\
                                     _import_option_helper,_parse_dust_str
+from textwrap import dedent
 from scipy.optimize import minimize_scalar
 from scipy.integrate import cumtrapz
 import copy
@@ -23,10 +24,24 @@ tol = np.finfo(float).eps # machine floating point precision
 class base_model:
     def __init__(self,file_params):
         table = pd.read_excel(file_params,index_col="Parameter")
-        self.latitude = float(table.loc['latitude'].Value)                  # latitude in degrees of site
-        self.longitude = float(table.loc['longitude'].Value)                # longitude in degrees of site
-        self.timezone_offset = float(table.loc['timezone_offset'].Value)    # [hrs from GMT] timezone of site
-        self.hrz0 =float(table.loc['hr_z0'].Value)                          # [-] site roughness height ratio
+
+        # optional parameter imports
+        try:
+            self.latitude = float(table.loc['latitude'].Value)                  # latitude in degrees of site
+            self.longitude = float(table.loc['longitude'].Value)                # longitude in degrees of site
+            self.timezone_offset = float(table.loc['timezone_offset'].Value)    # [hrs from GMT] timezone of site
+            self.hrz0 =float(table.loc['hr_z0'].Value)                          # [-] site roughness height ratio
+        except:
+            print(dedent(f"""\
+            You are missing at least one of from (lat,lon,timezone_offset) from:
+            {file_params}
+            Field performance cannot be simulated until all of these are defined. """))
+
+            self.latitude = None
+            self.longitude = None
+            self.timezone_offset = None
+            self.hrz0 = None
+                               
         self.loss_model = table.loc['loss_model'].Value                     # either "geometry" or "mie"
 
         self.constants = constants()
@@ -394,10 +409,11 @@ class simulation_inputs:
             self.N_simulations = len(experiment_files)
 
             if k_factors == None: # import k-factors from parameter file
+                k_factors = [1.0]*len(experiment_files)
+            elif k_factors == "import":
                 k_factors = []
                 for f in experiment_files:
                     k_factors.append(pd.read_excel(f,sheet_name="Dust",index_col="Parameter").loc['k_factor'].values[0])
-                    # k_factors = [1.0]*len(experiment_files)
             else:
                 k_factors = _import_option_helper(experiment_files,k_factors)
                 # k_factors = _ensure_list(k_factors)
@@ -423,6 +439,7 @@ class simulation_inputs:
                 self.source_normalized_intensity[ii] = self.source_normalized_intensity[ii]/norm # make sure intensity is normalized for later computations
             else:
                 self.source_normalized_intensity[ii] = None
+            xl.close()
 
     def import_weather(self,files,dust_type,verbose=True,smallest_windspeed=1e-6):
         
@@ -585,7 +602,7 @@ class dust:
 
     def plot_distributions(self,figsize=(5,5)):
         N_files = len(self.D)
-        _,ax1 = plt.subplots(nrows=N_files,sharex=True,squeeze=False,figsize=figsize)
+        fig,ax1 = plt.subplots(nrows=N_files,sharex=True,squeeze=False,figsize=figsize)
 
         ax2 = []
         for ff in range(N_files):
@@ -605,13 +622,14 @@ class dust:
             ax2[ff].set_ylabel(r'$\frac{dm \; [\mu g \, m^{{-3}} ] }{dLog(D \; [\mu m])}$', color=color,size=20)  # we already handled the x-label with ax1
             ax2[ff].plot(D_dust,pdfM, color=color)
             ax2[ff].tick_params(axis='y', labelcolor=color)
-            ax2[ff].set_title("Number and Mass PDFs")
             ax2[ff].grid('on')
         
         plt.xscale('log')
         ax2[-1].set_xticks(10.0**np.arange(np.log10(D_dust[0]),np.log10(D_dust[-1]),1))
+        plt.tight_layout()
+        fig.suptitle("Number and Mass PDFs")
 
-        return ax1,ax2
+        return fig,ax1,ax2
 
     def plot_area_distribution(self,figsize=(5,5)):
         N_files = len(self.D)
@@ -1046,6 +1064,7 @@ class reflectance_measurements:
         self.rho0 = {}
         self.reflectometer_incidence_angle = {}
         self.reflectometer_acceptance_angle = {}
+        self.mirror_names = {}
 
         if import_tilts:
             self.tilts = {}
@@ -1067,9 +1086,11 @@ class reflectance_measurements:
             if column_names_to_import != None: # extract relevant column names of the pandas dataframe
                 self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.mirror_names[ii] = column_names_to_import
             else:
                 self.average[ii] = reflectance_data['Average'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1::]
 
             self.prediction_indices[ii] = []
             self.prediction_times[ii] = []
@@ -1084,10 +1105,7 @@ class reflectance_measurements:
             self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
 
             if import_tilts:
-                if column_names_to_import != None: # extract relevant column names of the pandas dataframe
-                    self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[column_names_to_import].values.transpose()
-                else:
-                    self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts").iloc[:,1::].to_numpy().transpose()
+                self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[self.mirror_names[ii]].values.transpose()
                     
     def get_experiment_subset(self,idx):
         attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes

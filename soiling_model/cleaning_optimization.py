@@ -25,7 +25,7 @@ class optimisation_problem():
         if fm.loss_model=="mie":
             ValueError("Field simulation using loss_model==""mie"" not yet available.")
 
-        sd = simulation_inputs(weather_files,dust_types=dust_type)
+        sd = simulation_inputs(weather_files,dust_type=dust_type)
         fm.sun_angles(sd)
         fm.helios_angles(pl,second_surface=second_surface)
         fm.deposition_flux(sd)

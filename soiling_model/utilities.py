@@ -76,8 +76,9 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
     reflect_data = reflectance_data
     f = experiment_index
 
-    fig,ax = plt.subplots(nrows=6,sharex=True,figsize=figsize)
-    fmt = r"${0:s}^\circ$"
+    fig,ax = plt.subplots(nrows=5,sharex=True,figsize=figsize)
+    # fmt = r"${0:s}^\circ$"
+    fmt = "${0:s}$"
     ave = reflect_data.average[f]
     t = reflect_data.times[f]
     std = reflect_data.sigma[f]
@@ -121,32 +122,22 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
     ax[3].legend()
 
     if len(sim_data.relative_humidity)>0: 
-        ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='blue',label="measurements")
-        ax[4].axhline(y=sim_data.relative_humidity[f].mean(),color='blue',ls='--',label = "Average")
+        ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='black',label="measurements")
+        ax[4].axhline(y=sim_data.relative_humidity[f].mean(),color='black',ls='--',label = "Average")
     else:
         rain_nan = np.nan*np.ones(sim_data.time[f].shape)
         ax[4].plot(sim_data.time[f],rain_nan)
     
     label_str = r'Relative Humidity [%]'
-    ax[4].set_ylabel(label_str,color='blue')
+    ax[4].set_ylabel(label_str,color='black')
     ax[4].set_xlabel('Date')
-    ax[4].tick_params(axis='y', labelcolor='blue')
+    ax[4].tick_params(axis='y', labelcolor='black')
     ax[4].grid(True)
     ax[4].legend()
     
     if len(sim_data.wind_direction)>0: 
-        ax[5].plot(sim_data.time[f],sim_data.wind_direction[f],color='blue',label="measurements")
-        ax[5].axhline(y=sim_data.wind_direction[f].mean(),color='blue',ls='--',label = "Average")
-    else:
-        rain_nan = np.nan*np.ones(sim_data.time[f].shape)
-        ax[5].plot(sim_data.time[f],rain_nan)
-    
-    label_str = r'Wind Direction [deg]'
-    ax[5].set_ylabel(label_str,color='blue')
-    ax[5].set_xlabel('Date')
-    ax[5].tick_params(axis='y', labelcolor='blue')
-    ax[5].grid(True)
-    ax[5].legend()
+        figwr,axwr = wind_rose(sim_data,f)
+        figwr.tight_layout()
 
     fig.autofmt_xdate()
     fig.tight_layout()
@@ -168,8 +159,8 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
             lb = ref_dat.times[f][0]
             ub = ref_dat.times[f][-1]
         elif trim_ranges == "simulation_inputs":
-            lb = sim_dat.times[f][0]
-            ub = sim_dat.times[f][-1]
+            lb = sim_dat.time[f][0]
+            ub = sim_dat.time[f][-1]
         else:
             raise ValueError("""Value of trim_ranges not recognized. Must be a list of lists/np.array [lb,ub], """+\
                 """ "reflectance_data" or "simulation_inputs" """)
@@ -190,6 +181,8 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
             sim_dat.dni[f] = sim_dat.dni[f][mask]
         if len(sim_dat.relative_humidity)>0:
             sim_dat.relative_humidity[f] = sim_dat.relative_humidity[f][mask]
+        if len(sim_dat.wind_direction)>0:
+            sim_dat.wind_direction[f] = sim_dat.wind_direction[f][mask]
         
         if reflectance_data is not None:
             # trim reflectance data
@@ -642,11 +635,11 @@ class DustDistribution():
         
         # ensure kind is correct
         if kind.lower() == 'number':
-            self.convert_to_number()
-        elif kind.lower() == 'mass':
-            self.convert_to_mass()
-        elif kind.lower() == 'area':
-            self.convert_to_area()
+            self.convert_to_number(rho)
+        elif kind.lower(rho) == 'mass':
+            self.convert_to_mass(rho)
+        elif kind.lower(rho) == 'area':
+            self.convert_to_area(rho)
         else:
             raise ValueError("kind not recognized.")
 
