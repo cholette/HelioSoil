@@ -284,7 +284,7 @@ class base_model:
             except:
                 raise ValueError("Dust measurement = "+sim_in.dust_type[f]+\
                     " not present in dust class. Use dust_type="+sim_in.dust_type[f]+\
-                        " option when initializing the model")
+                        " option when loading the simulation data.")
             alpha = sim_in.dust_concentration[f]/den[f]
 
             # Compute the area coverage by dust at each time step
@@ -309,7 +309,7 @@ class base_model:
             # variance of noise for each measurement
             if sigma_dep != None:
                 theta = np.radians(self.helios.tilt[f])
-                helios.delta_soiled_area_variance[f] = sigma_dep**2* (alpha**2*np.cos(theta)**2) 
+                helios.delta_soiled_area_variance[f] = sigma_dep**2 * (alpha**2*np.cos(theta)**2)
                 # sigma_dep**2*helios.inc_ref_factor[f]*np.cumsum(alpha**2*np.cos(theta)**2,axis=1)
             elif self.sigma_dep != None:
                 theta = np.radians(self.helios.tilt[f])
@@ -465,7 +465,7 @@ class simulation_inputs:
                 T = ( (time[-1]-time[0])+np.timedelta64(1,'h') ).astype('timedelta64[D]')
                 _print_if("Length of simulation for file "+files[ii]+": "+str(T.astype(float))+" days",verbose)
 
-            self.dt[ii] = np.diff(self.time[ii])[0].astype(float) # [s] assumed constant, in hours
+            self.dt[ii] = np.diff(self.time[ii])[0].astype(float) # [s] assumed constant. Make float for later computations
             self.time_diff[ii] = (self.time[ii]-self.time[ii].astype('datetime64[D]')).astype('timedelta64[h]').astype('int')  # time difference from midnight in integer hours
             self.air_temp[ii] = np.array(weather.loc[:,'AirTemp'])
             

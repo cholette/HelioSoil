@@ -31,10 +31,12 @@ The following sheets are required for `fitting_experiment` class only:
 
 * *Reflectance_Sigma*. Columns are Time in datetime format (see above) followed by the standard deviation of the reflectance measurements for each mirror at each time. This will be used in a later release to enable fitting of the hrz0 parameter via experiments.
 
-Examples of the format of these sheets can be found in the `data` folder.
+Examples of the format of these sheets can be found in the [mirror_soiling_data](https://github.com/cholette/mirror_soiling_data) repository. 
 
 ## External dependencies
-The details of the required python packages can be found in the environment.yml file. Aside from these requirements, the average optical efficiencies of each sector are computed using [CoPylot](https://www.nrel.gov/docs/fy21osti/78774.pdf). To use CoPylot, install SolarPILOT following the instructions in Section 2.1 of [5] and place the files `copylot.py` and `solarpilot.dll` into the main directory.
+The details of the required python packages can be found in the environment.yml file. Aside from these requirements, the average optical efficiencies of each sector are computed using [CoPylot](https://www.nrel.gov/docs/fy21osti/78774.pdf). To use CoPylot, install SolarPILOT following the instructions in Section 2.1 of [5] and place the files `copylot.py` and `solarpilot.dll` into the main directory. 
+
+The data available from the [mirror_soiling_data](https://github.com/cholette/mirror_soiling_data) should be placed in the `data/` subfoler for the fitting scripts and notebooks to work.
 
 ## Assumptions and Notes
 The module assumes a Solar Tower plant and that the dust size distribution is known (e.g. from literature [6]). This distribution is scaled according to the airborne dust concentration measurements in the input data. See [1] for details. 
