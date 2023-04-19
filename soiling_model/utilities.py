@@ -7,7 +7,6 @@ import numpy as np
 from copy import deepcopy
 from openpyxl import load_workbook
 import os
-import fnmatch
 import miepython
 
 def _print_if(s,verbose):

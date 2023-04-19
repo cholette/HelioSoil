@@ -1,4 +1,3 @@
-from multiprocessing import dummy
 import numpy as np
 from numpy import matlib
 from numpy import radians as rad

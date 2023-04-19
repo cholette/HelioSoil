@@ -6,12 +6,9 @@ from numpy.linalg import inv
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from matplotlib.cm import get_cmap
 from scipy.optimize import minimize_scalar, minimize
 import numdifftools as ndt
 import scipy.stats as sps
-import arviz as az
-from time import time as ti
 import pickle
 
 class semi_physical(base_model):
@@ -754,21 +751,21 @@ class constant_mean_deposition_velocity(semi_physical):
 
                 return z,H  
 
-        elif isinstance(x,az.data.inference_data.InferenceData):
-            if likelihood_hessian != None:
-                print("Warning: You have supplied an Arviz infrenceData object. The supplied likelihood Hessian will be ignored.")
+        # elif isinstance(x,az.data.inference_data.InferenceData):
+        #     if likelihood_hessian != None:
+        #         print("Warning: You have supplied an Arviz infrenceData object. The supplied likelihood Hessian will be ignored.")
             
-            p = x.posterior
-            if direction == "inverse":
-                p2 = {  'mu_tilde': np.exp(p.log_mu_tilde),\
-                        'sigma_dep':np.exp(p.log_sigma_dep) 
-                    }
-            elif direction == "forward":
-                p2 = {  'log_mu_tilde': np.log(p.mu_tilde),\
-                        'log_sigma_dep':np.log(p.sigma_dep) 
-                    }
-            p2 = az.convert_to_inference_data(p2)
-            return p2
+        #     p = x.posterior
+        #     if direction == "inverse":
+        #         p2 = {  'mu_tilde': np.exp(p.log_mu_tilde),\
+        #                 'sigma_dep':np.exp(p.log_sigma_dep) 
+        #             }
+        #     elif direction == "forward":
+        #         p2 = {  'log_mu_tilde': np.log(p.mu_tilde),\
+        #                 'log_sigma_dep':np.log(p.sigma_dep) 
+        #             }
+        #     p2 = az.convert_to_inference_data(p2)
+        #     return p2
     
     def update_model_parameters(self,x):
         if isinstance(x,list) or isinstance(x,np.ndarray) :
