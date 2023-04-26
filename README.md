@@ -4,10 +4,10 @@ A library for soiling analysis and mirror washing for Concentrating Solar Power 
 
 ## Summary
 
-This library provides tools developed for predicting soling reflectance losses for Solar Tower CSP plants using weather and plant design data. Two models are provided:
+This library provides tools developed for predicting soling reflectance losses for Solar Tower CSP plants using weather and plant design data. Two models are provided (and are detailed in [9]):
 
 * A physics-based deposition. This model includes both full-field simulations (via the `base_models.field_model` class) and methods for fitting parameters based on experimental data via the `fitting.semi_physical` class.
-* A constant-mean deposition velocity model. Currently, this model can be fit to experimental data via the `fitting.constant_mean_deposition_velicity` class , but full field simulation is not yet supported.
+* A constant-mean deposition velocity model. Currently, this model can be fit to experimental data via the `fitting.constant_mean_deposition_velocity` class , but full field simulation is not yet supported.
 
 This version includes the following new features:
 
@@ -16,7 +16,7 @@ This version includes the following new features:
 
 The details of the physics-based soiling model (including the sectorization and fitting procedure) can be found in [1-3] and a demo of soiling loss predictions can be found in `demo_hrz0_fitting.ipynb`. The fitting of hrz0 using experimental data is demonstrated in `demo_hrz0_fitting.ipynb` using experimental data collected at the Queensland University of Technology (QUT), which are discussed in [1]. The data from these experiments (and others) are provided in a separate [mirror_soiling_data](https://github.com/cholette/mirror_soiling_data) repository and should be placed in the a `data/` folder for the fitting demo to work.
 
-In addition to a soiling model, this library provides a basic economic and cleaning schedule modules [^1] to 1) understand the economic losses due to soiling given a certain number of cleaning crews, and 2) enable optimization of the cleaning trucks and washing frequency. A demonstration  of this capability is available in `demo_cleaning_optimization.ipynb` and discussion on the economic and cleaning models can be found in [3,4].
+In addition to a soiling model, this library provides a basic economic and cleaning schedule modules[^1] to 1) understand the economic losses due to soiling given a certain number of cleaning crews, and 2) enable optimization of the cleaning trucks and washing frequency. A demonstration  of this capability is available in `demo_cleaning_optimization.ipynb` and discussion on the economic and cleaning models can be found in [3,4].
 
 [^1]: The optimization requires a full field simulation, so only the semi-physical model is suppored at this time. Later releases are expected to support the use of the constant-mean model and more sophisticated cleaning schedules.
 
@@ -90,7 +90,7 @@ For the soiling model, please cite
 ### BibTeX
 
 ~~~bibtex
-@article{PICOTTI20181287,
+@article{picotti_2020_physical_model,
   title = {Development and experimental validation of a physical model for the soiling of mirrors for CSP industry applications},
   journal = {Solar Energy},
   volume = {173},
@@ -111,7 +111,7 @@ For the cleaning costs and optimization, please cite
 ### BibTeX
 
   ~~~bibtex
-  @article{PICOTTI2020501,
+  @article{picotti_2020_cleaning,
   title = {Optimization of cleaning strategies for heliostat fields in solar tower plants},
   journal = {Solar Energy},
   volume = {204},
@@ -140,3 +140,5 @@ For the cleaning costs and optimization, please cite
 [7] H. Truong-Ba, M. E. Cholette, G. Picotti, T. A. Steinberg, and G. Manzolini, “Sectorial reflectance-based cleaning policy of heliostats for Solar Tower power plants,” Renew. Energy, vol. 166, pp. 176–189, 2020. [link](https://eprints.qut.edu.au/207053/)
 
 [8] H. Truong Ba, M. E. Cholette, R. Wang, P. Borghesani, L. Ma, and T. A. Steinberg, “Optimal condition-based cleaning of solar power collectors,” Solar Energy, vol. 157, pp. 762–777, Nov. 2017. [link](https://eprints.qut.edu.au/111078/)
+
+[9] G. Picotti, M. E. Cholette, C. B. Anderson, T. A. Steinberg, and G. Manzolini, “Stochastic Soiling Loss Models for Heliostats in Concentrating Solar Power Plants.” arXiv, Apr. 24, 2023. doi: 10.48550/arXiv.2304.11814. [link](https://arxiv.org/abs/2304.11814)
