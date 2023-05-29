@@ -3,7 +3,7 @@ tol = np.finfo(float).eps # machine floating point precision
 from soiling_model.base_models import *
 from soiling_model.utilities import _print_if,simple_annual_cleaning_schedule
 
-class optimisation_problem():
+class optimization_problem():
     def __init__(self,params,solar_field,weather_files,climate_file,num_sectors,\
         dust_type=None,n_az=10,n_el=10,second_surface=True,verbose=True):
         self.truck = {  'operator_salary':[],
@@ -41,7 +41,7 @@ class optimisation_problem():
 def periodic_schedule_tcc(opt,n_trucks,n_cleans,\
     n_sectors_per_truck=1,verbose=True):
 
-    assert isinstance(opt,optimisation_problem),"First input must be a soiling_model.cleaning_optimization.optimization_problem instance. "
+    assert isinstance(opt,optimization_problem),"First input must be a soiling_model.cleaning_optimization.optimization_problem instance. "
     field = opt.field_model
     plant = opt.plant
     files = list(opt.simulation_data.time.keys())
