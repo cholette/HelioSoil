@@ -255,7 +255,9 @@ def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sa
         samples.drop(labels=['day','month','year'],axis=1,inplace=True)
         samples.to_excel(output_file_format.format(n),sheet_name=sheet_name)
 
-def _extinction_function(diameters,lambdas,intensities,acceptance_angle,refractive_index,grid_size_mu=int(1e4),grid_size_x=1000,verbose=False):
+def _extinction_function(diameters,lambdas,intensities,acceptance_angle,
+                         refractive_index,grid_size_mu=int(1e4),
+                         grid_size_x=1000,verbose=False):
     
     # theta_s = np.radians(np.linspace(-180,180,grid_size_theta_s)) # angle of scattering (\theta=0 is direction of radiation)
     m = refractive_index
