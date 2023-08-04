@@ -305,7 +305,7 @@ class base_model:
                     #         (D_meters**2)*sim_in.dt[f],np.log10(dust.D[f]))
                     # else: # loss_model == "mie"
                     helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.pi/4 * np.trapz(helios.pdfqN[f][ii,jj,:]*\
-                        (D_meters**2)*sim_in.dt[f]*extinction_weighting[f][ii,:],np.log10(dust.D[f]))
+                        (D_meters**2)*sim_in.dt[f]*extinction_weighting[f][ii,:],np.log10(dust.D[f])) # pdfqN includes cos(tilt)
 
             # variance of noise for each measurement
             if sigma_dep != None:
@@ -897,7 +897,7 @@ class helios:
             plt.title('Solar Field Sectors')
             plt.show()
 
-    def compute_extinction_weights(self,simulation_data,loss_model=None,verbose=True):
+    def compute_extinction_weights(self,simulation_data,loss_model=None,verbose=True,options={}):
         sim_dat = simulation_data
         dust = sim_dat.dust
         files = list(sim_dat.file_name.keys())
@@ -928,7 +928,8 @@ class helios:
                     else:
                         _print_if(f"\t Computing weights for file {f}, heliostat {h}...",verbose)
                         ext_weight = _extinction_function(  dia,lam,intensities,phia[f][h],
-                                                            refractive_index,verbose=verbose)
+                                                            refractive_index,verbose=verbose,
+                                                            **options)
                         self.extinction_weighting[f][h,:] = ext_weight
                         computed.append((f,h))
 

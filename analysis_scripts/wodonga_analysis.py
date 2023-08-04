@@ -11,7 +11,8 @@ import soiling_model.base_models as smb
 import soiling_model.fitting as smf
 import soiling_model.utilities as smu
 from matplotlib import rcParams
-from paper_specific_utilities import plot_for_paper, daily_soiling_rate
+from paper_specific_utilities import plot_for_paper, daily_soiling_rate, \
+                                    fit_quality_plots, summarize_fit_quality
 from copy import deepcopy
 import scipy.stats as sps
 
@@ -94,8 +95,9 @@ for ii,experiment in enumerate(train_experiments):
 
 # %% Set mirror angles and get extinction weights
 imodel.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
-imodel.helios.compute_extinction_weights(sim_data_train,imodel.loss_model,verbose=True)
-imodel.helios.plot_extinction_weights(sim_data_train,fig_kwargs={'figsize':(20,10)})
+imodel.helios.compute_extinction_weights(sim_data_train,imodel.loss_model,
+                                         verbose=True,options={'grid_size_x':1000})
+fig_weights,ax_weights = imodel.helios.plot_extinction_weights(sim_data_train,fig_kwargs={'figsize':(5,7)})
 ext_weights = imodel.helios.extinction_weighting[0].copy()
 
 imodel_constant.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
@@ -123,7 +125,6 @@ imodel.save(sp_save_file,
             training_simulation_data=sim_data_train,
             training_reflectance_data=reflect_data_train)
 
-imodel.predict_reflectance(sim_data_train) # writes output into imodel.helios.soiling_factor
 _,_,_ = imodel.plot_soiling_factor( sim_data_train,
                             reflectance_data=reflect_data_train,
                             figsize=(10,10),
@@ -134,8 +135,8 @@ _,_,_ = imodel.plot_soiling_factor( sim_data_train,
 
 # %% Fit constant mean model & plot on training data
 log_param_hat_con,log_param_cov_con = imodel_constant.fit_mle(  sim_data_train,
-                                                reflect_data_train,
-                                                transform_to_original_scale=False)
+                                                                reflect_data_train,
+                                                                transform_to_original_scale=False)
 
 s_con = np.sqrt(np.diag(log_param_cov_con))
 param_ci_con = log_param_hat_con + 1.96*s_con*np.array([[-1],[1]])
@@ -153,7 +154,6 @@ imodel_constant.save(cm_save_file,
                      training_simulation_data=sim_data_train,
                      training_reflectance_data=reflect_data_train)
 
-imodel_constant.predict_reflectance(sim_data_train) # writes output into imodel.helios.soiling_factor
 _,_,_ = imodel_constant.plot_soiling_factor(    sim_data_train,
                                                 reflectance_data=reflect_data_train,
                                                 figsize=(10,10),
@@ -200,7 +200,6 @@ for ii,experiment in enumerate(sim_data_total.dt.keys()):
 imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
 file_inds = np.arange(len(files))
 imodel = smu.set_extinction_coefficients(imodel,ext_weights,file_inds)
-imodel.predict_reflectance(sim_data_total)
 
 fig,ax = plot_for_paper(    imodel,reflect_data_total,
                             sim_data_total,
@@ -209,7 +208,8 @@ fig,ax = plot_for_paper(    imodel,reflect_data_total,
                             orientation,
                             legend_shift=(0,0),
                             rows_with_legend=[2],
-                            num_legend_cols=4)
+                            num_legend_cols=4,
+                            yticks=(0.93,0.95,0.98,1.0))
 
 if use_fitted_dust_distributions:
     fig.savefig(sp_save_file+figure_format,dpi=300,bbox_inches='tight',pad_inches=0.1)
@@ -232,7 +232,6 @@ else:
 imodel_constant.helios_angles(sim_data_total_constant,
                               reflect_data_total,
                               second_surface=second_surf)
-imodel_constant.predict_reflectance(sim_data_total_constant)
 
 fig,ax = plot_for_paper(    imodel_constant,
                             reflect_data_total,
@@ -242,7 +241,8 @@ fig,ax = plot_for_paper(    imodel_constant,
                             orientation,
                             legend_shift=(0,0),
                             rows_with_legend=[2],
-                            num_legend_cols=4)
+                            num_legend_cols=4,
+                            yticks=(0.93,0.95,0.98,1.0))
 
 if use_fitted_dust_distributions:
     fig.savefig(cm_save_file+figure_format,dpi=300,bbox_inches='tight',pad_inches=0.1)
@@ -286,4 +286,230 @@ ax.legend(fontsize=fsz)
 fig.set_size_inches(5,4)
 fig.savefig(f"{main_directory}/results/losses_wodonga.pdf",dpi=300,bbox_inches='tight',pad_inches=0)
 
-# %%
+mirror_idxs = list(range(len(all_mirrors)))
+test_experiments = [f for f in list(range(len(files))) if f not in train_experiments]
+train_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] in train_mirrors]
+test_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] not in train_mirrors]
+
+# %% Fit quality plots (semi-physical)
+mirror_idxs = list(range(len(all_mirrors)))
+test_experiments = [f for f in list(range(len(files))) if f not in train_experiments]
+train_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] in train_mirrors]
+test_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] not in train_mirrors]
+
+fig,ax = summarize_fit_quality( imodel,
+                                reflect_data_total,
+                                train_experiments,
+                                train_mirror_idx,
+                                test_mirror_idx,test_experiments,
+                                min_loss=-0.2,
+                                max_loss=3.25,
+                                save_file=sp_save_file,
+                                figsize=(10,10)
+                                )
+for a in ax:
+    a.set_xticks([0,1,2,3])
+    a.set_yticks([0,1,2,3])
+
+
+fig,ax = plt.subplots(figsize=(6,6))
+fit_quality_plots(imodel,
+                  reflect_data_total,
+                  test_experiments,
+                  test_mirror_idx,
+                  ax=ax,
+                  min_loss= -0.5,
+                  max_loss=9.0,
+                  include_fits=False,
+                  data_ls='k*',
+                  data_label="Testing data",
+                  replot=True,
+                  vertical_adjust=-0.1,
+                  cumulative=True)
+
+fit_quality_plots(imodel,
+                  reflect_data_total,
+                  train_experiments,
+                  test_mirror_idx,
+                  ax=ax,
+                  min_loss= -0.5,
+                  max_loss=9.0,
+                  include_fits=False,
+                  data_ls='g.',
+                  data_label="Training (different tilts)",
+                  replot=False,
+                  vertical_adjust=-0.05,
+                  cumulative=True)
+
+fit_quality_plots(imodel,
+                  reflect_data_total,
+                  train_experiments,
+                  train_mirror_idx,
+                  ax=ax,
+                  min_loss= -0.5,
+                  max_loss=9.0,
+                  include_fits=False,
+                  data_ls='m.',
+                  replot=False,
+                  data_label="Training",
+                  cumulative=True)
+
+ax.set_xlabel("Measured cumulative loss",fontsize=16)
+ax.set_ylabel("Predicted cumulative loss",fontsize=16)
+fig.savefig(sp_save_file+"_cumulative_fit_quality.pdf",bbox_inches='tight')
+
+fig,ax = plt.subplots(figsize=(6,6))
+fit_quality_plots(imodel,
+                  reflect_data_total,
+                  test_experiments,
+                  test_mirror_idx,
+                  ax=ax,
+                  min_loss= -0.1,
+                  max_loss=2.0,
+                  include_fits=False,
+                  data_ls='k*',
+                  data_label="Testing data",
+                  replot=True,
+                  vertical_adjust=-0.1,
+                  cumulative=False)
+
+fit_quality_plots(imodel,
+                  reflect_data_total,
+                  train_experiments,
+                  test_mirror_idx,
+                  ax=ax,
+                  min_loss= -0.1,
+                  max_loss=2.0,
+                  include_fits=False,
+                  data_ls='g.',
+                  data_label="Training (different tilts)",
+                  replot=False,
+                  vertical_adjust=-0.05,
+                  cumulative=False)
+
+
+fit_quality_plots(imodel,
+                  reflect_data_total,
+                  train_experiments,
+                  train_mirror_idx,
+                  ax=ax,
+                  min_loss= -0.1,
+                  max_loss=2.0,
+                  include_fits=False,
+                  data_ls='m.',
+                  replot=False,
+                  data_label="Training",
+                  cumulative=False)
+
+
+# ax.set_title("Loss change prediction quality assessment (semi-physical)")
+
+# %% Fit Quality plots (constant-mean)
+fig,ax = summarize_fit_quality( imodel_constant,
+                                reflect_data_total,
+                                train_experiments,
+                                train_mirror_idx,
+                                test_mirror_idx,test_experiments,
+                                min_loss=-0.2,
+                                max_loss=3.25,
+                                save_file=sp_save_file,
+                                figsize=(10,10)
+                                )
+for a in ax:
+    a.set_xticks([0,1,2,3])
+    a.set_yticks([0,1,2,3])
+
+
+fig,ax = plt.subplots(figsize=(6,6))
+
+fit_quality_plots(imodel_constant,
+                  reflect_data_total,
+                  test_experiments,
+                  test_mirror_idx,
+                  ax=ax,
+                  min_loss= -0.1,
+                  max_loss=9.0,
+                  include_fits=False,
+                  data_ls='k*',
+                  data_label="Testing data",
+                  replot=True,
+                  vertical_adjust=-0.1,
+                  cumulative=True)
+
+fit_quality_plots(imodel_constant,
+                  reflect_data_total,
+                  train_experiments,
+                  test_mirror_idx,
+                  ax=ax,
+                  min_loss= -0.1,
+                  max_loss=9.0,
+                  include_fits=False,
+                  data_ls='g.',
+                  data_label="Training (different tilts)",
+                  replot=False,
+                  vertical_adjust=-0.05,
+                  cumulative=True)
+
+fit_quality_plots(imodel_constant,
+                  reflect_data_total,
+                  train_experiments,
+                  train_mirror_idx,
+                  ax=ax,
+                  min_loss= -0.1,
+                  max_loss=9.0,
+                  include_fits=False,
+                  data_ls='m.',
+                  replot=False,
+                  data_label="Training",
+                  cumulative=True)
+
+ax.set_xlabel("Measured cumulative loss",fontsize=16)
+ax.set_ylabel("Predicted cumulative loss",fontsize=16)
+fig.savefig(cm_save_file+"_cumulative_fit_quality.pdf",bbox_inches='tight')
+
+fig,ax = plt.subplots(figsize=(6,6))
+fit_quality_plots(imodel_constant,
+                  reflect_data_total,
+                  test_experiments,
+                  test_mirror_idx,
+                  ax=ax,
+                  min_loss= -0.1,
+                  max_loss=2.0,
+                  include_fits=False,
+                  data_ls='k*',
+                  data_label="Testing data",
+                  replot=True,
+                  vertical_adjust=-0.1,
+                  cumulative=False)
+
+fit_quality_plots(imodel_constant,
+                  reflect_data_total,
+                  train_experiments,
+                  train_mirror_idx,
+                  ax=ax,
+                  min_loss= -0.1,
+                  max_loss=2.0,
+                  include_fits=False,
+                  data_ls='m.',
+                  replot=False,
+                  data_label="Training",
+                  cumulative=False)
+
+fit_quality_plots(imodel_constant,
+                  reflect_data_total,
+                  train_experiments,
+                  test_mirror_idx,
+                  ax=ax,
+                  min_loss= -0.1,
+                  max_loss=2.0,
+                  include_fits=False,
+                  data_ls='g.',
+                  data_label="Training (different tilts)",
+                  replot=True,
+                  vertical_adjust=-0.05,
+                  cumulative=False)
+
+
+ax.set_title("Loss change prediction quality assessment (constant mean)")
+ax.set_xlabel(r"Measured $\Delta$loss")
+ax.set_ylabel(r"Predicted $\Delta$loss")

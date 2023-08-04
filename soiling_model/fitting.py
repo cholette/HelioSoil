@@ -18,6 +18,7 @@ class semi_physical(base_model):
         self.helios.hamaker = float(table.loc['hamaker_glass'].Value)
         self.helios.poisson = float(table.loc['poisson_glass'].Value)
         self.helios.youngs_modulus = float(table.loc['youngs_modulus_glass'].Value)
+        self.helios.nominal_reflectance = float(table.loc['nominal_reflectance'].Value)
         if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
             self.helios.stow_tilt = None
 
@@ -62,24 +63,39 @@ class semi_physical(base_model):
     
         self.helios = helios
 
-    def reflectance_loss(self):
-        
+    def compute_soiling_factor(self,rho0=None):
+        # Converts helios.delta_soiled_area into an accumulated area loss and 
+        # populates helios.soiling_factor.
+
         files = list(self.helios.tilt.keys())
         helios = self.helios
         helios.soiling_factor = {f: None for f in files} # clear the soiling factor
+        
         for f in files:
-            cumulative_soil =    np.cumsum(helios.delta_soiled_area[f],axis=1)   # accumulate soiling between cleans
-            cumulative_soil = np.c_[np.zeros(cumulative_soil.shape[0]), cumulative_soil]
-            helios.soiling_factor[f] = 1- cumulative_soil[:,1::]*helios.inc_ref_factor[f]  # soiling factor for each sector of the solar field
+            if rho0 is None:
+                N_helios = helios.tilt[f].shape[0]
+                cumulative_soil0 = np.zeros(N_helios)  # start from clean
+            else:
+                inc_factor = self.helios.inc_ref_factor[f]
+                cumulative_soil0 = (1 - rho0[f]/self.helios.nominal_reflectance)/inc_factor # back-calculated soiled area from measurement
+
+            cumulative_soil = np.c_[cumulative_soil0, helios.delta_soiled_area[f]]
+            cumulative_soil = np.cumsum(cumulative_soil,axis=1)   # accumulate soiling 
+            helios.soiling_factor[f] = 1 - cumulative_soil[:,1::]*helios.inc_ref_factor[f]  # soiling factor, still to be multiplied by rho0
         
         self.helios = helios
 
-    def predict_reflectance(self,simulation_inputs,hrz0=None,sigma_dep=None,verbose=True):
+    def predict_soiling_factor(self,simulation_inputs,rho0=None,hrz0=None,
+                               sigma_dep=None,verbose=True):
+        # Uses simulation inputs and fitted model to predict the soiling
+        # factor and the prediction variance (stored in 
+        # helios.soiling_factor and helios.soiling_factor_prediction_variance,
+        # respectively).
 
         self.deposition_flux(simulation_inputs,hrz0=hrz0,verbose=verbose)
         self.adhesion_removal(simulation_inputs,verbose=verbose)
         self.calculate_delta_soiled_area(simulation_inputs,sigma_dep=sigma_dep,verbose=verbose)
-        self.reflectance_loss()
+        self.compute_soiling_factor(rho0=rho0)
 
         # prediction variance
         if self.sigma_dep is not None:
@@ -107,7 +123,7 @@ class semi_physical(base_model):
             else:
                 pif = reflectance_data.prediction_indices[f]
 
-            b = self.helios.inc_ref_factor[f] # fixed for fitting experiments at reflectometer incidence angle
+            b = self.helios.nominal_reflectance*self.helios.inc_ref_factor[f] # fixed for fitting experiments at reflectometer incidence angle
             try:
                 attr = _parse_dust_str(sim_in.dust_type[f])
                 den = getattr(sim_in.dust,attr) # dust.(sim_in.dust_type[f])
@@ -118,7 +134,6 @@ class semi_physical(base_model):
             
             alpha = sim_in.dust_concentration[f]/den[f]
             
-
             if reflectance_data == None:
                 meas_sig = np.zeros(self.helios.tilt[f].shape).transpose()
             else:
@@ -132,20 +147,23 @@ class semi_physical(base_model):
         return s2total
 
     def _sse(self,hrz0,simulation_inputs,reflectance_data):
+        # Computes the sum of squared errors between a soiling model and
+        # the reflectance measurements. 
+
         pi = reflectance_data.prediction_indices
         meas = reflectance_data.average
-        r0 = reflectance_data.rho0
+        r0 = self.helios.nominal_reflectance # nominal clean reflectance
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
 
         sse = 0
         self.update_model_parameters(hrz0)
-        self.predict_reflectance(simulation_inputs,verbose=False)
+        self.predict_soiling_factor(simulation_inputs,rho0=reflectance_data.rho0,verbose=False)
         sf = self.helios.soiling_factor
         files = list(sf.keys())
         for f in files:
-            rho_prediction = r0[f]*sf[f][:,pi[f]].transpose()
+            rho_prediction = r0*sf[f][:,pi[f]].transpose()
             sse += np.sum( (rho_prediction -meas[f] )**2 )
         return sse  
 
@@ -158,19 +176,22 @@ class semi_physical(base_model):
         files = list(reflectance_data.times.keys())
         pi = reflectance_data.prediction_indices
         meas = reflectance_data.average
-        r0 = reflectance_data.rho0
+        r0 = self.helios.nominal_reflectance # nominal clean reflectance
         NL = [reflectance_data.average[f].shape[0] for f in files]
         
         # define optimization objective function (negative log likelihood)
         sigma_dep = x[1]    
         loglike = -0.5*np.sum(NL)*np.log(2*np.pi)
         self.update_model_parameters(x)
-        self.predict_reflectance(simulation_inputs,verbose=False)
-        sf = self.helios.soiling_factor
-        s2total = self._compute_variance_of_measurements(sigma_dep,sim_in,reflectance_data=reflectance_data)
+        self.predict_soiling_factor(simulation_inputs,rho0=reflectance_data.rho0,verbose=False)
+        sf = self.helios.soiling_factor # soiling factor to be multiplied by clean reflectance
+
+        # Compute variance in reflectance, not soiling factor
+        s2total = self._compute_variance_of_measurements(sigma_dep,sim_in,reflectance_data=reflectance_data) 
+
         for f in files:
             delta_r = np.diff(meas[f],axis=0)
-            rho_prediction =r0[f]*sf[f][:,pi[f]].transpose()
+            rho_prediction =r0*sf[f][:,pi[f]].transpose()
             mu_delta_r = np.diff(rho_prediction,axis=0)
             loglike += np.sum( -0.5*np.log(s2total[f]) - (delta_r-mu_delta_r)**2/(2*s2total[f]) ) 
             
@@ -349,10 +370,16 @@ class semi_physical(base_model):
 
             return z,H 
 
-    def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,reflectance_data=None,
-                            figsize=None,reflectance_std='measurements',save_path=None,fig_title=None,return_handles=False,
+    def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,
+                            reflectance_data=None,figsize=None,reflectance_std='measurements',
+                            save_path=None,fig_title=None,return_handles=False,
                             repeat_y_labels=True,orientation_strings=None):
         
+        if reflectance_data is not None:
+            self.predict_soiling_factor(simulation_inputs,rho0=reflectance_data.rho0)
+        else:
+            self.predict_soiling_factor(simulation_inputs)
+
         sim_in = simulation_inputs
         samples = posterior_predictive_distribution_samples
         files = list(sim_in.time.keys())
@@ -409,7 +436,7 @@ class semi_physical(base_model):
 
                 if reflectance_data is not None: # plot predictions and reflectance data
                     m = reflectance_data.average[f][:,jj]
-                    m0 = m[0]
+                    r0 = self.helios.nominal_reflectance
 
                     if reflectance_std == 'measurements':
                         s = reflectance_data.sigma[f][:,jj]
@@ -424,10 +451,10 @@ class semi_physical(base_model):
 
                     # mean prediction plot
                     if samples == None: # use soiling factor in helios
-                        ym = m0*self.helios.soiling_factor[f][jj,:]
+                        ym = r0*self.helios.soiling_factor[f][jj,:]
                         a.plot(sim_in.time[f],ym,label='Reflectance Prediction',color='black')
                     else:
-                        y = m0*samples[f][jj,:,:]
+                        y = r0*samples[f][jj,:,:]
                         ym = y.mean(axis=1)
                         a.plot(sim_in.time[f],ym,label='Reflectance Prediction (Bayesian)',color='red')
 
@@ -436,15 +463,15 @@ class semi_physical(base_model):
                         a.set_title(tilt_str.format(tilt[0]))
                     else:
                         a.set_title(tilt_str.format(tilt.mean())+" (average)")
-                else: # plot soiling factor predictions only
-                    m0 = 1.0
+                else: # predictions are from clean
+                    r0 = self.helios.nominal_reflectance
                     if samples == None: 
-                        ym = self.helios.soiling_factor[f][jj,:]  # no m0 is set to 1 since there are no measurements. Output is soiling factor only.  
-                        a.plot(sim_in.time[f],ym,label='Soiling Factor Prediction',color='black')
+                        ym = r0*self.helios.soiling_factor[f][jj,:] 
+                        a.plot(sim_in.time[f],ym,label='Prediction',color='black')
                     else:
                         y = samples[f][jj,:,:]
                         ym = y.mean(y,axis=1)
-                        a.plot(sim_in.time[f],ym,label='Soiling Factor Prediction (Bayesian)',color='red')
+                        a.plot(sim_in.time[f],ym,label='Prediction (Bayesian)',color='red')
                     
                     tilt = self.helios.tilt[f][jj,:]
                     if all(tilt==tilt[0]):
@@ -455,9 +482,9 @@ class semi_physical(base_model):
                 if samples==None and len(self.helios.soiling_factor_prediction_variance)>0: # add +/- 2 sigma limits to the predictions, if sigma_dep is set
                     # var_predict = self.helios.delta_soiled_area_variance[f][jj,:]
                     var_predict = self.helios.soiling_factor_prediction_variance[f][jj,:]
-                    sigma_predict = np.sqrt( var_predict)
-                    Lp = ym - m0*1.96*sigma_predict
-                    Up = ym + m0*1.96*sigma_predict
+                    sigma_predict = r0*np.sqrt( var_predict)
+                    Lp = ym - 1.96*sigma_predict
+                    Up = ym + 1.96*sigma_predict
                     a.fill_between(ts,Lp,Up,color='black',alpha=0.1,label=r'$\pm 2\sigma$ CI')
                 elif samples != None: # use percentiles of posterior predictive samples for confidence intervals
                     Lp = np.percentile(y,2.5,axis=1)
@@ -581,7 +608,7 @@ class constant_mean_deposition_velocity(semi_physical):
         delattr(self,"hrz0") 
         self.mu_tilde = None
 
-    def predict_reflectance(self,simulation_inputs,mu_tilde=None,sigma_dep=None,verbose=True):
+    def predict_soiling_factor(self,simulation_inputs,rho0=None,mu_tilde=None,sigma_dep=None,verbose=True):
 
         if mu_tilde == None: # use value in self
             mu_tilde = self.mu_tilde
@@ -614,7 +641,8 @@ class constant_mean_deposition_velocity(semi_physical):
             N_times = helios.tilt[f].shape[1]
             for ii in range(N_helios):
                 for jj in range(N_times):
-                    helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.cos(rad(helios.tilt[f][ii,jj]))*mu_tilde
+                    helios.delta_soiled_area[f][ii,jj] = \
+                        alpha[jj] * np.cos(rad(helios.tilt[f][ii,jj]))*mu_tilde
 
             # Predict confidence interval if sigma_dep is defined. Fixed tilt assumed in this class. 
             if sigma_dep is not None:
@@ -623,16 +651,19 @@ class constant_mean_deposition_velocity(semi_physical):
                 dsav = sigma_dep**2* (alpha**2*np.cos(theta)**2)
                 
                 helios.delta_soiled_area_variance[f] = dsav
-                self.helios.soiling_factor_prediction_variance[f] = np.cumsum( inc_factor**2 * dsav,axis=1 )
+                self.helios.soiling_factor_prediction_variance[f] = \
+                    np.cumsum( inc_factor**2 * dsav,axis=1 )
+                
             elif self.sigma_dep is not None:
                 theta = np.radians(self.helios.tilt[f])
                 inc_factor = self.helios.inc_ref_factor[f]
                 dsav = self.sigma_dep**2* (alpha**2*np.cos(theta)**2)
                 
                 helios.delta_soiled_area_variance[f] = dsav
-                self.helios.soiling_factor_prediction_variance[f] = np.cumsum( inc_factor**2 * dsav,axis=1 )
+                self.helios.soiling_factor_prediction_variance[f] = \
+                    np.cumsum( inc_factor**2 * dsav,axis=1 )
                 
-        self.reflectance_loss()
+        self.compute_soiling_factor(rho0=rho0)
         self.helios = helios
 
     def fit_least_squares(self,simulation_inputs,reflectance_data,verbose=True,save_file=None):
