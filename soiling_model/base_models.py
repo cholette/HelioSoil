@@ -13,9 +13,11 @@ from soiling_model.utilities import _print_if,_ensure_list,\
                                     _extinction_function,_same_ext_coeff,\
                                     _import_option_helper,_parse_dust_str
 from textwrap import dedent
+from pysolar import solar, radiation
+import datetime
+import pytz
 from scipy.optimize import minimize_scalar
 from scipy.integrate import cumtrapz
-import copy
 from copylot import CoPylot
 
 tol = np.finfo(float).eps # machine floating point precision
@@ -391,7 +393,7 @@ class simulation_inputs:
         self.end_datetime = {}                  # datetime64 for end
         self.air_temp = {}                      # [C] air temperature
         self.wind_speed = {}                    # [m/s] wind speed
-        self.wind_direction = {}                    # [degrees] wind direction
+        self.wind_direction = {}                # [degrees] wind direction
         self.dust_concentration = {}            # [µg/m3] PM10 or TSP concentration in air
         self.rain_intensity = {}                # [mm/hr] rain intensity
         self.dust_type = {}                     # Usually either "TSP" or "PM10", but coule be any PMX or PMX.X
@@ -450,21 +452,21 @@ class simulation_inputs:
             weather = pd.read_excel(files[ii],sheet_name="Weather")
 
             # Set time vector. Get from the weather file
-            time = weather['Time'].to_numpy(dtype = 'datetime64[s]')
-            self.start_datetime[ii] = time[0] # pd.to_datetime(weather['Time'].iloc[0]).to_numpy()
-            self.end_datetime[ii] = time[-1] # pd.to_datetime(weather['Time'].iloc[-1]).to_numpy()
+            time = pd.to_datetime(weather['Time']) #weather['Time'].to_numpy(dtype = 'datetime64[s]')
+            self.start_datetime[ii] = time.iloc[0] # pd.to_datetime(weather['Time'].iloc[0]).to_numpy()
+            self.end_datetime[ii] = time.iloc[-1] # pd.to_datetime(weather['Time'].iloc[-1]).to_numpy()
             # time =  pd.date_range(self.start_datetime[ii],self.end_datetime[ii],freq='1H').to_numpy(dtype = 'datetime64[s]')  # allow for flexible frequency later
                     
             _print_if("Importing site data (weather,time). Using dust_type = "+dust_type[ii]+", test_length = "+\
-                str( ((self.end_datetime[ii]-self.start_datetime[ii]) + np.timedelta64(1,'h')).astype('timedelta64[h]') ),verbose)
+                str( (self.end_datetime[ii]-self.start_datetime[ii]).days )+" days",verbose)
             
             self.time[ii] = time
 
             if verbose:
-                T = ( (time[-1]-time[0])+np.timedelta64(1,'h') ).astype('timedelta64[D]')
-                _print_if("Length of simulation for file "+files[ii]+": "+str(T.astype(float))+" days",verbose)
+                T = ( (time.iloc[-1]-time.iloc[0]).days)
+                _print_if("Length of simulation for file "+files[ii]+": "+str(T)+" days",verbose)
 
-            self.dt[ii] = np.diff(self.time[ii])[0].astype(float) # [s] assumed constant. Make float for later computations
+            self.dt[ii] = (self.time[ii][1]-self.time[ii][0]).total_seconds() #np.diff(self.time[ii])[0].astype(float) # [s] assumed constant. Make float for later computations
             self.time_diff[ii] = (self.time[ii]-self.time[ii].astype('datetime64[D]')).astype('timedelta64[h]').astype('int')  # time difference from midnight in integer hours
             self.air_temp[ii] = np.array(weather.loc[:,'AirTemp'])
             
@@ -1171,28 +1173,20 @@ class field_model(base_model):
         sim_in = simulation_inputs
         sun = self.sun
         constants = self.constants
-
+        timezone = pytz.FixedOffset(int(self.timezone_offset*60))
+        
         _print_if("Calculating sun apparent movement and angles for "+str(sim_in.N_simulations)+" simulations",verbose)
         
         files = list(sim_in.time.keys())
         for f in list(files):
-            sun.hourly[f] = ((sim_in.time_diff[f] - 12)/24*360+self.longitude-15*self.timezone_offset)
-            jan1 = np.datetime64(sim_in.start_datetime[f],'Y')   # calendar year given by start_date - required to compute the solar declination angle
-            delta_time = (sim_in.start_datetime[f]-jan1).astype('timedelta64[s]')  # difference in time between the start date and the start of the calendar year
-            time_delta_jan1 = (sim_in.time[f]-jan1+delta_time).astype('float')/3600/24     # transforms deltatime64[s] to number of days
-            sun.declination[f] = 23.44*np.sin(rad(360/365*(time_delta_jan1+284)))   # Cooper equation (1969)
-            sun.zenith[f] = np.degrees(np.arccos(np.sin(rad(self.latitude))*np.sin(rad(sun.declination[f]))+ \
-                                np.cos(rad(self.latitude))*np.cos(rad(sun.declination[f]))* \
-                                np.cos(rad(sun.hourly[f]))))
-            sun.elevation[f] = 90 - sun.zenith[f]
-            az = np.degrees(np.sign(sun.hourly[f])*abs(np.arccos((np.cos(rad(sun.zenith[f]))* \
-                                np.sin(rad(self.latitude))-np.sin(rad(sun.declination[f])))/ \
-                                (np.sin(rad(sun.zenith[f]))*np.cos(rad(self.latitude))))))
-            sun.azimuth[f] = az+180  # 0->N 90->E 180->S 270->O
-            I0 = constants.irradiation*(1+0.033*np.cos(2*np.pi*time_delta_jan1/365))
-            AM = 1/np.cos(rad(sun.zenith[f]))
-            AM[sun.elevation[f]<=sun.stow_angle] = float("NAN")
-            sun.DNI[f] = I0*0.7**(AM**0.678)
+            time_utc = sim_in.time[f].dt.tz_localize(timezone) # Apply UTC to timeseries
+            time_utc = time_utc.tolist() # Convert to list
+            
+            # Loop through all times and calculate azimuth and altitude/elevation
+            solar_angles = np.array([solar.get_position(self.latitude,self.longitude,time.to_pydatetime()) for time in time_utc]) 
+            sun.azimuth[f] = solar_angles[:,0] # solar_angles(:,[azimuth,elevation])
+            sun.elevation[f] = solar_angles[:,1]
+            sun.DNI[f] = np.array([radiation.get_radiation_direct(time.to_pydatetime(),elevation) for time, elevation in zip(time_utc,solar_angles[:,1])])
             
         self.sun = sun # update sun in the main model 
     
@@ -1267,8 +1261,7 @@ class field_model(base_model):
         files = list(sim_in.time.keys())
         for fi in range(len(files)):
             f = files[fi]
-            T_days = (sim_in.time[f][-1]-sim_in.time[f][0]).astype('timedelta64[D]') # needs to be more than one day
-            T_days = T_days.astype(float)
+            T_days = (sim_in.time[f].iloc[-1]-sim_in.time[f].iloc[0]).days # needs to be more than one day
             n_hours = int(helios.delta_soiled_area[f].shape[1] )
             
             # accumulate soiling between cleans
@@ -1335,8 +1328,8 @@ class field_model(base_model):
         # layout setup
         assert cp.data_set_number(r,"heliostat.0.height",helios.height)
         assert cp.data_set_number(r,"heliostat.0.width",helios.width)
-
-        # receiver setup
+        assert cp.data_set_number(r,"heliostat.0.soiling",1) # Sets cleanliness to 100%
+        assert cp.data_set_number(r,"heliostat.0.reflectivity",1)
         assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['diameter']) 
         assert cp.data_set_number(r,"receiver.0.rec_height",plant.receiver['panel_height'])
         assert cp.data_set_number(r,"receiver.0.optical_height",plant.receiver['tower_height'])
