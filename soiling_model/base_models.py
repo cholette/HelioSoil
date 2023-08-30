@@ -18,6 +18,8 @@ import datetime
 import pytz
 from scipy.optimize import minimize_scalar
 from scipy.integrate import cumtrapz
+from scipy.spatial.distance import cdist
+import copy
 from copylot import CoPylot
 
 tol = np.finfo(float).eps # machine floating point precision
@@ -750,16 +752,21 @@ class helios:
             self.theta = np.arctan2(self.y,self.x)              # radial polar coordinate of each heliostat
             self.num_radial_sectors = None
             self.num_theta_sectors = None
-        elif isinstance(num_sectors,tuple) and isinstance(num_sectors[0],int)\
+        elif isinstance(num_sectors,tuple) and isinstance(num_sectors[0],int) and table.loc['receiver_type'].Value == 'External cylindrical'\
             and isinstance(num_sectors[1],int):                 # import and sectorize
             n_rho,n_theta = num_sectors
             _print_if("Importing full solar field and sectorizing with {0:d} angular and {1:d} radial sectors".format(n_theta,n_rho),verbose)
             self.num_radial_sectors,self.num_theta_sectors = num_sectors
-            self.sectorize(file_solar_field,n_rho,n_theta)
+            self.sectorize_radial(file_solar_field,n_rho,n_theta)
+        elif table.loc['receiver_type'].Value == 'Flat plate':
+            n_hor,n_vert = num_sectors
+            _print_if("Importing full solar field and sectorizing with {0:d} horizontal and {1:d} vertical sectors".format(n_hor,n_vert),verbose)
+            self.num_radial_sectors,self.num_theta_sectors = num_sectors
+            self.sectorize_corn(file_solar_field,n_hor,n_vert)
         else:
             raise ValueError("num_sectors must be None or an a 2-tuple of intergers")  
 
-    def sectorize(self,whole_field_file,n_rho,n_theta,verbose=True):
+    def sectorize_radial(self,whole_field_file,n_rho,n_theta,verbose=True):
         
         if whole_field_file.split('.')[-1] == 'csv':
             whole_SF = pd.read_csv(whole_field_file,skiprows=[1])
@@ -869,6 +876,66 @@ class helios:
         self.rho = hel_rep[:,0]
         self.heliostats_in_sector = hel_sec
 
+    def sectorize_corn(self,whole_field_file,n_hor,n_vert,verbose=True):
+            
+        def read_solarfield(field_filepath): # Load CSV containing solarfield coordintes
+            positions = []
+            if field_filepath.split('.')[-1] == 'csv':
+                whole_SF = pd.read_csv(field_filepath,skiprows=[1])
+            elif field_filepath.split('.')[-1] == 'xlsx':
+                whole_SF = pd.read_excel(field_filepath,skiprows=[1])
+            else:
+                raise ValueError("Solar field file must be csv or xlsx")
+            x_field = np.array(whole_SF.loc[:,'Loc. X'])                    # x cartesian coordinate of each heliostat (E>0)
+            y_field = np.array(whole_SF.loc[:,'Loc. Y'])
+            helioID = np.arange(len(x_field),dtype=np.int64)
+            positions = np.column_stack((helioID, x_field, y_field))
+            return positions
+
+        def generate_grid(num_hor,num_vert,x,y): # Generate a grid around solarfield
+            x_points = np.linspace(min(x),max(x),num_hor)
+            y_points = np.linspace(min(y),max(y),num_vert)
+            grid = np.array([(x,y) for x in x_points for y in y_points])
+            return grid
+        
+        def find_closest_point(position,grid): 
+            distances = cdist([position[1:3]], grid) # Find distance between heliostats and grid coordinates
+            closest_idx = np.argmin(distances) 
+            return distances[0][closest_idx], closest_idx
+            
+        positions = read_solarfield(whole_field_file)
+        grid = generate_grid(n_hor,n_vert,positions[:,1],positions[:,2])
+        
+        closest_grid = [] # Create a dictionary to store 
+        # [heliostat ID, x position, y position, distance to closest grid, closest grid point]
+        for i in range(len(positions)):
+            distance_grid, closest_idx = find_closest_point(positions[i,:],grid) 
+            if i == 0:
+                closest_grid = np.hstack([positions[i,:],distance_grid,closest_idx])
+            else:
+                closest_grid = np.vstack([closest_grid,np.hstack([positions[i,:],distance_grid,closest_idx])])
+        
+        
+        # Store Heliostat Field information
+        self.full_field['x'] = (closest_grid[:,1])
+        self.full_field['y'] = (closest_grid[:,2])
+        self.full_field['id'] = np.array(closest_grid[:,0],dtype=np.int64)
+        self.full_field['sector_id'] = np.array(closest_grid[:,4],dtype=np.int64)
+        
+        for i in np.unique(self.full_field['sector_id']):
+            sector_field = closest_grid[closest_grid[:,4] == i,:]
+            sector_size = len(sector_field)
+            representative_info = sector_field[np.argmin(sector_field[:,3])]
+            if i == 0:
+                representative_helio = np.hstack([representative_info,sector_size])
+            else:
+                representative_helio = np.vstack([representative_helio,np.hstack([representative_info,sector_size])])
+                
+        ##
+        self.x = (representative_helio[:,1])
+        self.y = (representative_helio[:,2])
+        self.heliostats_in_sector = np.array(representative_helio[:,-1],dtype=np.int64)
+        self.sector_area = self.heliostats_in_sector * self.height * self.width
     def sector_plot(self):
         Ns = self.x.shape[0]
         n_theta = self.num_theta_sectors
@@ -974,9 +1041,11 @@ class helios:
         
 class plant:
     def __init__(self):
-        self.receiver = {   'tower_height': [],
+        self.receiver = {   'receiver_type': [],
+                            'tower_height': [],
                             'panel_height': [],
-                            'diameter': [],
+                            'width_diameter': [],
+                            'orientation_elevation': [],
                             'thermal_losses': [],
                             'thermal_max': [],
                             'thermal_min': []  }
@@ -985,9 +1054,16 @@ class plant:
         
     def import_plant(self,file_params):
         table = pd.read_excel(file_params,index_col="Parameter")
+        
+        self.receiver['receiver_type'] = table.loc['receiver_type'].Value
+        self.receiver['width_diameter'] = float(table.loc['receiver_width_diameter'].Value) # Width/Diameter for Flat/Circular receiver
+        if self.receiver['receiver_type'] == 'Flat plate':
+            try:
+                self.receiver['orientation_elevation'] = float(table.loc['receiver_orientation_elevation'].Value)
+            except:
+                raise ValueError("receiver_orientation_elevation for Flat plate not specified in parameters file")
         self.receiver['tower_height'] = float(table.loc['receiver_tower_height'].Value)
         self.receiver['panel_height'] = float(table.loc['receiver_height'].Value)
-        self.receiver['diameter'] = float(table.loc['receiver_diameter'].Value)
         self.receiver['thermal_losses'] = float(table.loc['receiver_thermal_losses'].Value)
         self.receiver['thermal_min'] = float(table.loc['minimum_receiver_power'].Value)
         self.receiver['thermal_max'] = float(table.loc['maximum_receiver_power'].Value)
@@ -1192,7 +1268,7 @@ class field_model(base_model):
         self.sun = sun # update sun in the main model 
     
     def helios_angles(self,plant,verbose=True,second_surface=True):
-        sun = self.sun
+        sun = self.sun  
         helios = self.helios
 
         files = list(sun.elevation.keys())
@@ -1331,7 +1407,19 @@ class field_model(base_model):
         assert cp.data_set_number(r,"heliostat.0.width",helios.width)
         assert cp.data_set_number(r,"heliostat.0.soiling",1) # Sets cleanliness to 100%
         assert cp.data_set_number(r,"heliostat.0.reflectivity",1)
-        assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['diameter']) 
+        try:
+            assert cp.data_set_string(r,"receiver.0.rec_type",plant.receiver['receiver_type'])
+        except:
+            assert cp.data_set_string(r,"receiver.0.rec_type",'External cylindrical')
+        if plant.receiver['receiver_type'] == 'External cylindrical':
+            assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['width_diameter'])
+        elif plant.receiver['receiver_type'] == 'Flat plate':
+            assert cp.data_set_number(r,"receiver.0.rec_width",plant.receiver['width_diameter'])
+            try:    
+                assert cp.data_set_number(r,"receiver.0.rec_elevation",plant.receiver['orientation_elevation'])
+            except:
+                assert cp.data_set_number(r,"receiver.0.rec_elevation",-35)
+        assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['width_diameter']) 
         assert cp.data_set_number(r,"receiver.0.rec_height",plant.receiver['panel_height'])
         assert cp.data_set_number(r,"receiver.0.optical_height",plant.receiver['tower_height'])
 
@@ -1370,7 +1458,11 @@ class field_model(base_model):
 
                 effs = dat['efficiency']
                 _print_if(fmt.format(az_grid[ii],el_grid[jj]),verbose)
-                _print_if(fmt_pwr.format(dat_summary['Power absorbed by the receiver']),verbose)
+                if dat_summary['Power absorbed by the receiver'] == ' -nan(ind)':
+                    raise ValueError("SolarPILOT unable to simulate with current parameter configuration")
+                else:
+                    _print_if(fmt_pwr.format(dat_summary['Power absorbed by the receiver']),verbose)
+                    
                 for kk in range(Ns):
                     idx = np.where(sec_ids==kk)[0]
                     eff_grid[kk,ii,jj] = effs[idx].mean()
