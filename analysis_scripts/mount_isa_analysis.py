@@ -43,7 +43,7 @@ plot_title = "Training: "+str(train_mirrors)+", Exp: "+str(t)
 
 # %% Import & plot training data
 imodel = smf.semi_physical(parameter_file)
-imodel_constant = smf.constant_mean_deposition_velocity(parameter_file)
+imodel_constant = smf.constant_mean_deposition(parameter_file)
 sim_data_train = smb.simulation_inputs( files_train,
                                         k_factors=k_factor,
                                         dust_type=dust_type

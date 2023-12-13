@@ -11,7 +11,8 @@ import copy
 from scipy.interpolate import interp2d
 from soiling_model.utilities import _print_if,_ensure_list,\
                                     _extinction_function,_same_ext_coeff,\
-                                    _import_option_helper,_parse_dust_str
+                                    _import_option_helper,_parse_dust_str,\
+                                    _check_keys
 from textwrap import dedent
 from scipy.optimize import minimize_scalar
 from scipy.integrate import cumtrapz
@@ -20,8 +21,19 @@ from copylot import CoPylot
 
 tol = np.finfo(float).eps # machine floating point precision
 
-class base_model:
-    def __init__(self,file_params):
+class soiling_base:
+    def __init__(self):
+        self.latitude = None                  # latitude in degrees of site
+        self.longitude = None                 # longitude in degrees of site
+        self.timezone_offset = None           # [hrs from GMT] timezone of site
+        self.constants = constants()          # a subclass for constant
+        self.helios = helios()                # a subclass containing information about the heliostats
+        self.sigma_dep = None                 # standard deviation for deposition velocity
+        self.loss_model = None                # either "geometry" or "mie"
+
+    def import_site_data_and_constants(self,file_params,verbose=True):
+        
+        _print_if(f"\nLoading data from {file_params} ... ",verbose)
         table = pd.read_excel(file_params,index_col="Parameter")
 
         # optional parameter imports
@@ -29,29 +41,35 @@ class base_model:
             self.latitude = float(table.loc['latitude'].Value)                  # latitude in degrees of site
             self.longitude = float(table.loc['longitude'].Value)                # longitude in degrees of site
             self.timezone_offset = float(table.loc['timezone_offset'].Value)    # [hrs from GMT] timezone of site
-            self.hrz0 =float(table.loc['hr_z0'].Value)                          # [-] site roughness height ratio
         except:
-            print(dedent(f"""\
-            You are missing at least one of from (lat,lon,timezone_offset) from:
+            _print_if(dedent(f"""\
+            You are missing at least one of (lat,lon,timezone_offset) in:
             {file_params}
-            Field performance cannot be simulated until all of these are defined. """))
-
+            Field performance cannot be simulated until all of these are defined. """),verbose)
             self.latitude = None
             self.longitude = None
             self.timezone_offset = None
-            self.hrz0 = None
-                               
-        self.loss_model = table.loc['loss_model'].Value                     # either "geometry" or "mie"
 
-        self.constants = constants()
-        self.helios = helios()
-        # self.dust = dust() # trying to put into simulation inputs now
+        self.constants.import_constants(file_params,verbose=verbose)
 
-        self.sigma_dep = None
-        self.Ra = None
+class physical_base(soiling_base):
+    def __init__(self):
+        super().__init__()
+        self.hrz0 =None                       # [-] site roughness height ratio
 
-        self.constants.import_constants(file_params)
-        # self.dust.import_dust(file_params,dust_measurement_type=dust_measurement_type)
+    def import_site_data_and_constants(self,file_params,verbose=True):
+        super().import_site_data_and_constants(file_params)                               
+        table = pd.read_excel(file_params,index_col="Parameter")
+
+        try:
+            self.loss_model = table.loc['loss_model'].Value     # either "geometry" or "mie"
+        except:
+            _print_if(f"No loss model defined in {file_params}. You will need to define this before simulating",verbose)
+
+        try:
+            self.hrz0 =float(table.loc['hr_z0'].Value)          # [-] site roughness height ratio
+        except:
+            _print_if(f"No hrz0 model defined in {file_params}. You will need to define this before simulating",verbose)
 
     def deposition_velocity(self,dust,wind_speed=None,air_temp=None,hrz0=None,verbose=True,Ra=True):
         dust = dust
@@ -306,11 +324,11 @@ class base_model:
                         (D_meters**2)*sim_in.dt[f]*extinction_weighting[f][ii,:],np.log10(dust.D[f])) # pdfqN includes cos(tilt)
 
             # variance of noise for each measurement
-            if sigma_dep != None:
+            if sigma_dep is not None:
                 theta = np.radians(self.helios.tilt[f])
                 helios.delta_soiled_area_variance[f] = sigma_dep**2 * (alpha**2*np.cos(theta)**2)
                 # sigma_dep**2*helios.inc_ref_factor[f]*np.cumsum(alpha**2*np.cos(theta)**2,axis=1)
-            elif self.sigma_dep != None:
+            elif self.sigma_dep is not None:
                 theta = np.radians(self.helios.tilt[f])
                 helios.delta_soiled_area_variance[f] = self.sigma_dep**2 * (alpha**2*np.cos(theta)**2)
 
@@ -379,6 +397,76 @@ class base_model:
         plt.xscale('log')   
         ax1.set_xticks([0.001,0.01,0.1,1,2.5,4,10,20,100])
 
+class constant_mean_base(soiling_base):
+    def __init__(self):
+        super().__init__()
+        self.mu_tilde = None
+    
+    def import_site_data_and_constants(self,file_params,verbose=True):
+        super().import_site_data_and_constants(file_params)                               
+        table = pd.read_excel(file_params,index_col="Parameter")
+        try:
+            self.hrz0 =float(table.loc['mu_tilde'].Value)          # [-] constant average deposition
+        except:
+            _print_if(f"No mu_tilde model defined in {file_params}. You will need to define this before simulating",verbose)
+
+
+    def calculate_delta_soiled_area(self,simulation_inputs,mu_tilde=None,sigma_dep=None,verbose=True):
+
+        _print_if("Calculating soil deposited in a timestep [m^2/m^2]",verbose)
+        
+        sim_in = simulation_inputs
+        helios = self.helios
+        dust = sim_in.dust
+
+        if mu_tilde == None: # use value in self
+            mu_tilde = self.mu_tilde
+        else:
+            mu_tilde = mu_tilde
+            _print_if("Using supplied value for mu_tilde = "+str(mu_tilde),verbose)
+
+        if sigma_dep is not None or self.sigma_dep is not None:
+            if sigma_dep == None: # use value in self
+                sigma_dep = self.sigma_dep
+            else:
+                sigma_dep = sigma_dep
+                _print_if("Using supplied value for sigma_dep = "+str(sigma_dep),verbose)
+        
+        files = list(sim_in.time.keys())
+        for f in files:
+            helios.delta_soiled_area[f] = np.empty((helios.tilt[f].shape[0],helios.tilt[f].shape[1]))
+
+            # compute alpha
+            try:
+                attr = _parse_dust_str(sim_in.dust_type[f])
+                den = getattr(dust,attr) # dust.(sim_in.dust_type[f])
+            except:
+                raise ValueError("Dust measurement = "+sim_in.dust_type[f]+\
+                    " not present in dust class. Use dust_type="+sim_in.dust_type[f]+\
+                        " option when initializing the model")
+
+            alpha = sim_in.dust_concentration[f]/den[f]
+
+            # Compute the area coverage by dust at each time step
+            N_helios = helios.tilt[f].shape[0]
+            N_times = helios.tilt[f].shape[1]
+            for ii in range(N_helios):
+                for jj in range(N_times):
+                    helios.delta_soiled_area[f][ii,jj] = \
+                        alpha[jj] * np.cos(rad(helios.tilt[f][ii,jj]))*mu_tilde
+
+            # Predict confidence interval if sigma_dep is defined. Fixed tilt assumed in this class. 
+            if sigma_dep is not None:
+                theta = np.radians(self.helios.tilt[f])
+                inc_factor = self.helios.inc_ref_factor[f]
+                dsav = sigma_dep**2* (alpha**2*np.cos(theta)**2)
+                
+                helios.delta_soiled_area_variance[f] = dsav
+                self.helios.soiling_factor_prediction_variance[f] = \
+                    np.cumsum( inc_factor**2 * dsav,axis=1 )
+
+        self.helios = helios
+
 class simulation_inputs:
     def __init__(self,experiment_files=None,k_factors=None,dust_type=None,verbose=True):
 
@@ -407,15 +495,14 @@ class simulation_inputs:
             experiment_files = _ensure_list(experiment_files)
             self.N_simulations = len(experiment_files)
 
-            if k_factors == None: # import k-factors from parameter file
+            if k_factors == None: 
                 k_factors = [1.0]*len(experiment_files)
-            elif k_factors == "import":
+            elif k_factors == "import": # import k-factors from parameter file
                 k_factors = []
                 for f in experiment_files:
                     k_factors.append(pd.read_excel(f,sheet_name="Dust",index_col="Parameter").loc['k_factor'].values[0])
             else:
                 k_factors = _import_option_helper(experiment_files,k_factors)
-                # k_factors = _ensure_list(k_factors)
                 if len(k_factors) != len(experiment_files):
                     raise ValueError("Please specify a k-factor for each weather file")
 
@@ -1012,7 +1099,7 @@ class constants:
         self.D0 = []
         
     def import_constants(self,file_params,verbose=True):
-        _print_if("Importing constants",verbose)
+        _print_if("\nImporting constants",verbose)
         table = pd.read_excel(file_params,index_col="Parameter")
         self.air_rho = float(table.loc['air_density'].Value)            # [kg/m3] air density at T=293K and p=1 atm
         self.air_mu = float(table.loc['air_dynamic_viscosity'].Value)   # [Pa*s] air dynamic viscosity at T=293K and p=1 atm
@@ -1157,9 +1244,10 @@ class reflectance_measurements:
         a.set_ylim((miny,1))
         a.set_xlabel("Date")
 
-class field_model(base_model):
+class field_model(physical_base):
     def __init__(self,file_params,file_SF,num_sectors=None):
-        super().__init__(file_params)
+        super().__init__()
+        super().import_site_data_and_constants(file_params)
 
         self.sun = sun()
         self.sun.import_sun(file_params)

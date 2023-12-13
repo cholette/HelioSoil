@@ -171,7 +171,7 @@ def soiling_rate(alphas: np.ndarray,
         log_param_hat_cov = data['transformed_parameter_covariance']
         mu_tilde,sigma_dep = np.exp(log_param_hat)
     
-    assert isinstance(imodel,smf.constant_mean_deposition_velocity), "Model in saved file must be constant-mean type."
+    assert isinstance(imodel,smf.constant_mean_deposition), "Model in saved file must be constant-mean type."
 
     # simulate 
     sims = np.zeros((M,len(alphas)))

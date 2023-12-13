@@ -1,4 +1,4 @@
-from soiling_model.base_models import *
+import soiling_model.base_models as smb
 from soiling_model.utilities import _print_if,_check_keys, _parse_dust_str
 import numpy as np
 from numpy import radians as rad
@@ -8,61 +8,9 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from scipy.optimize import minimize_scalar, minimize
 import numdifftools as ndt
-import scipy.stats as sps
 import pickle
 
-class semi_physical(base_model):
-    def __init__(self,file_params):
-        table = pd.read_excel(file_params,index_col="Parameter")
-        super().__init__(file_params)
-        self.helios.hamaker = float(table.loc['hamaker_glass'].Value)
-        self.helios.poisson = float(table.loc['poisson_glass'].Value)
-        self.helios.youngs_modulus = float(table.loc['youngs_modulus_glass'].Value)
-        self.helios.nominal_reflectance = float(table.loc['nominal_reflectance'].Value)
-        if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
-            self.helios.stow_tilt = None
-
-    def helios_angles(self,simulation_inputs,reflectance_data,verbose=True,second_surface=True):
-
-        sim_in = simulation_inputs
-        ref_dat = reflectance_data
-        files = list(sim_in.time.keys())
-        N_experiments = len(files)
-
-        # check to ensure that reflectance_data and simulation_input keys correspond to the same files
-        _check_keys(sim_in,ref_dat)
-
-        _print_if("Setting tilts for "+str(N_experiments)+" experiments",verbose)
-        helios = self.helios
-        helios.tilt = {f: None for f in files} # clear the existing tilts
-        helios.acceptance_angles = {f: None for f in files} # clear the existing tilts
-        for ii in range(N_experiments):
-            f = files[ii]
-            tilts = ref_dat.tilts[f]
-            N_times = len(sim_in.time[f])
-            N_helios = tilts.shape[0]
-            self.helios.acceptance_angles[f] = [ref_dat.reflectometer_acceptance_angle[ii]]*N_helios
-            self.helios.extinction_weighting[f] = [] # reset extinction weighting since heliostats are "new"
-            
-            helios.tilt[f] = np.zeros((0,N_times))
-            for jj in range(N_helios):
-                row_mask = np.ones((1,N_times))
-                helios.tilt[f] = np.vstack((helios.tilt[f],tilts[jj]*row_mask))
-
-            helios.elevation[f] = 90-helios.tilt[f]
-            helios.incidence_angle[f] = reflectance_data.reflectometer_incidence_angle[f]
-
-            if second_surface==False:
-                helios.inc_ref_factor[f] = (1+np.sin(rad(helios.incidence_angle[f])))/np.cos(rad(helios.incidence_angle[f])) # first surface
-                _print_if("First surface model",verbose)
-            elif second_surface==True:
-                helios.inc_ref_factor[f] = 2/np.cos(rad(helios.incidence_angle[f]))  # second surface model
-                _print_if("Second surface model",verbose)
-            else:
-                _print_if("Choose either first or second surface model",verbose)
-    
-        self.helios = helios
-
+class common_fitting_methods:
     def compute_soiling_factor(self,rho0=None):
         # Converts helios.delta_soiled_area into an accumulated area loss and 
         # populates helios.soiling_factor.
@@ -84,27 +32,6 @@ class semi_physical(base_model):
             helios.soiling_factor[f] = 1 - cumulative_soil[:,1::]*helios.inc_ref_factor[f]  # soiling factor, still to be multiplied by rho0
         
         self.helios = helios
-
-    def predict_soiling_factor(self,simulation_inputs,rho0=None,hrz0=None,
-                               sigma_dep=None,verbose=True):
-        # Uses simulation inputs and fitted model to predict the soiling
-        # factor and the prediction variance (stored in 
-        # helios.soiling_factor and helios.soiling_factor_prediction_variance,
-        # respectively).
-
-        self.deposition_flux(simulation_inputs,hrz0=hrz0,verbose=verbose)
-        self.adhesion_removal(simulation_inputs,verbose=verbose)
-        self.calculate_delta_soiled_area(simulation_inputs,sigma_dep=sigma_dep,verbose=verbose)
-        self.compute_soiling_factor(rho0=rho0)
-
-        # prediction variance
-        if self.sigma_dep is not None:
-            for f in self.helios.soiling_factor.keys():
-                inc_factor = self.helios.inc_ref_factor[f]
-                dsav = self.helios.delta_soiled_area_variance[f]
-                self.helios.soiling_factor_prediction_variance[f] = np.cumsum( inc_factor**2 * dsav,axis=1 )
-        else:
-            self.helios.soiling_factor_prediction_variance = {}
 
     def _compute_variance_of_measurements(self,sigma_dep,simulation_inputs,reflectance_data=None):
         
@@ -146,7 +73,7 @@ class semi_physical(base_model):
         
         return s2total
 
-    def _sse(self,hrz0,simulation_inputs,reflectance_data):
+    def _sse(self,params,simulation_inputs,reflectance_data):
         # Computes the sum of squared errors between a soiling model and
         # the reflectance measurements. 
 
@@ -158,7 +85,7 @@ class semi_physical(base_model):
         _check_keys(simulation_inputs,reflectance_data)
 
         sse = 0
-        self.update_model_parameters(hrz0)
+        self.update_model_parameters(params)
         self.predict_soiling_factor(simulation_inputs,rho0=reflectance_data.rho0,verbose=False)
         sf = self.helios.soiling_factor
         files = list(sf.keys())
@@ -167,7 +94,7 @@ class semi_physical(base_model):
             sse += np.sum( (rho_prediction -meas[f] )**2 )
         return sse  
 
-    def _negative_log_likelihood(self,x,simulation_inputs,reflectance_data):
+    def _negative_log_likelihood(self,params,simulation_inputs,reflectance_data):
         
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
@@ -180,9 +107,9 @@ class semi_physical(base_model):
         NL = [reflectance_data.average[f].shape[0] for f in files]
         
         # define optimization objective function (negative log likelihood)
-        sigma_dep = x[1]    
+        sigma_dep = params[1]    
         loglike = -0.5*np.sum(NL)*np.log(2*np.pi)
-        self.update_model_parameters(x)
+        self.update_model_parameters(params)
         self.predict_soiling_factor(simulation_inputs,rho0=reflectance_data.rho0,verbose=False)
         sf = self.helios.soiling_factor # soiling factor to be multiplied by clean reflectance
 
@@ -212,21 +139,21 @@ class semi_physical(base_model):
 
         return unnormalized_posterior
 
-    def fit_least_squares(self,simulation_inputs,reflectance_data,verbose=True,save_file=None):
+    def fit_least_squares(self,simulation_inputs,reflectance_data,verbose=True):
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
 
         fun = lambda x: self._sse(x,simulation_inputs,reflectance_data)
-        _print_if("Fitting hrz0 with least squares ...",verbose)
+        _print_if("Fitting parameters with least squares ...",verbose)
         xL = 1e-6 + 1.0
         xU = 1000 
         res = minimize_scalar(fun,bounds=(xL,xU),method="Bounded") # use bounded to prevent evaluation at values <=1
-        _print_if("... done! \n hrz0 = "+str(res.x),verbose)
+        _print_if("... done! \n estimated parameter is = "+str(res.x),verbose)
         return res.x, res.fun
 
     def fit_mle(self,simulation_inputs,reflectance_data,verbose=True,x0=None,
-                transform_to_original_scale=False,save_file=None,**optim_kwargs):
+                transform_to_original_scale=False,**optim_kwargs):
         
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
@@ -235,17 +162,17 @@ class semi_physical(base_model):
         sim_in = simulation_inputs
         
         if np.all(x0 == None): # intialize using least squares and 1D MLE
-            _print_if("Getting inital hrz0 guess via least squares",verbose)
-            h0,sse = self.fit_least_squares(simulation_inputs,reflectance_data,verbose=False) 
+            _print_if("Getting initial deposition parameter guess via least squares",verbose)
+            p0,sse = self.fit_least_squares(simulation_inputs,reflectance_data,verbose=False) 
 
-            _print_if("Getting inital sigma_dep guess via MLE (at least-squares hrz0)",verbose)
-            nloglike1D = lambda y: self._negative_log_likelihood([h0,y],sim_in,ref_dat)
-            s0 = minimize_scalar(nloglike1D,bounds=(tol,sse),method="Bounded") # use bounded to prevent evaluation at values <=1
-            x0 = np.array([h0,s0.x])
+            _print_if("Getting initial sigma_dep guess via MLE (at least-squares value for deposition parameters)",verbose)
+            nloglike1D = lambda y: self._negative_log_likelihood([p0,y],sim_in,ref_dat)
+            s0 = minimize_scalar(nloglike1D,bounds=(smb.tol,sse),method="Bounded") # use bounded to prevent evaluation at values <=1
+            x0 = np.array([p0,s0.x])
             _print_if("x0 = ["+str(x0[0])+", "+str(x0[1])+"]",verbose) 
         
         # MLE. Transform to logs to ensure parameters are positive
-        _print_if("Maximizing likelihood to obtain hrz0 and sigma_dep...",verbose)
+        _print_if("Maximizing likelihood ...",verbose)
         y0 = self.transform_scale(x0,direction="forward")
 
         nloglike = lambda y: self._negative_log_likelihood(self.transform_scale(y),sim_in,ref_dat)
@@ -263,118 +190,38 @@ class semi_physical(base_model):
             x_hat,H = self.transform_scale(y,likelihood_hessian=H_log)
             x_cov = np.linalg.inv(H)
             
-            # print estimates
-            fmt = "hrz0 = {0:.2e}, sigma_dep = {1:.2e}"
-            _print_if("... done! \n"+fmt.format(x_hat[0],x_hat[1]),verbose)
-
-            # print confidence intervals
-            s = np.sqrt(np.diag(x_cov))
-            x_ci = x_hat + 1.96*s*np.array([[-1],[1]])
-            fmt = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
-            _print_if(fmt.format("hrz0",x_ci[0,0],x_ci[1,0]),verbose)
-            _print_if(fmt.format("sigma_dep",x_ci[0,1],x_ci[1,1]),verbose)
             p_hat = x_hat
             p_cov = x_cov
 
         else:
             y_hat = y
-            y_cov = np.linalg.inv(H_log) # Paramter covariance in the log space
-
-            # print estimates
-            fmt = "log(log(hrz0)) = {0:.2e}, log(sigma_dep) = {1:.2e}"
-            _print_if("... done! \n"+fmt.format(y_hat[0],y_hat[1]),verbose)
-
-            # print confidence intervals
-            s = np.sqrt(np.diag(y_cov))
-            y_ci = y_hat + 1.96*s*np.array([[-1],[1]])
-            fmt = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
-            _print_if(fmt.format("log(log(hrz0))",y_ci[0,0],y_ci[1,0]),verbose)
-            _print_if(fmt.format("log(sigma_dep)",y_ci[0,1],y_ci[1,1]),verbose)
+            y_cov = np.linalg.inv(H_log) # Parameter covariance in the log space
             p_hat = y_hat
             p_cov = y_cov
 
+        _print_if("... done!\n",verbose)
         return p_hat, p_cov
 
-    def fit_map(self,simulation_inputs,reflectance_data,priors,verbose=True,
-                x0=None,transform_to_original_scale=True,save_file=None):
-
-        # check to ensure that reflectance_data and simulation_input keys correspond to the same files
-        _check_keys(simulation_inputs,reflectance_data)
-
-        if np.all(x0 == None): # intialize using least squares
-            _print_if("Initializing at mean of priors",verbose)
-            y0 = [priors[k].mean() for k in priors.keys()] #np.array([prior_log_log_h.mean(), prior_sigma_dep.mean()])
-            x0 = np.exp(y0)
-            x0[0] = np.exp(x0[0])
-            _print_if("x0 = ["+str(x0[0])+", "+str(x0[1])+"]",verbose)
-        else:
-            y0 = self.transform_scale(x0,direction="forward")
-
-        lpost = lambda x: self._logpost(x,simulation_inputs,reflectance_data,priors)
-        _print_if("Getting MAP estimates ... ",verbose)
-        res = minimize(lambda x:-lpost(x),y0)
-        y = res.x 
-        H_log = -ndt.Hessian(lpost)(y) # Hessian is in the log transformed space
-        y_cov = np.linalg.inv(H_log) # Paramter covariance in the log space
-        _print_if("... done!",verbose)
-
-        if transform_to_original_scale:
-            _print_if("Getting covariance estimate ... ",verbose)
-            x_hat,H = self.transform_scale(y,likelihood_hessian=H_log)
-            x_cov = np.linalg.inv(H)
-
-            # print estimates & confidence intervals
-            s = np.sqrt(np.diag(x_cov))
-            x_ci = x_hat + 1.96*s*np.array([[-1],[1]])
-            fmt = "{0:s}: {1:.2e}, 95% CI:  [{2:.2e}, {3:.2e}] (original scale)"
-            names = list(priors.keys())
-            for ii in range(len(x_hat)):
-                _print_if(fmt.format(names[ii],x_hat[ii],x_ci[0,ii],x_ci[1,ii]),verbose)
-
-        else:
-            x_hat = y
-            x_cov = y_cov
-
-            # print estimates & confidence intervals
-            s = np.sqrt(np.diag(x_cov))
-            x_ci = x_hat + 1.96*s*np.array([[-1],[1]])
-            fmt = "{0:s}: {1:.2e}, 95% CI:  [{2:.2e}, {3:.2e}] (transformed scale)"
-            names = list(priors.keys())
-            for ii in range(len(x_hat)):
-                _print_if(fmt.format(names[ii],x_hat[ii],x_ci[0,ii],x_ci[1,ii]),verbose)
-
-        return x_hat,x_cov
-
-    def transform_scale(self,x,likelihood_hessian=None,direction="inverse"):
-        # direction is either "forward" (to log-scaled space) or "inverse" (back to original scale)
-        x = np.array(x)
-        if direction == "inverse":
-            z = np.array( [np.exp(np.exp(x[0])),np.exp(x[1])] )
-        elif direction == "forward":
-            z = np.array( [np.log(np.log(x[0])),np.log(x[1])] )
-        else:
-            raise ValueError("Transformation direction not recognized.")
-
-        if not isinstance(likelihood_hessian,np.ndarray): # can't use likelihood_hessian == None because it is an array if supplied
-            return z
-        else:
-            #Jacobian for transformation. See Reparameterization at https://en.wikipedia.org/wiki/Fisher_information 
-            J = np.array([  [np.exp(x[0] + np.exp(x[0])),0],\
-                            [0, np.exp(x[1])]   ])
-
-            if direction == "inverse":
-                Ji = inv(J)                            
-                H = Ji.transpose() @ likelihood_hessian @ Ji 
-            elif direction == "forward":
-                H = J.transpose() @ likelihood_hessian @ J 
-
-            return z,H 
+    def save_data(  self,log_p_hat=None,log_p_hat_cov=None,
+                        training_simulation_data=None,training_reflectance_data=None):
+            save_data = {'model':self,
+                            'type':None}
+            if log_p_hat is not None:
+                save_data['transformed_parameters'] = log_p_hat
+            if log_p_hat_cov is not None:
+                save_data['transformed_parameter_covariance'] = log_p_hat_cov
+            if training_simulation_data is not None:
+                save_data['simulation_data'] = training_simulation_data
+            if training_reflectance_data is not None:
+                save_data['reflectance_data'] = training_reflectance_data
+            
+            return save_data
 
     def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,
-                            reflectance_data=None,figsize=None,reflectance_std='measurements',
-                            save_path=None,fig_title=None,return_handles=False,
-                            repeat_y_labels=True,orientation_strings=None):
-        
+                        reflectance_data=None,figsize=None,reflectance_std='measurements',
+                        save_path=None,fig_title=None,return_handles=False,
+                        repeat_y_labels=True,orientation_strings=None):
+    
         if reflectance_data is not None:
             self.predict_soiling_factor(simulation_inputs,rho0=reflectance_data.rho0)
         else:
@@ -574,6 +421,133 @@ class semi_physical(base_model):
         else:
             return mean_predictions,CI_lower_predictions,CI_upper_predictions
     
+class semi_physical(smb.physical_base,common_fitting_methods):
+    def __init__(self,file_params):
+        table = pd.read_excel(file_params,index_col="Parameter")
+        super().__init__()
+        self.import_site_data_and_constants(file_params)
+        self.helios.hamaker = float(table.loc['hamaker_glass'].Value)
+        self.helios.poisson = float(table.loc['poisson_glass'].Value)
+        self.helios.youngs_modulus = float(table.loc['youngs_modulus_glass'].Value)
+        self.helios.nominal_reflectance = float(table.loc['nominal_reflectance'].Value)
+        if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
+            self.helios.stow_tilt = None
+
+    def helios_angles(self,simulation_inputs,reflectance_data,verbose=True,second_surface=True):
+
+        sim_in = simulation_inputs
+        ref_dat = reflectance_data
+        files = list(sim_in.time.keys())
+        N_experiments = len(files)
+
+        # check to ensure that reflectance_data and simulation_input keys correspond to the same files
+        _check_keys(sim_in,ref_dat)
+
+        _print_if("Setting tilts for "+str(N_experiments)+" experiments",verbose)
+        helios = self.helios
+        helios.tilt = {f: None for f in files} # clear the existing tilts
+        helios.acceptance_angles = {f: None for f in files} # clear the existing tilts
+        for ii in range(N_experiments):
+            f = files[ii]
+            tilts = ref_dat.tilts[f]
+            N_times = len(sim_in.time[f])
+            N_helios = tilts.shape[0]
+            self.helios.acceptance_angles[f] = [ref_dat.reflectometer_acceptance_angle[ii]]*N_helios
+            self.helios.extinction_weighting[f] = [] # reset extinction weighting since heliostats are "new"
+            
+            helios.tilt[f] = np.zeros((0,N_times))
+            for jj in range(N_helios):
+                row_mask = np.ones((1,N_times))
+                helios.tilt[f] = np.vstack((helios.tilt[f],tilts[jj]*row_mask))
+
+            helios.elevation[f] = 90-helios.tilt[f]
+            helios.incidence_angle[f] = reflectance_data.reflectometer_incidence_angle[f]
+
+            if second_surface==False:
+                helios.inc_ref_factor[f] = (1+np.sin(rad(helios.incidence_angle[f])))/np.cos(rad(helios.incidence_angle[f])) # first surface
+                _print_if("First surface model",verbose)
+            elif second_surface==True:
+                helios.inc_ref_factor[f] = 2/np.cos(rad(helios.incidence_angle[f]))  # second surface model
+                _print_if("Second surface model",verbose)
+            else:
+                _print_if("Choose either first or second surface model",verbose)
+    
+        self.helios = helios
+
+    def predict_soiling_factor(self,simulation_inputs,rho0=None,hrz0=None,
+                               sigma_dep=None,verbose=True):
+        # Uses simulation inputs and fitted model to predict the soiling
+        # factor and the prediction variance (stored in 
+        # helios.soiling_factor and helios.soiling_factor_prediction_variance,
+        # respectively).
+
+        self.deposition_flux(simulation_inputs,hrz0=hrz0,verbose=verbose)
+        self.adhesion_removal(simulation_inputs,verbose=verbose)
+        self.calculate_delta_soiled_area(simulation_inputs,sigma_dep=sigma_dep,verbose=verbose)
+        self.compute_soiling_factor(rho0=rho0)
+
+        # prediction variance
+        if self.sigma_dep is not None:
+            for f in self.helios.soiling_factor.keys():
+                inc_factor = self.helios.inc_ref_factor[f]
+                dsav = self.helios.delta_soiled_area_variance[f]
+                self.helios.soiling_factor_prediction_variance[f] = np.cumsum( inc_factor**2 * dsav,axis=1 )
+        else:
+            self.helios.soiling_factor_prediction_variance = {}
+
+    def fit_mle(self,simulation_inputs,reflectance_data,verbose=True,x0=None,
+                transform_to_original_scale=False,**optim_kwargs):
+        
+        p_hat,p_cov = super().fit_mle(   simulation_inputs,reflectance_data,verbose=True,x0=x0,
+                                        transform_to_original_scale=transform_to_original_scale,**optim_kwargs)
+        
+
+        # print estimates and confidence intervals
+        fmtCI = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
+        if transform_to_original_scale:
+            fmtE = "hrz0 = {0:.2e}, sigma_dep = {1:.2e}"
+            _print_if(fmtE.format(p_hat[0],p_hat[1]),verbose)
+
+            # print confidence intervals
+            s = np.sqrt(np.diag(p_cov))
+            x_ci = p_hat + 1.96*s*np.array([[-1],[1]])
+            _print_if(fmtCI.format("hrz0",x_ci[0,0],x_ci[1,0]),verbose)
+            _print_if(fmtCI.format("sigma_dep",x_ci[0,1],x_ci[1,1]),verbose)
+        else:
+            fmtE = "log(log(hrz0)) = {0:.2e}, sigma_dep = {1:.2e}"
+            _print_if(fmtE.format(p_hat[0],p_hat[1]),verbose)
+            s = np.sqrt(np.diag(p_cov))
+            y_ci = p_hat + 1.96*s*np.array([[-1],[1]])
+            _print_if(fmtCI.format("log(log(hrz0))",y_ci[0,0],y_ci[1,0]),verbose)
+            _print_if(fmtCI.format("log(sigma_dep)",y_ci[0,1],y_ci[1,1]),verbose)
+        
+        return p_hat,p_cov
+                
+    def transform_scale(self,x,likelihood_hessian=None,direction="inverse"):
+        # direction is either "forward" (to log-scaled space) or "inverse" (back to original scale)
+        x = np.array(x)
+        if direction == "inverse":
+            z = np.array( [np.exp(np.exp(x[0])),np.exp(x[1])] )
+        elif direction == "forward":
+            z = np.array( [np.log(np.log(x[0])),np.log(x[1])] )
+        else:
+            raise ValueError("Transformation direction not recognized.")
+
+        if not isinstance(likelihood_hessian,np.ndarray): # can't use likelihood_hessian == None because it is an array if supplied
+            return z
+        else:
+            #Jacobian for transformation. See Reparameterization at https://en.wikipedia.org/wiki/Fisher_information 
+            J = np.array([  [np.exp(x[0] + np.exp(x[0])),0],\
+                            [0, np.exp(x[1])]   ])
+
+            if direction == "inverse":
+                Ji = inv(J)                            
+                H = Ji.transpose() @ likelihood_hessian @ Ji 
+            elif direction == "forward":
+                H = J.transpose() @ likelihood_hessian @ J 
+
+            return z,H 
+
     def update_model_parameters(self,x):
         if isinstance(x,list) or isinstance(x,np.ndarray) :
             self.hrz0 = x[0]
@@ -585,99 +559,68 @@ class semi_physical(base_model):
     
     def save(self,file_name,log_p_hat=None,log_p_hat_cov=None,
              training_simulation_data=None,training_reflectance_data=None):
+        save_data = super().save_data(log_p_hat,log_p_hat_cov,
+                                      training_simulation_data,
+                                      training_reflectance_data)
+        
+        save_data['type'] = "semi-physical"
         with open(file_name,'wb') as f:
-            save_data = {'model':self,
-                         'type':'semi-physical'}
-            if log_p_hat is not None:
-                save_data['transformed_parameters'] = log_p_hat
-            if log_p_hat_cov is not None:
-                save_data['transformed_parameter_covariance'] = log_p_hat_cov
-            if training_simulation_data is not None:
-                save_data['simulation_data'] = training_simulation_data
-            if training_reflectance_data is not None:
-                save_data['reflectance_data'] = training_reflectance_data
-            
             pickle.dump(save_data,f)
 
-class constant_mean_deposition_velocity(semi_physical):
+class constant_mean_deposition(smb.constant_mean_base,common_fitting_methods):
     
     def __init__(self,file_params):
-        super().__init__(file_params)
-        
-        # replace hrz0 with mu_tilde
-        delattr(self,"hrz0") 
-        self.mu_tilde = None
+        super().__init__()
+        self.import_site_data_and_constants(file_params)
+        table = pd.read_excel(file_params,index_col="Parameter")
+        self.helios.nominal_reflectance = float(table.loc['nominal_reflectance'].Value)
+
+    def helios_angles(self,simulation_inputs,reflectance_data,verbose=True,second_surface=True):
+
+        sim_in = simulation_inputs
+        ref_dat = reflectance_data
+        files = list(sim_in.time.keys())
+        N_experiments = len(files)
+
+        # check to ensure that reflectance_data and simulation_input keys correspond to the same files
+        _check_keys(sim_in,ref_dat)
+
+        _print_if("Setting tilts for "+str(N_experiments)+" experiments",verbose)
+        helios = self.helios
+        helios.tilt = {f: None for f in files} # clear the existing tilts
+        helios.acceptance_angles = {f: None for f in files} # clear the existing tilts
+        for ii in range(N_experiments):
+            f = files[ii]
+            tilts = ref_dat.tilts[f]
+            N_times = len(sim_in.time[f])
+            N_helios = tilts.shape[0]
+            self.helios.acceptance_angles[f] = [ref_dat.reflectometer_acceptance_angle[ii]]*N_helios
+            self.helios.extinction_weighting[f] = [] # reset extinction weighting since heliostats are "new"
+            
+            helios.tilt[f] = np.zeros((0,N_times))
+            for jj in range(N_helios):
+                row_mask = np.ones((1,N_times))
+                helios.tilt[f] = np.vstack((helios.tilt[f],tilts[jj]*row_mask))
+
+            helios.elevation[f] = 90-helios.tilt[f]
+            helios.incidence_angle[f] = reflectance_data.reflectometer_incidence_angle[f]
+
+            if second_surface==False:
+                helios.inc_ref_factor[f] = (1+np.sin(rad(helios.incidence_angle[f])))/np.cos(rad(helios.incidence_angle[f])) # first surface
+                _print_if("First surface model",verbose)
+            elif second_surface==True:
+                helios.inc_ref_factor[f] = 2/np.cos(rad(helios.incidence_angle[f]))  # second surface model
+                _print_if("Second surface model",verbose)
+            else:
+                _print_if("Choose either first or second surface model",verbose)
+    
+        self.helios = helios
 
     def predict_soiling_factor(self,simulation_inputs,rho0=None,mu_tilde=None,sigma_dep=None,verbose=True):
 
-        if mu_tilde == None: # use value in self
-            mu_tilde = self.mu_tilde
-        else:
-            mu_tilde = mu_tilde
-            _print_if("Using supplied value for mu_tilde = "+str(mu_tilde),verbose)
-
         sim_in = simulation_inputs
-        helios = self.helios
-        dust = sim_in.dust
-        # N_sims = sim_in.N_simulations
-        # D_meters = dust.D*1e-6  # µm --> m
-        files = list(sim_in.time.keys())
-        for f in files:
-            helios.delta_soiled_area[f] = np.empty((helios.tilt[f].shape[0],helios.tilt[f].shape[1]))
-
-            # compute alpha
-            try:
-                attr = _parse_dust_str(sim_in.dust_type[f])
-                den = getattr(dust,attr) # dust.(sim_in.dust_type[f])
-            except:
-                raise ValueError("Dust measurement = "+sim_in.dust_type[f]+\
-                    " not present in dust class. Use dust_type="+sim_in.dust_type[f]+\
-                        " option when initializing the model")
-
-            alpha = sim_in.dust_concentration[f]/den[f]
-
-            # Compute the area coverage by dust at each time step
-            N_helios = helios.tilt[f].shape[0]
-            N_times = helios.tilt[f].shape[1]
-            for ii in range(N_helios):
-                for jj in range(N_times):
-                    helios.delta_soiled_area[f][ii,jj] = \
-                        alpha[jj] * np.cos(rad(helios.tilt[f][ii,jj]))*mu_tilde
-
-            # Predict confidence interval if sigma_dep is defined. Fixed tilt assumed in this class. 
-            if sigma_dep is not None:
-                theta = np.radians(self.helios.tilt[f])
-                inc_factor = self.helios.inc_ref_factor[f]
-                dsav = sigma_dep**2* (alpha**2*np.cos(theta)**2)
-                
-                helios.delta_soiled_area_variance[f] = dsav
-                self.helios.soiling_factor_prediction_variance[f] = \
-                    np.cumsum( inc_factor**2 * dsav,axis=1 )
-                
-            elif self.sigma_dep is not None:
-                theta = np.radians(self.helios.tilt[f])
-                inc_factor = self.helios.inc_ref_factor[f]
-                dsav = self.sigma_dep**2* (alpha**2*np.cos(theta)**2)
-                
-                helios.delta_soiled_area_variance[f] = dsav
-                self.helios.soiling_factor_prediction_variance[f] = \
-                    np.cumsum( inc_factor**2 * dsav,axis=1 )
-                
+        self.calculate_delta_soiled_area(sim_in,mu_tilde=mu_tilde,sigma_dep=sigma_dep,verbose=verbose)       
         self.compute_soiling_factor(rho0=rho0)
-        self.helios = helios
-
-    def fit_least_squares(self,simulation_inputs,reflectance_data,verbose=True,save_file=None):
-
-        # check to ensure that reflectance_data and simulation_input keys correspond to the same files
-        _check_keys(simulation_inputs,reflectance_data)
-
-        fun = lambda x: self._sse(x,simulation_inputs,reflectance_data)
-        _print_if("Fitting mu_tilde with least squares...",verbose)
-        xL = 1e-12
-        xU = 100 
-        res = minimize_scalar(fun,bounds=(xL,xU),method="Bounded") # use bounded to prevent evaluation at values <=1
-        _print_if("... done! \n mu_tilde = "+str(res.x),verbose)
-        return res.x,res.fun
 
     def fit_map(self, simulation_inputs, reflectance_data, priors, verbose=True, 
                 x0=None, transform_to_original_scale=False,save_file=None):
@@ -808,17 +751,11 @@ class constant_mean_deposition_velocity(semi_physical):
 
     def save(self,file_name,log_p_hat=None,log_p_hat_cov=None,
              training_simulation_data=None,training_reflectance_data=None):
+        save_data = super().save_data(log_p_hat,log_p_hat_cov,
+                                      training_simulation_data,
+                                      training_reflectance_data)
+        
+        save_data['type'] = "constant mean"
         with open(file_name,'wb') as f:
-            save_data = {'model':self,
-                         'type':'constant-mean'}
-            if log_p_hat is not None:
-                save_data['transformed_parameters'] = log_p_hat
-            if log_p_hat_cov is not None:
-                save_data['transformed_parameter_covariance'] = log_p_hat_cov
-            if training_simulation_data is not None:
-                save_data['simulation_data'] = training_simulation_data
-            if training_reflectance_data is not None:
-                save_data['reflectance_data'] = training_reflectance_data
-            
             pickle.dump(save_data,f)
                 
