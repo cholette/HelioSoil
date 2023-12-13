@@ -14,8 +14,12 @@ from soiling_model.utilities import _print_if,_ensure_list,\
                                     _import_option_helper,_parse_dust_str,\
                                     _check_keys
 from textwrap import dedent
+from pysolar import solar, radiation
+import datetime
+import pytz
 from scipy.optimize import minimize_scalar
 from scipy.integrate import cumtrapz
+from scipy.spatial.distance import cdist
 import copy
 from copylot import CoPylot
 
@@ -479,7 +483,7 @@ class simulation_inputs:
         self.end_datetime = {}                  # datetime64 for end
         self.air_temp = {}                      # [C] air temperature
         self.wind_speed = {}                    # [m/s] wind speed
-        self.wind_direction = {}                    # [degrees] wind direction
+        self.wind_direction = {}                # [degrees] wind direction
         self.dust_concentration = {}            # [µg/m3] PM10 or TSP concentration in air
         self.rain_intensity = {}                # [mm/hr] rain intensity
         self.dust_type = {}                     # Usually either "TSP" or "PM10", but coule be any PMX or PMX.X
@@ -537,21 +541,21 @@ class simulation_inputs:
             weather = pd.read_excel(files[ii],sheet_name="Weather")
 
             # Set time vector. Get from the weather file
-            time = weather['Time'].to_numpy(dtype = 'datetime64[s]')
-            self.start_datetime[ii] = time[0] # pd.to_datetime(weather['Time'].iloc[0]).to_numpy()
-            self.end_datetime[ii] = time[-1] # pd.to_datetime(weather['Time'].iloc[-1]).to_numpy()
+            time = pd.to_datetime(weather['Time']) #weather['Time'].to_numpy(dtype = 'datetime64[s]')
+            self.start_datetime[ii] = time.iloc[0] # pd.to_datetime(weather['Time'].iloc[0]).to_numpy()
+            self.end_datetime[ii] = time.iloc[-1] # pd.to_datetime(weather['Time'].iloc[-1]).to_numpy()
             # time =  pd.date_range(self.start_datetime[ii],self.end_datetime[ii],freq='1H').to_numpy(dtype = 'datetime64[s]')  # allow for flexible frequency later
                     
             _print_if("Importing site data (weather,time). Using dust_type = "+dust_type[ii]+", test_length = "+\
-                str( ((self.end_datetime[ii]-self.start_datetime[ii]) + np.timedelta64(1,'h')).astype('timedelta64[h]') ),verbose)
+                str( (self.end_datetime[ii]-self.start_datetime[ii]).days )+" days",verbose)
             
             self.time[ii] = time
 
             if verbose:
-                T = ( (time[-1]-time[0])+np.timedelta64(1,'h') ).astype('timedelta64[D]')
-                _print_if("Length of simulation for file "+files[ii]+": "+str(T.astype(float))+" days",verbose)
+                T = ( (time.iloc[-1]-time.iloc[0]).days)
+                _print_if("Length of simulation for file "+files[ii]+": "+str(T)+" days",verbose)
 
-            self.dt[ii] = np.diff(self.time[ii])[0].astype(float) # [s] assumed constant. Make float for later computations
+            self.dt[ii] = (self.time[ii][1]-self.time[ii][0]).total_seconds() #np.diff(self.time[ii])[0].astype(float) # [s] assumed constant. Make float for later computations
             self.time_diff[ii] = (self.time[ii]-self.time[ii].astype('datetime64[D]')).astype('timedelta64[h]').astype('int')  # time difference from midnight in integer hours
             self.air_temp[ii] = np.array(weather.loc[:,'AirTemp'])
             
@@ -835,16 +839,21 @@ class helios:
             self.theta = np.arctan2(self.y,self.x)              # radial polar coordinate of each heliostat
             self.num_radial_sectors = None
             self.num_theta_sectors = None
-        elif isinstance(num_sectors,tuple) and isinstance(num_sectors[0],int)\
+        elif isinstance(num_sectors,tuple) and isinstance(num_sectors[0],int) and table.loc['receiver_type'].Value == 'External cylindrical'\
             and isinstance(num_sectors[1],int):                 # import and sectorize
             n_rho,n_theta = num_sectors
             _print_if("Importing full solar field and sectorizing with {0:d} angular and {1:d} radial sectors".format(n_theta,n_rho),verbose)
             self.num_radial_sectors,self.num_theta_sectors = num_sectors
-            self.sectorize(file_solar_field,n_rho,n_theta)
+            self.sectorize_radial(file_solar_field,n_rho,n_theta)
+        elif table.loc['receiver_type'].Value == 'Flat plate':
+            n_hor,n_vert = num_sectors
+            _print_if("Importing full solar field and sectorizing with {0:d} horizontal and {1:d} vertical sectors".format(n_hor,n_vert),verbose)
+            self.num_radial_sectors,self.num_theta_sectors = num_sectors
+            self.sectorize_corn(file_solar_field,n_hor,n_vert)
         else:
             raise ValueError("num_sectors must be None or an a 2-tuple of intergers")  
 
-    def sectorize(self,whole_field_file,n_rho,n_theta,verbose=True):
+    def sectorize_radial(self,whole_field_file,n_rho,n_theta,verbose=True):
         
         if whole_field_file.split('.')[-1] == 'csv':
             whole_SF = pd.read_csv(whole_field_file,skiprows=[1])
@@ -954,6 +963,66 @@ class helios:
         self.rho = hel_rep[:,0]
         self.heliostats_in_sector = hel_sec
 
+    def sectorize_corn(self,whole_field_file,n_hor,n_vert,verbose=True):
+            
+        def read_solarfield(field_filepath): # Load CSV containing solarfield coordintes
+            positions = []
+            if field_filepath.split('.')[-1] == 'csv':
+                whole_SF = pd.read_csv(field_filepath,skiprows=[1])
+            elif field_filepath.split('.')[-1] == 'xlsx':
+                whole_SF = pd.read_excel(field_filepath,skiprows=[1])
+            else:
+                raise ValueError("Solar field file must be csv or xlsx")
+            x_field = np.array(whole_SF.loc[:,'Loc. X'])                    # x cartesian coordinate of each heliostat (E>0)
+            y_field = np.array(whole_SF.loc[:,'Loc. Y'])
+            helioID = np.arange(len(x_field),dtype=np.int64)
+            positions = np.column_stack((helioID, x_field, y_field))
+            return positions
+
+        def generate_grid(num_hor,num_vert,x,y): # Generate a grid around solarfield
+            x_points = np.linspace(min(x),max(x),num_hor)
+            y_points = np.linspace(min(y),max(y),num_vert)
+            grid = np.array([(x,y) for x in x_points for y in y_points])
+            return grid
+        
+        def find_closest_point(position,grid): 
+            distances = cdist([position[1:3]], grid) # Find distance between heliostats and grid coordinates
+            closest_idx = np.argmin(distances) 
+            return distances[0][closest_idx], closest_idx
+            
+        positions = read_solarfield(whole_field_file)
+        grid = generate_grid(n_hor,n_vert,positions[:,1],positions[:,2])
+        
+        closest_grid = [] # Create a dictionary to store 
+        # [heliostat ID, x position, y position, distance to closest grid, closest grid point]
+        for i in range(len(positions)):
+            distance_grid, closest_idx = find_closest_point(positions[i,:],grid) 
+            if i == 0:
+                closest_grid = np.hstack([positions[i,:],distance_grid,closest_idx])
+            else:
+                closest_grid = np.vstack([closest_grid,np.hstack([positions[i,:],distance_grid,closest_idx])])
+        
+        
+        # Store Heliostat Field information
+        self.full_field['x'] = (closest_grid[:,1])
+        self.full_field['y'] = (closest_grid[:,2])
+        self.full_field['id'] = np.array(closest_grid[:,0],dtype=np.int64)
+        self.full_field['sector_id'] = np.array(closest_grid[:,4],dtype=np.int64)
+        
+        for i in np.unique(self.full_field['sector_id']):
+            sector_field = closest_grid[closest_grid[:,4] == i,:]
+            sector_size = len(sector_field)
+            representative_info = sector_field[np.argmin(sector_field[:,3])]
+            if i == 0:
+                representative_helio = np.hstack([representative_info,sector_size])
+            else:
+                representative_helio = np.vstack([representative_helio,np.hstack([representative_info,sector_size])])
+                
+        ##
+        self.x = (representative_helio[:,1])
+        self.y = (representative_helio[:,2])
+        self.heliostats_in_sector = np.array(representative_helio[:,-1],dtype=np.int64)
+        self.sector_area = self.heliostats_in_sector * self.height * self.width
     def sector_plot(self):
         Ns = self.x.shape[0]
         n_theta = self.num_theta_sectors
@@ -1059,9 +1128,11 @@ class helios:
         
 class plant:
     def __init__(self):
-        self.receiver = {   'tower_height': [],
+        self.receiver = {   'receiver_type': [],
+                            'tower_height': [],
                             'panel_height': [],
-                            'diameter': [],
+                            'width_diameter': [],
+                            'orientation_elevation': [],
                             'thermal_losses': [],
                             'thermal_max': [],
                             'thermal_min': []  }
@@ -1070,9 +1141,16 @@ class plant:
         
     def import_plant(self,file_params):
         table = pd.read_excel(file_params,index_col="Parameter")
+        
+        self.receiver['receiver_type'] = table.loc['receiver_type'].Value
+        self.receiver['width_diameter'] = float(table.loc['receiver_width_diameter'].Value) # Width/Diameter for Flat/Circular receiver
+        if self.receiver['receiver_type'] == 'Flat plate':
+            try:
+                self.receiver['orientation_elevation'] = float(table.loc['receiver_orientation_elevation'].Value)
+            except:
+                raise ValueError("receiver_orientation_elevation for Flat plate not specified in parameters file")
         self.receiver['tower_height'] = float(table.loc['receiver_tower_height'].Value)
         self.receiver['panel_height'] = float(table.loc['receiver_height'].Value)
-        self.receiver['diameter'] = float(table.loc['receiver_diameter'].Value)
         self.receiver['thermal_losses'] = float(table.loc['receiver_thermal_losses'].Value)
         self.receiver['thermal_min'] = float(table.loc['minimum_receiver_power'].Value)
         self.receiver['thermal_max'] = float(table.loc['maximum_receiver_power'].Value)
@@ -1260,33 +1338,25 @@ class field_model(physical_base):
         sim_in = simulation_inputs
         sun = self.sun
         constants = self.constants
-
+        timezone = pytz.FixedOffset(int(self.timezone_offset*60))
+        
         _print_if("Calculating sun apparent movement and angles for "+str(sim_in.N_simulations)+" simulations",verbose)
         
         files = list(sim_in.time.keys())
         for f in list(files):
-            sun.hourly[f] = ((sim_in.time_diff[f] - 12)/24*360+self.longitude-15*self.timezone_offset)
-            jan1 = np.datetime64(sim_in.start_datetime[f],'Y')   # calendar year given by start_date - required to compute the solar declination angle
-            delta_time = (sim_in.start_datetime[f]-jan1).astype('timedelta64[s]')  # difference in time between the start date and the start of the calendar year
-            time_delta_jan1 = (sim_in.time[f]-jan1+delta_time).astype('float')/3600/24     # transforms deltatime64[s] to number of days
-            sun.declination[f] = 23.44*np.sin(rad(360/365*(time_delta_jan1+284)))   # Cooper equation (1969)
-            sun.zenith[f] = np.degrees(np.arccos(np.sin(rad(self.latitude))*np.sin(rad(sun.declination[f]))+ \
-                                np.cos(rad(self.latitude))*np.cos(rad(sun.declination[f]))* \
-                                np.cos(rad(sun.hourly[f]))))
-            sun.elevation[f] = 90 - sun.zenith[f]
-            az = np.degrees(np.sign(sun.hourly[f])*abs(np.arccos((np.cos(rad(sun.zenith[f]))* \
-                                np.sin(rad(self.latitude))-np.sin(rad(sun.declination[f])))/ \
-                                (np.sin(rad(sun.zenith[f]))*np.cos(rad(self.latitude))))))
-            sun.azimuth[f] = az+180  # 0->N 90->E 180->S 270->O
-            I0 = constants.irradiation*(1+0.033*np.cos(2*np.pi*time_delta_jan1/365))
-            AM = 1/np.cos(rad(sun.zenith[f]))
-            AM[sun.elevation[f]<=sun.stow_angle] = float("NAN")
-            sun.DNI[f] = I0*0.7**(AM**0.678)
+            time_utc = sim_in.time[f].dt.tz_localize(timezone) # Apply UTC to timeseries
+            time_utc = time_utc.tolist() # Convert to list
+            
+            # Loop through all times and calculate azimuth and altitude/elevation
+            solar_angles = np.array([solar.get_position(self.latitude,self.longitude,time.to_pydatetime()) for time in time_utc]) 
+            sun.azimuth[f] = solar_angles[:,0] # solar_angles(:,[azimuth,elevation])
+            sun.elevation[f] = solar_angles[:,1]
+            sun.DNI[f] = np.array([radiation.get_radiation_direct(time.to_pydatetime(),elevation) for time, elevation in zip(time_utc,solar_angles[:,1])])
             
         self.sun = sun # update sun in the main model 
     
     def helios_angles(self,plant,verbose=True,second_surface=True):
-        sun = self.sun
+        sun = self.sun  
         helios = self.helios
 
         files = list(sun.elevation.keys())
@@ -1356,8 +1426,7 @@ class field_model(physical_base):
         files = list(sim_in.time.keys())
         for fi in range(len(files)):
             f = files[fi]
-            T_days = (sim_in.time[f][-1]-sim_in.time[f][0]).astype('timedelta64[D]') # needs to be more than one day
-            T_days = T_days.astype(float)
+            T_days = (sim_in.time[f].iloc[-1]-sim_in.time[f].iloc[0]).days # needs to be more than one day
             n_hours = int(helios.delta_soiled_area[f].shape[1] )
             
             # accumulate soiling between cleans
@@ -1424,9 +1493,21 @@ class field_model(physical_base):
         # layout setup
         assert cp.data_set_number(r,"heliostat.0.height",helios.height)
         assert cp.data_set_number(r,"heliostat.0.width",helios.width)
-
-        # receiver setup
-        assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['diameter']) 
+        assert cp.data_set_number(r,"heliostat.0.soiling",1) # Sets cleanliness to 100%
+        assert cp.data_set_number(r,"heliostat.0.reflectivity",1)
+        try:
+            assert cp.data_set_string(r,"receiver.0.rec_type",plant.receiver['receiver_type'])
+        except:
+            assert cp.data_set_string(r,"receiver.0.rec_type",'External cylindrical')
+        if plant.receiver['receiver_type'] == 'External cylindrical':
+            assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['width_diameter'])
+        elif plant.receiver['receiver_type'] == 'Flat plate':
+            assert cp.data_set_number(r,"receiver.0.rec_width",plant.receiver['width_diameter'])
+            try:    
+                assert cp.data_set_number(r,"receiver.0.rec_elevation",plant.receiver['orientation_elevation'])
+            except:
+                assert cp.data_set_number(r,"receiver.0.rec_elevation",-35)
+        assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['width_diameter']) 
         assert cp.data_set_number(r,"receiver.0.rec_height",plant.receiver['panel_height'])
         assert cp.data_set_number(r,"receiver.0.optical_height",plant.receiver['tower_height'])
 
@@ -1465,7 +1546,11 @@ class field_model(physical_base):
 
                 effs = dat['efficiency']
                 _print_if(fmt.format(az_grid[ii],el_grid[jj]),verbose)
-                _print_if(fmt_pwr.format(dat_summary['Power absorbed by the receiver']),verbose)
+                if dat_summary['Power absorbed by the receiver'] == ' -nan(ind)':
+                    raise ValueError("SolarPILOT unable to simulate with current parameter configuration")
+                else:
+                    _print_if(fmt_pwr.format(dat_summary['Power absorbed by the receiver']),verbose)
+                    
                 for kk in range(Ns):
                     idx = np.where(sec_ids==kk)[0]
                     eff_grid[kk,ii,jj] = effs[idx].mean()

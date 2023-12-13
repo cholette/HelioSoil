@@ -14,3 +14,4 @@ dependencies:
   - windrose=1.8.1
   - pip:
     - miepython
+    - pysolar
