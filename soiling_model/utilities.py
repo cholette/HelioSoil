@@ -26,7 +26,7 @@ def _check_keys(simulation_data,reflectance_data):
 
 def _import_option_helper(file_list,option):
     if isinstance(option,(list,np.ndarray)):
-        assert len(file_list) == len(option), f"Please supply a list for {option} containing one string for each experiment. Or, supply a single global type by specifying a string. "
+        assert len(file_list) == len(option), "Please supply a list for {option} containing one string for each experiment. Or, supply a single global type by specifying a string. "
     else:
         option = [option]*len(file_list)
     
