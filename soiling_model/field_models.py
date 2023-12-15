@@ -155,7 +155,7 @@ class field_common_methods:
             temp_soil = np.zeros((n_helios,n_hours))
             temp_soil2 =  np.zeros((n_helios,n_hours))
             for hh in range(n_helios):
-                sra = copy.deepcopy(helios.delta_soiled_area[f][hh,:])     # use copy.deepcopy otherwise when modifying sra to compute temp_soil2, also helios.delta_soiled_area is modified
+                sra = copy.deepcopy(helios.delta_soiled_area[f][hh,:])  # use copy.deepcopy otherwise when modifying sra to compute temp_soil2, also helios.delta_soiled_area is modified
                 clean_idx = np.where(cleans[fi][hh,:])[0]
                 clean_at_0 = True                                       # kept true if sector hh-th is cleaned on day 0
                 if len(clean_idx)>0 and clean_idx[0]!=0:
@@ -309,7 +309,7 @@ class field_model(physical_base,field_common_methods):
         #     Solar Energy Materials and Solar Cells, vol. 176, pp. 119–133, 
         #     Mar. 2018, doi: 10.1016/j.solmat.2017.11.029.
         # This approach neglects blocking, shading, and the use of a single acceptance angle assumes that 
-        # the acceptance zone is conical. 
+        # the acceptance zone is conical. Tower height is presumed to be to the center. 
 
         tower_height = plant.receiver['tower_height']
         panel_height = plant.receiver['panel_height']
@@ -319,8 +319,8 @@ class field_model(physical_base,field_common_methods):
         for f in files:
             for ii,h in enumerate(zip(self.helios.x,self.helios.y)):
                 d = np.sqrt(h[0]**2 + h[1]**2)
-                h1 = tower_height - panel_height/2.0 # middle of panel
-                h2 = tower_height                    # top of panel
+                h1 = tower_height                       # middle of panel
+                h2 = tower_height + panel_height/2.0    # top of panel
                 a1 = np.arctan(h1/d)
                 a2 = np.arctan(h2/d)
                 self.helios.acceptance_angles[f][ii] = (a2-a1) # [rad]

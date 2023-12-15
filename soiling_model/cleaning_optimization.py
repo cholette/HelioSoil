@@ -1,11 +1,13 @@
 import numpy as np
 tol = np.finfo(float).eps # machine floating point precision
-from soiling_model.base_models import *
+from soiling_model.base_models import simulation_inputs
+from soiling_model.field_models import field_model,simplified_field_model,central_tower_plant
 from soiling_model.utilities import _print_if,simple_annual_cleaning_schedule
 
 class optimization_problem():
-    def __init__(self,params,solar_field,weather_files,climate_file,num_sectors,\
-        dust_type=None,n_az=10,n_el=10,second_surface=True,verbose=True):
+    def __init__(   self,params,solar_field,weather_files,climate_file,num_sectors,\
+                    dust_type=None,n_az=10,n_el=10,second_surface=True,verbose=True,
+                    model_type='semi-physical',ext_options={'grid_size_x':100}):
         self.truck = {  'operator_salary':[],
                         'operators_per_truck_per_day':[],
                         'purchase_cost':[],
@@ -15,23 +17,28 @@ class optimization_problem():
                         'water_cost': []
                     }
         self.electricty_price = []
-        plant_other_maintenace = [] 
+        self.plant_other_maintenace = [] 
 
-        pl = plant()
+        pl = central_tower_plant()
         pl.import_plant(params)
-
-        fm = field_model(params,solar_field,num_sectors=num_sectors)
-
-        if fm.loss_model=="mie":
-            ValueError("Field simulation using loss_model==""mie"" not yet available.")
-
         sd = simulation_inputs(weather_files,dust_type=dust_type)
-        fm.sun_angles(sd)
-        fm.helios_angles(pl,second_surface=second_surface)
-        fm.deposition_flux(sd)
-        fm.adhesion_removal(sd)
-        fm.helios.compute_extinction_weights(sd,fm.loss_model,verbose=True)
-        fm.calculate_delta_soiled_area(sd)
+        if model_type.lower() == 'semi-physical':
+            fm = field_model(params,solar_field,num_sectors=num_sectors)
+            fm.sun_angles(sd)
+            fm.helios_angles(pl,second_surface=second_surface)
+            fm.compute_acceptance_angles(pl)    
+            fm.helios.compute_extinction_weights(sd,fm.loss_model,verbose=True,options=ext_options)
+            fm.deposition_flux(sd)
+            fm.adhesion_removal(sd)
+            fm.calculate_delta_soiled_area(sd)
+        elif model_type.lower() == 'simplified':
+            fm = simplified_field_model(params,solar_field,num_sectors=num_sectors)
+            fm.sun_angles(sd)
+            fm.helios_angles(pl,second_surface=second_surface)
+            fm.calculate_delta_soiled_area(sd)
+        else:
+            raise ValueError("Model type not recognized. Must be either semi-physical or simplified.")
+
         fm.optical_efficiency(pl,sd,climate_file,n_az=n_az,n_el=n_el,verbose=verbose)
 
         self.field_model = fm
@@ -136,5 +143,7 @@ def periodic_schedule_tcc(opt,n_trucks,n_cleans,\
                 'degradation_costs': C_deg,
                 'direct_cleaning_costs': C_cl,
                 'soiling_factor':field.helios.soiling_factor,
-                'cleaning_actions':cleans}
+                'cleaning_actions':cleans,
+                'soiling_induced_off_times':np.sum(~clean_receiver_off & dirty_receiver_off),
+                'soiling_induced_drops_below_upper_limit':np.sum(clean_receiver_saturated & ~dirty_receiver_saturated)}
     return results

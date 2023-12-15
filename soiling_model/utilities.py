@@ -158,8 +158,8 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
             lb = ref_dat.times[f][0]
             ub = ref_dat.times[f][-1]
         elif trim_ranges == "simulation_inputs":
-            lb = sim_dat.time[f][0]
-            ub = sim_dat.time[f][-1]
+            lb = sim_dat.time[f].iloc[0]
+            ub = sim_dat.time[f].iloc[-1]
         else:
             raise ValueError("""Value of trim_ranges not recognized. Must be a list of lists/np.array [lb,ub], """+\
                 """ "reflectance_data" or "simulation_inputs" """)
@@ -198,7 +198,7 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
             time_grid = sim_dat.time[f]
             for m in ref_dat.times[f]:
                 ref_dat.prediction_indices[f].append(np.argmin(np.abs(m-time_grid)))        
-                ref_dat.prediction_times[f].append(time_grid[ref_dat.prediction_indices[f]])
+                ref_dat.prediction_times[f].append(time_grid.iloc[ref_dat.prediction_indices[f]])
                 ref_dat.rho0[f] = ref_dat.average[f][0,:]
     
     return sim_dat,ref_dat

@@ -43,7 +43,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
 
             idxs, = np.where(mod.helios.tilt[e][:,0] == t)
             idxs = idxs[0] # take first since all predictions are the same
-            ts = sdat.time[e]
+            ts = sdat.time[e].values
             ts = (ts-ts[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
             
             for kk in idx: # reflectance data
