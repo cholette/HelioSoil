@@ -409,10 +409,9 @@ class constant_mean_base(soiling_base):
         super().import_site_data_and_constants(file_params)                               
         table = pd.read_excel(file_params,index_col="Parameter")
         try:
-            self.hrz0 =float(table.loc['mu_tilde'].Value)          # [-] constant average deposition
+            self.mu_tilde =float(table.loc['mu_tilde'].Value)          # [-] constant average deposition
         except:
             _print_if(f"No mu_tilde model defined in {file_params}. You will need to define this before simulating",verbose)
-
 
     def calculate_delta_soiled_area(self,simulation_inputs,mu_tilde=None,sigma_dep=None,verbose=True):
 
