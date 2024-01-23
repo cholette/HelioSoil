@@ -371,7 +371,7 @@ class common_fitting_methods:
             a2.tick_params(axis ='y', labelcolor = 'blue')
 
             a2a = a2.twinx()
-            p = a2a.plot(ts,ws,color='green',label="Wind Speed ({0:.2f} m/s)".format(ws.mean()))
+            p = a2a.plot(ts,ws,color='green',label="Wind Speed (mean = {0:.2f} m/s)".format(ws.mean()))
             ax_wind.append(a2a)
             a2a.tick_params(axis ='y', labelcolor = 'green')
             a2a.set_ylim((0,ws_max))
@@ -387,7 +387,7 @@ class common_fitting_methods:
             else:
                 a2a.set_yticklabels([]) 
             
-            a2.set_title(label_str.format(dust_conc.mean())+" \n, Wind Speed ({0:.2f} m/s)".format(ws.mean()),fontsize=10)
+            a2.set_title(label_str.format(dust_conc.mean())+", \n Wind Speed (mean = {0:.2f} m/s)".format(ws.mean()),fontsize=10)
         
         if N_experiments > 1:
 
