@@ -5,6 +5,7 @@ os.sys.path.append(main_directory)
 
 # %% modules
 import numpy as np
+import pandas as pd
 import soiling_model.base_models as smb
 import soiling_model.fitting as smf
 import soiling_model.utilities as smu
@@ -22,7 +23,7 @@ reflectometer_acceptance_angle = 12.5e-3 # [rad] half acceptance angle of reflec
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
 d = f"{main_directory}/data/port_augusta/"
 time_to_remove_at_end = [0,0,0,0,0,0]
-train_experiments = [1,2] # indices for training experiments from 0 to len(files)-1
+train_experiments = [0] # indices for training experiments from 0 to len(files)-1
 train_mirrors = ["OSE_M2_T00"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for 
 # train_mirrors = ["OSE_M3_T30"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for 
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
@@ -33,6 +34,7 @@ parameter_file = d+"parameters_port_augusta_experiments.xlsx"
 files,training_intervals,mirror_name_list,all_mirrors = \
     smu.get_training_data(  d,"PortAugusta_Data_",
                             time_to_remove_at_end=time_to_remove_at_end)
+training_intervals[0][1] -= np.datetime64(36,'h')
 
 orientation = [ [s[1]+s[2] for s in mirrors] for mirrors in mirror_name_list]
 
@@ -159,6 +161,61 @@ for ii,experiment in enumerate(train_experiments):
     # fig,ax = smu.wind_rose(sim_data_train,ii)
     # ax.set_title(f"Wind for file {files[experiment]}")
 
+# %% Load and trim total data
+sim_data_total = smb.simulation_inputs( files,
+                                        k_factors=k_factor,
+                                        dust_type=dust_type
+                                        )
+
+reflect_data_total = smb.reflectance_measurements(  files,
+                                                    sim_data_total.time,
+                                                    number_of_measurements=6.0,
+                                                    reflectometer_incidence_angle=reflectometer_incidence_angle,
+                                                    reflectometer_acceptance_angle=reflectometer_acceptance_angle,
+                                                    import_tilts=True,
+                                                    column_names_to_import=None
+                                                    )
+
+# %% Trim data and plot                                                           
+sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
+                                                                reflect_data_total,
+                                                                "reflectance_data" 
+                                                            )
+
+for ii,experiment in enumerate(sim_data_total.dt.keys()):
+    fig,ax = plot_experiment_PA(sim_data_total,reflect_data_total,ii)
+    # fig.suptitle(f"Testing Data for file {files[experiment]}")
+    fig,ax = smu.wind_rose(sim_data_total,ii)
+    ax.set_title(f"Wind for file {files[experiment]}")
+
+# %% Plot reflectance losses in each interval
+for m,mir in enumerate(train_mirrors):
+    for exp in sim_data_total.time.keys():
+        diff_array_times = -np.diff(reflect_data_total.times[exp])
+        diff_days = -diff_array_times.astype('timedelta64[s]').astype('int')/3600/24
+        idx_mir = reflect_data_total.mirror_names[exp].index(mir)
+        diff_ref = -np.diff(reflect_data_total.average[exp][:,idx_mir],axis=0)
+        diff_rates = diff_ref*100/diff_days  # contain soiling rates for mir in training_mirrors
+
+        df_dust = pd.DataFrame({'Time': sim_data_total.time[exp],
+                                'Value':sim_data_total.dust_concentration[exp]})
+        retiming_vector = pd.to_datetime(reflect_data_total.times[exp])
+        df_dust['Interval'] = pd.cut(df_dust['Time'], bins=retiming_vector, right=False, labels=False)
+        df_dust_retime = pd.DataFrame({
+            'Time': retiming_vector[1:],
+            'Mean_TSP': df_dust.groupby('Interval')['Value'].mean().values,
+            'Soiling_Rate': diff_rates
+            })
+        df_sorted = df_dust_retime.sort_values(by='Mean_TSP')
+        print(df_dust_retime)
+        print(df_sorted)
+        plt.plot(df_sorted['Mean_TSP'], df_sorted['Soiling_Rate'], marker='o', linestyle='-', color='b')
+        # plt.hist(df_sorted['Soiling_Rate'], bins='auto', edgecolor='black')
+        plt.xlabel('Mean_TSP, µg/m3')
+        plt.ylabel('Soiling_Rate, %/day')
+        plt.title(f"Soiling Rates for {files[exp]}")
+        plt.show()
+
 # %% Set mirror angles and get extinction weights
 imodel.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
 imodel.helios.compute_extinction_weights(sim_data_train,imodel.loss_model,verbose=True)
@@ -226,32 +283,6 @@ _,_,_ = imodel_constant.plot_soiling_factor(    sim_data_train,
                                         orientation_strings=orientation,
                                         figsize = [12,8]  )
 
-# %% Load and trim total data
-sim_data_total = smb.simulation_inputs( files,
-                                        k_factors=k_factor,
-                                        dust_type=dust_type
-                                        )
-
-reflect_data_total = smb.reflectance_measurements(  files,
-                                                    sim_data_total.time,
-                                                    number_of_measurements=6.0,
-                                                    reflectometer_incidence_angle=reflectometer_incidence_angle,
-                                                    reflectometer_acceptance_angle=reflectometer_acceptance_angle,
-                                                    import_tilts=True,
-                                                    column_names_to_import=None
-                                                    )
-
-# %% Trim data and plot                                                           
-sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
-                                                                reflect_data_total,
-                                                                "reflectance_data" 
-                                                            )
-
-for ii,experiment in enumerate(sim_data_total.dt.keys()):
-    fig,ax = plot_experiment_PA(sim_data_total,reflect_data_total,ii)
-    # fig.suptitle(f"Testing Data for file {files[experiment]}")
-    fig,ax = smu.wind_rose(sim_data_total,ii)
-    ax.set_title(f"Wind for file {files[experiment]}")
 
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
@@ -316,7 +347,7 @@ ax.set_xlabel('Loss (percentage points)',fontsize=fsz+2)
 ax.legend(fontsize=fsz)
 
 fig.set_size_inches(5,4)
-fig.savefig(f"{main_directory}/results/losses_mount_isa.pdf",dpi=300,bbox_inches='tight',pad_inches=0)
+fig.savefig(f"{main_directory}/results/losses_port_augusta.pdf",dpi=300,bbox_inches='tight',pad_inches=0)
 
 # %% Highest only
 
