@@ -188,6 +188,15 @@ for ii,experiment in enumerate(sim_data_total.dt.keys()):
     fig,ax = smu.wind_rose(sim_data_total,ii)
     ax.set_title(f"Wind for file {files[experiment]}")
 
+# %% Compute pair-average reflectance loss after clean state to avoid morning-evening recoveries
+
+sim_data_total,reflect_data_total = smu.average_experiment_data(sim_data_total,reflect_data_total)
+
+for ii in range(len(reflect_data_total.times)):
+    if len(reflect_data_total.average[ii])>2:   # if less or equal to 2, the resulting array would only include the starting point
+        fig,ax = plot_experiment_PA(sim_data_total,reflect_data_total,ii)
+
+
 # %% Plot reflectance losses in each interval
 for m,mir in enumerate(train_mirrors):
     for exp in sim_data_total.time.keys():
@@ -286,9 +295,10 @@ _,_,_ = imodel_constant.plot_soiling_factor(    sim_data_train,
 
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
-file_inds = np.arange(len(files))
+file_inds = np.arange(len(reflect_data_total.file_name))
 imodel = smu.set_extinction_coefficients(imodel,ext_weights,file_inds)
 
+# %%
 fig,ax = plot_for_paper(    imodel,reflect_data_total,
                             sim_data_total,
                             train_experiments,

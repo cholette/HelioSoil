@@ -53,8 +53,9 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
                 idxs = idxs[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
             idxs = idxs[0] # take first since all predictions are the same
-            ts = sdat.time[e].values
+            ts = sdat.time[e].values[0:rdat.prediction_indices[e][-1]]
             ts = (ts-ts[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
+            print(len(ts))
             
             for kk in idx: # reflectance data
                 m = rdat.average[e][:,kk].squeeze().copy()
@@ -74,12 +75,13 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                     a.patch.set_alpha(0.2)
             
             
-            ym = r0*mod.helios.soiling_factor[e][idxs,:] # ensure columns are time index
+            ym = r0*mod.helios.soiling_factor[e][idxs,0:rdat.prediction_indices[e][-1]] # ensure columns are time index
+            print(len(ym))
             if ym.ndim == 1:
                 ym += (1.0-ym[0])
             else:
                 ym += (1.0-ym[:,0])
-            var_predict = mod.helios.soiling_factor_prediction_variance[e][idxs,:]
+            var_predict = mod.helios.soiling_factor_prediction_variance[e][idxs,0:rdat.prediction_indices[e][-1]]
             sigma_predict = r0*np.sqrt(var_predict)
             Lp = ym - 1.96*sigma_predict
             Up = ym + 1.96*sigma_predict
@@ -93,9 +95,10 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                 ax[jj,ii].set_title(f"Tilt: {t:.0f}"+r"$^{\circ}$")
             
     
-        dust_conc = sdat.dust_concentration[e]
-        ws = sdat.wind_speed[e]
-        dust_type = sdat.dust_type[e]
+        new_var = sdat.dust_concentration[e][0:rdat.prediction_indices[e][-1]]
+        dust_conc = new_var
+        ws = sdat.wind_speed[e][0:rdat.prediction_indices[e][-1]]
+        dust_type = sdat.dust_type[e][0:rdat.prediction_indices[e][-1]]
         if plot_rh:
             a2 = ax[-2,ii]
         else:

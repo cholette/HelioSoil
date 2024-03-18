@@ -203,8 +203,70 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
     
     return sim_dat,ref_dat
 
-def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,sheet_name=None,\
-    output_file_format="sample_{0:d}.xlsx",dt=np.timedelta64(3600,'s'),verbose=True):
+def average_experiment_data(simulation_data,reflectance_data):
+    """
+    This function computes the average among each pair of subsequent measurements,
+    leaving the clean value untouched and deleting the last one if the remaining
+    number of measurements is odd. It also computes the average between the two measurements time
+    and the pooled standard deviation of the measurements.
+    """
+
+    sim_dat = deepcopy(simulation_data)
+    ref_dat = deepcopy(reflectance_data)
+    files = ref_dat.times.keys()
+
+    for f in files:
+        if len(ref_dat.times[f][1:])%2 == 0:
+            times = ref_dat.times[f][1:].reshape(-1, 2)[:,0]+ \
+                np.squeeze(np.diff(ref_dat.times[f][1:].reshape(-1, 2),axis = 1))/2
+            refs = np.mean(ref_dat.average[f][1:,:].T.\
+                reshape(ref_dat.average[f].shape[1],-1,2),axis=2)
+            sigpool = np.sqrt(np.sum(ref_dat.sigma[f][1:,:].T.\
+                reshape(ref_dat.sigma[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
+            sigpool_mean = np.sqrt(np.sum(ref_dat.sigma_of_the_mean[f][1:,:].T.\
+                reshape(ref_dat.sigma_of_the_mean[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
+        else:
+            times = ref_dat.times[f][1:-1].reshape(-1, 2)[:,0]+ \
+                np.squeeze(np.diff(ref_dat.times[f][1:-1].reshape(-1, 2),axis = 1))/2
+            refs = np.mean(ref_dat.average[f][1:-1,:].T.\
+                reshape(ref_dat.average[f].shape[1],-1,2),axis=2)            
+            sigpool = np.sqrt(np.sum(ref_dat.sigma[f][1:-1,:].T.\
+                reshape(ref_dat.sigma[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
+            sigpool_mean = np.sqrt(np.sum(ref_dat.sigma_of_the_mean[f][1:-1,:].T.\
+                reshape(ref_dat.sigma_of_the_mean[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
+
+        ref_dat.times[f] = np.insert(times,0,ref_dat.times[f][0])
+        ref_dat.average[f] = np.insert(refs.T, 0, ref_dat.rho0[f], axis=0)
+        ref_dat.sigma[f] = np.insert(np.squeeze(sigpool.T,axis=0),0,ref_dat.sigma[f][0], axis=0)
+        ref_dat.sigma_of_the_mean[f] = np.insert(np.squeeze(sigpool_mean.T,axis=0),0,ref_dat.sigma_of_the_mean[f][0], axis=0)
+
+        ref_dat.prediction_indices[f] = []
+        ref_dat.prediction_times[f] = []
+        for m in ref_dat.times[f]:
+            ref_dat.prediction_indices[f].append(np.argmin(np.abs(m-sim_dat.time[f])))        
+            ref_dat.prediction_times[f].append(sim_dat.time[f][ref_dat.prediction_indices[f]])
+
+    ref_temp = deepcopy(ref_dat)
+
+    for key,value in ref_temp.times.items():
+        if len(value)<2:
+            print(key)
+            for a,b in vars(ref_dat).items():
+                del b[key]
+            for c,d in vars(sim_dat).items():
+                try:
+                    iter(d)
+                    if key in d:
+                        del d[key]
+                except TypeError:
+                    print('non iterable')
+
+    del ref_temp
+    return sim_dat,ref_dat
+
+def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,\
+                             sheet_name=None,output_file_format="sample_{0:d}.xlsx",\
+                             dt=np.timedelta64(3600,'s'),verbose=True):
 
     # load in historical data files into a single pandas dataframe
     df = pd.DataFrame()
