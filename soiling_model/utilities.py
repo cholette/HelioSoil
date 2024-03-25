@@ -293,6 +293,9 @@ def average_experiment_data(simulation_data,reflectance_data):
 
 def daily_average(ref_dat,time_grids,dt=None):
 
+    # prediction indeces and times
+    # tilts
+
     ref_dat_new = deepcopy(ref_dat)
     num_files = len(ref_dat.file_name)
     for f in range(num_files):
@@ -300,7 +303,7 @@ def daily_average(ref_dat,time_grids,dt=None):
         df = pd.DataFrame({"times":ref_dat.times[f],
                            "day":ref_dat.times[f].astype('datetime64[D]')})
         times = df.groupby('day')['times'].mean().values
-        ref_dat_new.tilts[f] = [] # the averaging for the tilts needs to be done seperately
+        # ref_dat_new.tilts[f] = [] # the averaging for the tilts needs to be done seperately
         if dt is None:
             ref_dat_new.times[f] = times
         else:
@@ -328,9 +331,17 @@ def daily_average(ref_dat,time_grids,dt=None):
             ref_dat_new.average[f][:,ii] = daily.mean().average.values
             ref_dat_new.prediction_indices[f] = []
             ref_dat_new.prediction_times[f] = []
+            
+            # handle case when time_grids is a pandas something
+            if isinstance(time_grids[f],(pd.Series,pd.DataFrame)):
+                tg = time_grids[f].values
+            else:
+                tg = deepcopy(time_grids[f])
+
             for m in ref_dat_new.times[f]:
-                ref_dat_new.prediction_indices[f].append(np.argmin(np.abs(m-time_grids[f])))        
-            ref_dat_new.prediction_times[f].append(time_grids[f][ref_dat_new.prediction_indices[f]])
+                idx = np.argmin(np.abs(m-tg))
+                ref_dat_new.prediction_indices[f].append(idx)        
+            ref_dat_new.prediction_times[f].append(tg[ref_dat_new.prediction_indices[f]])
 
     return ref_dat_new
             
