@@ -216,35 +216,61 @@ def average_experiment_data(simulation_data,reflectance_data):
     files = ref_dat.times.keys()
 
     for f in files:
-        if len(ref_dat.times[f][1:])%2 == 0:
-            times = ref_dat.times[f][1:].reshape(-1, 2)[:,0]+ \
-                np.squeeze(np.diff(ref_dat.times[f][1:].reshape(-1, 2),axis = 1))/2
-            refs = np.mean(ref_dat.average[f][1:,:].T.\
-                reshape(ref_dat.average[f].shape[1],-1,2),axis=2)
-            sigpool = np.sqrt(np.sum(ref_dat.sigma[f][1:,:].T.\
-                reshape(ref_dat.sigma[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
-            sigpool_mean = np.sqrt(np.sum(ref_dat.sigma_of_the_mean[f][1:,:].T.\
-                reshape(ref_dat.sigma_of_the_mean[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
-        else:
-            times = ref_dat.times[f][1:-1].reshape(-1, 2)[:,0]+ \
-                np.squeeze(np.diff(ref_dat.times[f][1:-1].reshape(-1, 2),axis = 1))/2
-            refs = np.mean(ref_dat.average[f][1:-1,:].T.\
-                reshape(ref_dat.average[f].shape[1],-1,2),axis=2)            
-            sigpool = np.sqrt(np.sum(ref_dat.sigma[f][1:-1,:].T.\
-                reshape(ref_dat.sigma[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
-            sigpool_mean = np.sqrt(np.sum(ref_dat.sigma_of_the_mean[f][1:-1,:].T.\
-                reshape(ref_dat.sigma_of_the_mean[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
+        
+        if reflectance_data is not None:
+            if len(ref_dat.times[f][1:])%2 == 0:
+                times = ref_dat.times[f][1:].reshape(-1, 2)[:,0]+ \
+                    np.squeeze(np.diff(ref_dat.times[f][1:].reshape(-1, 2),axis = 1))/2
+                refs = np.mean(ref_dat.average[f][1:,:].T.\
+                    reshape(ref_dat.average[f].shape[1],-1,2),axis=2)
+                sigpool = np.sqrt(np.sum(ref_dat.sigma[f][1:,:].T.\
+                    reshape(ref_dat.sigma[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
+                sigpool_mean = np.sqrt(np.sum(ref_dat.sigma_of_the_mean[f][1:,:].T.\
+                    reshape(ref_dat.sigma_of_the_mean[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
+            else:
+                times = ref_dat.times[f][1:-1].reshape(-1, 2)[:,0]+ \
+                    np.squeeze(np.diff(ref_dat.times[f][1:-1].reshape(-1, 2),axis = 1))/2
+                refs = np.mean(ref_dat.average[f][1:-1,:].T.\
+                    reshape(ref_dat.average[f].shape[1],-1,2),axis=2)            
+                sigpool = np.sqrt(np.sum(ref_dat.sigma[f][1:-1,:].T.\
+                    reshape(ref_dat.sigma[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
+                sigpool_mean = np.sqrt(np.sum(ref_dat.sigma_of_the_mean[f][1:-1,:].T.\
+                    reshape(ref_dat.sigma_of_the_mean[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
 
-        ref_dat.times[f] = np.insert(times,0,ref_dat.times[f][0])
-        ref_dat.average[f] = np.insert(refs.T, 0, ref_dat.rho0[f], axis=0)
-        ref_dat.sigma[f] = np.insert(np.squeeze(sigpool.T,axis=0),0,ref_dat.sigma[f][0], axis=0)
-        ref_dat.sigma_of_the_mean[f] = np.insert(np.squeeze(sigpool_mean.T,axis=0),0,ref_dat.sigma_of_the_mean[f][0], axis=0)
+            ref_dat.times[f] = np.insert(times,0,ref_dat.times[f][0])
+            ref_dat.average[f] = np.insert(refs.T, 0, ref_dat.rho0[f], axis=0)
+            ref_dat.sigma[f] = np.insert(np.squeeze(sigpool.T,axis=0),0,ref_dat.sigma[f][0], axis=0)
+            ref_dat.sigma_of_the_mean[f] = np.insert(np.squeeze(sigpool_mean.T,axis=0),0,ref_dat.sigma_of_the_mean[f][0], axis=0)
 
-        ref_dat.prediction_indices[f] = []
-        ref_dat.prediction_times[f] = []
-        for m in ref_dat.times[f]:
-            ref_dat.prediction_indices[f].append(np.argmin(np.abs(m-sim_dat.time[f])))        
-            ref_dat.prediction_times[f].append(sim_dat.time[f][ref_dat.prediction_indices[f]])
+            ref_dat.prediction_indices[f] = []
+            ref_dat.prediction_times[f] = []
+            for m in ref_dat.times[f]:
+                ref_dat.prediction_indices[f].append(np.argmin(np.abs(m-sim_dat.time[f])))        
+                ref_dat.prediction_times[f].append(sim_dat.time[f][ref_dat.prediction_indices[f]])
+
+        lb = ref_dat.times[f][0]
+        ub = ref_dat.times[f][-1]
+        mask = (sim_dat.time[f]>=lb) & (sim_dat.time[f]<=ub)
+        mask_ref = np.tile(mask.to_numpy().reshape(1,-1).astype(bool),(ref_dat.tilts[f].shape[0],1))
+        if all(mask==0):
+            raise ValueError(f"Provided date range of {lb} to {ub} for file {sim_dat.file_name[f]} excludes all data.")
+            
+        if len(ref_dat.tilts)>0:
+            ref_dat.tilts[f] = ref_dat.tilts[f][mask_ref]
+        sim_dat.time[f] = sim_dat.time[f][mask]
+        sim_dat.time_diff[f] = sim_dat.time_diff[f][mask]
+        sim_dat.air_temp[f] = sim_dat.air_temp[f][mask]
+        sim_dat.wind_speed[f] = sim_dat.wind_speed[f][mask]
+        sim_dat.dust_concentration[f] = sim_dat.dust_concentration[f][mask]
+        if len(sim_dat.rain_intensity)>0:
+            sim_dat.rain_intensity[f] = sim_dat.rain_intensity[f][mask]
+        if len(sim_dat.dni)>0:
+            sim_dat.dni[f] = sim_dat.dni[f][mask]
+        if len(sim_dat.relative_humidity)>0:
+            sim_dat.relative_humidity[f] = sim_dat.relative_humidity[f][mask]
+        if len(sim_dat.wind_direction)>0:
+            sim_dat.wind_direction[f] = sim_dat.wind_direction[f][mask]
+
 
     ref_temp = deepcopy(ref_dat)
 
@@ -262,7 +288,54 @@ def average_experiment_data(simulation_data,reflectance_data):
                     print('non iterable')
 
     del ref_temp
+
     return sim_dat,ref_dat
+
+def daily_average(ref_dat,time_grids,dt=None):
+
+    ref_dat_new = deepcopy(ref_dat)
+    num_files = len(ref_dat.file_name)
+    for f in range(num_files):
+        num_mirrors = ref_dat.average[f].shape[1]
+        df = pd.DataFrame({"times":ref_dat.times[f],
+                           "day":ref_dat.times[f].astype('datetime64[D]')})
+        times = df.groupby('day')['times'].mean().values
+        ref_dat_new.tilts[f] = [] # the averaging for the tilts needs to be done seperately
+        if dt is None:
+            ref_dat_new.times[f] = times
+        else:
+            ref_dat_new.times[f] = times.astype(f'datetime64[{int(dt[f])}s]')
+
+        num_times = len(times)
+        ref_dat_new.sigma[f] = np.zeros((num_times,num_mirrors))
+        ref_dat_new.average[f] = np.zeros((num_times,num_mirrors))
+        ref_dat_new.sigma_of_the_mean[f] = np.zeros((num_times,num_mirrors))
+        for ii in range(num_mirrors):
+            df = pd.DataFrame( {"average":ref_dat.average[f][:,ii],
+                                "sigma": ref_dat.sigma[f][:,ii],
+                                "day":ref_dat.times[f].astype('datetime64[D]')
+                                })
+            
+            daily = df.groupby("day")
+            N = daily.count()['sigma'].values
+            sum_var = df.groupby('day')['sigma'].apply(lambda x: sum(x**2)).values
+            ref_dat_new.sigma[f][:,ii] = np.sqrt(sum_var/N) # pooled variance
+            
+            ref_dat_new.sigma_of_the_mean[f][:,ii] = (ref_dat_new.sigma[f][:,ii] / 
+                                np.sqrt(ref_dat_new.number_of_measurements[f])
+            )
+
+            ref_dat_new.average[f][:,ii] = daily.mean().average.values
+            ref_dat_new.prediction_indices[f] = []
+            ref_dat_new.prediction_times[f] = []
+            for m in ref_dat_new.times[f]:
+                ref_dat_new.prediction_indices[f].append(np.argmin(np.abs(m-time_grids[f])))        
+            ref_dat_new.prediction_times[f].append(time_grids[f][ref_dat_new.prediction_indices[f]])
+
+    return ref_dat_new
+            
+
+    
 
 def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,\
                              sheet_name=None,output_file_format="sample_{0:d}.xlsx",\

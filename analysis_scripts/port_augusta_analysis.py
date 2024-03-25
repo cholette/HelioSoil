@@ -12,7 +12,8 @@ import soiling_model.utilities as smu
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from paper_specific_utilities import plot_for_paper, daily_soiling_rate, \
-                                    fit_quality_plots, summarize_fit_quality
+                                     fit_quality_plots, summarize_fit_quality, \
+                                     plot_experiment_PA
 import scipy.stats as sps
 
 pad = 0.05
@@ -34,7 +35,7 @@ parameter_file = d+"parameters_port_augusta_experiments.xlsx"
 files,training_intervals,mirror_name_list,all_mirrors = \
     smu.get_training_data(  d,"PortAugusta_Data_",
                             time_to_remove_at_end=time_to_remove_at_end)
-training_intervals[0][1] -= np.datetime64(36,'h')
+# training_intervals[0][1] -= np.datetime64(36,'h')
 
 orientation = [ [s[1]+s[2] for s in mirrors] for mirrors in mirror_name_list]
 
@@ -71,95 +72,15 @@ sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                                 "reflectance_data" 
                                                             )
 
-def plot_experiment_PA(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12)):
-    sim_data = simulation_inputs
-    reflect_data = reflectance_data
-    f = experiment_index
-
-    fig,ax = plt.subplots(nrows=3,sharex=True,figsize=figsize)
-    # fmt = r"${0:s}^\circ$"
-    fmt = "${0:s}$"
-    ave = reflect_data.average[f]
-    t = reflect_data.times[f]
-    std = reflect_data.sigma[f]
-    # names = ["M"+str(ii+1) for ii in range(ave.shape[1])]
-    names = ["SE1",	"SE2",	"SE3",	"SE4",	"SE5",	"NW1",	"NW2",	"NW3",	"NW4",	"NW5"]
-
-    for ii in range(ave.shape[1]):
-        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=fmt.format(names[ii]),marker='o',capsize=4.0)
-
-    ax[0].grid(True) 
-    label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data.reflectometer_incidence_angle[f]) 
-    ax[0].set_ylabel(label_str)
-    ax[0].legend(loc='upper left', bbox_to_anchor=(1, 1))
-    # ax[0].set_ylim(0.86, 0.97)
-
-    ax[1].plot(sim_data.time[f],sim_data.dust_concentration[f],color='brown',label="Measurements")
-    ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = "Average")
-    label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data.dust_type[0])
-    ax[1].set_ylabel(label_str,color='brown')
-    ax[1].tick_params(axis='y', labelcolor='brown')
-    ax[1].grid(True)
-    ax[1].legend()
-    title_str = dust_type + r" (mean = {0:.2f} $\mu g$/$m^3$)" 
-    ax[1].set_title(title_str.format(sim_data.dust_concentration[f].mean()),fontsize=10)
-    # ax[1].set_ylim(0,70)
-
-    # # Rain intensity, if available
-    # if len(sim_data.rain_intensity)>0: # rain intensity is not an empty dict
-    #     ax[2].plot(sim_data.time[f],sim_data.rain_intensity[f])
-    # else:
-    #     rain_nan = np.nan*np.ones(sim_data.time[f].shape)
-    #     ax[2].plot(sim_data.time[f],rain_nan)
-    
-    # ax[2].set_ylabel(r'Rain [mm/hour]',color='blue')
-    # ax[2].tick_params(axis='y', labelcolor='blue')
-    # YL = ax[2].get_ylim()
-    # ax[2].set_ylim((0,YL[1]))
-    # ax[2].grid(True)
-
-    ax[2].plot(sim_data.time[f],sim_data.wind_speed[f],color='green',label="Measurements")
-    ax[2].axhline(y=sim_data.wind_speed[f].mean(),color='green',ls='--',label = "Average")
-    label_str = r'Wind Speed [$m\,/\,s$]'
-    ax[2].set_ylabel(label_str,color='green')
-    ax[2].set_xlabel('Date')
-    ax[2].tick_params(axis='y', labelcolor='green')
-    ax[2].grid(True)
-    ax[2].legend()
-    title_str = "Wind Speed (mean = {0:.2f} m/s)".format(sim_data.wind_speed[f].mean())
-    ax[2].set_title(title_str,fontsize=10)
-    # ax[2].set_ylim(0,8)
-
-    # if len(sim_data.relative_humidity)>0: 
-    #     ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='black',label="measurements")
-    #     ax[4].axhline(y=sim_data.relative_humidity[f].mean(),color='black',ls='--',label = "Average")
-    # else:
-    #     rain_nan = np.nan*np.ones(sim_data.time[f].shape)
-    #     ax[4].plot(sim_data.time[f],rain_nan)
-    
-    # label_str = r'Relative Humidity [%]'
-    # ax[4].set_ylabel(label_str,color='black')
-    # ax[4].set_xlabel('Date')
-    # ax[4].tick_params(axis='y', labelcolor='black')
-    # ax[4].grid(True)
-    # ax[4].legend()
-    
-    if len(sim_data.wind_direction)>0: 
-        figwr,axwr = smu.wind_rose(sim_data,f)
-        figwr.tight_layout()
-
-    fig.autofmt_xdate()
-    fig.tight_layout()
-
-    return fig,ax
-    
-
-
 for ii,experiment in enumerate(train_experiments):
-    fig,ax = plot_experiment_PA(sim_data_train,reflect_data_train,ii)
-    # fig.suptitle(f"Training Data for file {files[experiment]}")
-    # fig,ax = smu.wind_rose(sim_data_train,ii)
-    # ax.set_title(f"Wind for file {files[experiment]}")
+    if any("augusta".lower() in value.lower() for value in sim_data_train.file_name.values()):
+        fig,ax = plot_experiment_PA(sim_data_train,reflect_data_train,ii)
+    else:
+        plot_for_paper(sim_data_train,reflect_data_train,ii)
+
+    fig.suptitle(f"Training Data for file {files[experiment]}")
+    fig,ax = smu.wind_rose(sim_data_train,ii)
+    ax.set_title(f"Wind for file {files[experiment]}")
 
 # %% Load and trim total data
 sim_data_total = smb.simulation_inputs( files,
@@ -183,19 +104,29 @@ sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
                                                             )
 
 for ii,experiment in enumerate(sim_data_total.dt.keys()):
-    fig,ax = plot_experiment_PA(sim_data_total,reflect_data_total,ii)
+    if any("augusta".lower() in value.lower() for value in sim_data_total.file_name.values()):
+            fig,ax = plot_experiment_PA(sim_data_total,reflect_data_total,ii)
+    else:
+        fig,ax = plot_for_paper(sim_data_total,reflect_data_total,ii)
     # fig.suptitle(f"Testing Data for file {files[experiment]}")
     fig,ax = smu.wind_rose(sim_data_total,ii)
     ax.set_title(f"Wind for file {files[experiment]}")
 
+# %% 
+reflect_data_train = smu.daily_average(reflect_data_train,sim_data_train.time,sim_data_train.dt)
+reflect_data_total = smu.daily_average(reflect_data_total,sim_data_total.time,sim_data_total.dt)
+
 # %% Compute pair-average reflectance loss after clean state to avoid morning-evening recoveries
 
-sim_data_total,reflect_data_total = smu.average_experiment_data(sim_data_total,reflect_data_total)
+# sim_data_train,reflect_data_train = smu.average_experiment_data(sim_data_train,reflect_data_train)  
+# sim_data_total,reflect_data_total = smu.average_experiment_data(sim_data_total,reflect_data_total)
 
 for ii in range(len(reflect_data_total.times)):
     if len(reflect_data_total.average[ii])>2:   # if less or equal to 2, the resulting array would only include the starting point
-        fig,ax = plot_experiment_PA(sim_data_total,reflect_data_total,ii)
-
+        if any("augusta".lower() in value.lower() for value in sim_data_total.file_name.values()):
+            fig,ax = plot_experiment_PA(sim_data_total,reflect_data_total,ii)
+        else:
+            fig,ax = plot_for_paper(sim_data_total,reflect_data_total,ii)
 
 # %% Plot reflectance losses in each interval
 for m,mir in enumerate(train_mirrors):
@@ -298,7 +229,6 @@ imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_sur
 file_inds = np.arange(len(reflect_data_total.file_name))
 imodel = smu.set_extinction_coefficients(imodel,ext_weights,file_inds)
 
-# %%
 fig,ax = plot_for_paper(    imodel,reflect_data_total,
                             sim_data_total,
                             train_experiments,

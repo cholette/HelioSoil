@@ -55,7 +55,6 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             idxs = idxs[0] # take first since all predictions are the same
             ts = sdat.time[e].values[0:rdat.prediction_indices[e][-1]]
             ts = (ts-ts[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
-            print(len(ts))
             
             for kk in idx: # reflectance data
                 m = rdat.average[e][:,kk].squeeze().copy()
@@ -76,7 +75,6 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             
             
             ym = r0*mod.helios.soiling_factor[e][idxs,0:rdat.prediction_indices[e][-1]] # ensure columns are time index
-            print(len(ym))
             if ym.ndim == 1:
                 ym += (1.0-ym[0])
             else:
@@ -170,6 +168,84 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
     fig.tight_layout()
     return fig,ax
 
+def plot_experiment_PA(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12)):
+    sim_data = simulation_inputs
+    reflect_data = reflectance_data
+    f = experiment_index
+
+    fig,ax = plt.subplots(nrows=3,sharex=True,figsize=figsize)
+    # fmt = r"${0:s}^\circ$"
+    fmt = "${0:s}$"
+    ave = reflect_data.average[f]
+    t = reflect_data.times[f]
+    std = reflect_data.sigma[f]
+    # names = ["M"+str(ii+1) for ii in range(ave.shape[1])]
+    names = ["SE1",	"SE2",	"SE3",	"SE4",	"SE5",	"NW1",	"NW2",	"NW3",	"NW4",	"NW5"]
+
+    for ii in range(ave.shape[1]):
+        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=fmt.format(names[ii]),marker='o',capsize=4.0)
+
+    ax[0].grid(True) 
+    label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data.reflectometer_incidence_angle[f]) 
+    ax[0].set_ylabel(label_str)
+    ax[0].legend(loc='upper left', bbox_to_anchor=(1, 1))
+    # ax[0].set_ylim(0.86, 0.97)
+
+    ax[1].plot(sim_data.time[f],sim_data.dust_concentration[f],color='brown',label="Measurements")
+    ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = "Average")
+    label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data.dust_type[0])
+    ax[1].set_ylabel(label_str,color='brown')
+    ax[1].tick_params(axis='y', labelcolor='brown')
+    ax[1].grid(True)
+    ax[1].legend()
+    title_str = sim_data.dust_type[f] + r" (mean = {0:.2f} $\mu g$/$m^3$)" 
+    ax[1].set_title(title_str.format(sim_data.dust_concentration[f].mean()),fontsize=10)
+    # ax[1].set_ylim(0,70)
+
+    # # Rain intensity, if available
+    # if len(sim_data.rain_intensity)>0: # rain intensity is not an empty dict
+    #     ax[2].plot(sim_data.time[f],sim_data.rain_intensity[f])
+    # else:
+    #     rain_nan = np.nan*np.ones(sim_data.time[f].shape)
+    #     ax[2].plot(sim_data.time[f],rain_nan)
+    
+    # ax[2].set_ylabel(r'Rain [mm/hour]',color='blue')
+    # ax[2].tick_params(axis='y', labelcolor='blue')
+    # YL = ax[2].get_ylim()
+    # ax[2].set_ylim((0,YL[1]))
+    # ax[2].grid(True)
+
+    ax[2].plot(sim_data.time[f],sim_data.wind_speed[f],color='green',label="Measurements")
+    ax[2].axhline(y=sim_data.wind_speed[f].mean(),color='green',ls='--',label = "Average")
+    label_str = r'Wind Speed [$m\,/\,s$]'
+    ax[2].set_ylabel(label_str,color='green')
+    ax[2].set_xlabel('Date')
+    ax[2].tick_params(axis='y', labelcolor='green')
+    ax[2].grid(True)
+    ax[2].legend()
+    title_str = "Wind Speed (mean = {0:.2f} m/s)".format(sim_data.wind_speed[f].mean())
+    ax[2].set_title(title_str,fontsize=10)
+    # ax[2].set_ylim(0,8)
+
+    # if len(sim_data.relative_humidity)>0: 
+    #     ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='black',label="measurements")
+    #     ax[4].axhline(y=sim_data.relative_humidity[f].mean(),color='black',ls='--',label = "Average")
+    # else:
+    #     rain_nan = np.nan*np.ones(sim_data.time[f].shape)
+    #     ax[4].plot(sim_data.time[f],rain_nan)
+    
+    # label_str = r'Relative Humidity [%]'
+    # ax[4].set_ylabel(label_str,color='black')
+    # ax[4].set_xlabel('Date')
+    # ax[4].tick_params(axis='y', labelcolor='black')
+    # ax[4].grid(True)
+    # ax[4].legend()
+    
+    fig.autofmt_xdate()
+    fig.tight_layout()
+
+    return fig,ax
+
 def soiling_rate(alphas: np.ndarray,
                  alphas2: np.ndarray,
                  save_file: str,
@@ -261,6 +337,7 @@ def fit_quality_plots(mod,rdat,files,mirrors,ax=None,min_loss=None,max_loss=None
         mm = meas[f][:,mirrors]
         sfm = sf[f][mirrors,:]
         if cumulative:
+            print(f)
             cumulative_loss = 100*(r0[f][mirrors]-mm)
             cumulative_loss -= cumulative_loss[0,:]
             cumulative_loss_prediction = 100*r0[f][mirrors][:,np.newaxis]*(1-sfm[:,pi[f]])
@@ -320,6 +397,7 @@ def summarize_fit_quality(model,ref,train_experiments,train_mirrors,
     fig,ax = plt.subplots(nrows=1,ncols=3,
                           sharex=True,sharey=True,
                           figsize=figsize)
+    print('1')
     fit_quality_plots(model,
                     ref,
                     train_experiments,
@@ -328,7 +406,8 @@ def summarize_fit_quality(model,ref,train_experiments,train_mirrors,
                     min_loss=min_loss,
                     max_loss=max_loss,
                     include_fits=include_fits)
-
+    
+    print('2')
     fit_quality_plots(model,
                     ref,
                     train_experiments,
@@ -338,6 +417,7 @@ def summarize_fit_quality(model,ref,train_experiments,train_mirrors,
                     max_loss=max_loss,
                     include_fits=include_fits)
 
+    print('3')
     fit_quality_plots(model,
                         ref,
                         test_experiments,

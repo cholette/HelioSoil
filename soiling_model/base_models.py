@@ -1178,9 +1178,9 @@ class reflectance_measurements:
         reflectance_files = _ensure_list(reflectance_files)
         N_experiments = len(reflectance_files)
         if number_of_measurements == None:
-            number_of_measurements = [1.0]*N_experiments
+            self.number_of_measurements = [1.0]*N_experiments
         else:
-            number_of_measurements = _import_option_helper(reflectance_files,number_of_measurements)
+            self.number_of_measurements = _import_option_helper(reflectance_files,number_of_measurements)
 
         
         if reflectometer_incidence_angle == None:
@@ -1207,13 +1207,14 @@ class reflectance_measurements:
 
         if import_tilts:
             self.tilts = {}
-        self.import_reflectance_data(reflectance_files,time_grids,number_of_measurements,
-                                reflectometer_incidence_angle,reflectometer_acceptance_angle,
-                                import_tilts=import_tilts,column_names_to_import=column_names_to_import)
+            
+        self.import_reflectance_data(reflectance_files,time_grids,reflectometer_incidence_angle,
+                                     reflectometer_acceptance_angle,import_tilts=import_tilts,
+                                     column_names_to_import=column_names_to_import)
         
-    def import_reflectance_data(self,reflectance_files,time_grids,number_of_measurements,
-                                reflectometer_incidence_angle,reflectometer_acceptance_angle,
-                                import_tilts=False,column_names_to_import=None):
+    def import_reflectance_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
+                                reflectometer_acceptance_angle,import_tilts=False,
+                                column_names_to_import=None):
 
         for ii in range(len(reflectance_files)):
             
@@ -1240,7 +1241,7 @@ class reflectance_measurements:
 
             # idx = reflectance_files.index(f) 
             self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
-            self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(number_of_measurements[ii])
+            self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(self.number_of_measurements[ii])
             self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
 
             if import_tilts:
