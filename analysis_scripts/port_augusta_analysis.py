@@ -12,8 +12,7 @@ import soiling_model.utilities as smu
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from paper_specific_utilities import plot_for_paper, daily_soiling_rate, \
-                                     fit_quality_plots, summarize_fit_quality, \
-                                     plot_experiment_PA
+                                     fit_quality_plots, summarize_fit_quality
 import scipy.stats as sps
 
 pad = 0.05
@@ -74,9 +73,9 @@ sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
 
 for ii,experiment in enumerate(train_experiments):
     if any("augusta".lower() in value.lower() for value in sim_data_train.file_name.values()):
-        fig,ax = plot_experiment_PA(sim_data_train,reflect_data_train,ii)
+        fig,ax = smu.plot_experiment_PA(sim_data_train,reflect_data_train,ii)
     else:
-        plot_for_paper(sim_data_train,reflect_data_train,ii)
+        smu.plot_experiment_data(sim_data_train,reflect_data_train,ii)
 
     fig.suptitle(f"Training Data for file {files[experiment]}")
     fig,ax = smu.wind_rose(sim_data_train,ii)
@@ -105,9 +104,9 @@ sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
 
 for ii,experiment in enumerate(sim_data_total.dt.keys()):
     if any("augusta".lower() in value.lower() for value in sim_data_total.file_name.values()):
-            fig,ax = plot_experiment_PA(sim_data_total,reflect_data_total,ii)
+            fig,ax = smu.plot_experiment_PA(sim_data_total,reflect_data_total,ii)
     else:
-        fig,ax = plot_for_paper(sim_data_total,reflect_data_total,ii)
+        fig,ax = smu.plot_experiment_data(sim_data_total,reflect_data_total,ii)
     # fig.suptitle(f"Testing Data for file {files[experiment]}")
     fig,ax = smu.wind_rose(sim_data_total,ii)
     ax.set_title(f"Wind for file {files[experiment]}")
@@ -124,9 +123,9 @@ reflect_data_total = smu.daily_average(reflect_data_total,sim_data_total.time,si
 for ii in range(len(reflect_data_total.times)):
     if len(reflect_data_total.average[ii])>2:   # if less or equal to 2, the resulting array would only include the starting point
         if any("augusta".lower() in value.lower() for value in sim_data_total.file_name.values()):
-            fig,ax = plot_experiment_PA(sim_data_total,reflect_data_total,ii)
+            fig,ax = smu.plot_experiment_PA(sim_data_total,reflect_data_total,ii)
         else:
-            fig,ax = plot_for_paper(sim_data_total,reflect_data_total,ii)
+            fig,ax = smu.plot_experiment_data(sim_data_total,reflect_data_total,ii)
 
 # %% Plot reflectance losses in each interval
 for m,mir in enumerate(train_mirrors):

@@ -5,34 +5,39 @@ os.sys.path.append(main_directory)
 
 # %% modules
 import numpy as np
+import pandas as pd
 import soiling_model.base_models as smb
 import soiling_model.fitting as smf
 import soiling_model.utilities as smu
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from paper_specific_utilities import plot_for_paper, daily_soiling_rate, \
-                                    fit_quality_plots, summarize_fit_quality
+                                     fit_quality_plots, summarize_fit_quality, \
+                                     plot_experiment_PA
 import scipy.stats as sps
 
 pad = 0.05
-sp_save_file = f"{main_directory}/results/sp_fitting_results_mount_isa"
-cm_save_file = f"{main_directory}/results/cm_fitting_results_mount_isa"
+sp_save_file = f"{main_directory}/results/sp_fitting_results_mildura"
+cm_save_file = f"{main_directory}/results/cm_fitting_results_mildura"
 reflectometer_incidence_angle = 15 # [deg] angle of incidence of reflectometer
 reflectometer_acceptance_angle = 12.5e-3 # [rad] half acceptance angle of reflectance measurements
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
-d = f"{main_directory}/data/mount_isa/"
+d = f"{main_directory}/data/mildura/"
 time_to_remove_at_end = [0,0,0,0,0,0]
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
-train_mirrors = ["ON_M1_T00"] # which mirrors within the experiments are used for 
+train_mirrors = ["ON_M1_T00"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for 
+# train_mirrors = ["OSE_M3_T30"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for 
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
-dust_type = "TSP"
+dust_type = "PM10"
 
 # %% Get file list and time intervals. Import training data.
 parameter_file = d+"parameters_mildura_experiments.xlsx"
 files,training_intervals,mirror_name_list,all_mirrors = \
     smu.get_training_data(  d,"Mildura_Data_",
                             time_to_remove_at_end=time_to_remove_at_end)
-orientation = [ [s[1] for s in mirrors] for mirrors in mirror_name_list]
+# training_intervals[0][1] -= np.datetime64(36,'h')
+
+orientation = [ [s[1]+s[2] for s in mirrors] for mirrors in mirror_name_list]
 
 Nfiles = len(files)
 extract = lambda x,ind: [x[ii] for ii in ind]
@@ -50,7 +55,7 @@ sim_data_train = smb.simulation_inputs( files_train,
                                         )
 reflect_data_train = smb.reflectance_measurements(  files_train,
                                                     sim_data_train.time,
-                                                    number_of_measurements=9.0,
+                                                    number_of_measurements=6.0,
                                                     reflectometer_incidence_angle=reflectometer_incidence_angle,
                                                     reflectometer_acceptance_angle=reflectometer_acceptance_angle,
                                                     import_tilts=True,
@@ -66,11 +71,90 @@ sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                                 reflect_data_train,
                                                                 "reflectance_data" 
                                                             )
+# %%
 for ii,experiment in enumerate(train_experiments):
-    fig,ax = smu.plot_experiment_data(sim_data_train,reflect_data_train,ii)
+    if any("augusta".lower() in value.lower() for value in sim_data_train.file_name.values()):
+        fig,ax = smu.plot_experiment_PA(sim_data_train,reflect_data_train,ii)
+    else:
+        smu.plot_experiment_data(sim_data_train,reflect_data_train,ii)
+
     fig.suptitle(f"Training Data for file {files[experiment]}")
-    # fig,ax = smu.wind_rose(sim_data_train,ii)
-    # ax.set_title(f"Wind for file {files[experiment]}")
+    fig,ax = smu.wind_rose(sim_data_train,ii)
+    ax.set_title(f"Wind for file {files[experiment]}")
+
+# %% Load and trim total data
+sim_data_total = smb.simulation_inputs( files,
+                                        k_factors=k_factor,
+                                        dust_type=dust_type
+                                        )
+
+reflect_data_total = smb.reflectance_measurements(  files,
+                                                    sim_data_total.time,
+                                                    number_of_measurements=6.0,
+                                                    reflectometer_incidence_angle=reflectometer_incidence_angle,
+                                                    reflectometer_acceptance_angle=reflectometer_acceptance_angle,
+                                                    import_tilts=True,
+                                                    column_names_to_import=None
+                                                    )
+
+# %% Trim data and plot                                                           
+sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
+                                                                reflect_data_total,
+                                                                "reflectance_data" 
+                                                            )
+
+for ii,experiment in enumerate(sim_data_total.dt.keys()):
+    if any("augusta".lower() in value.lower() for value in sim_data_total.file_name.values()):
+            fig,ax = smu.plot_experiment_PA(sim_data_total,reflect_data_total,ii)
+    else:
+        fig,ax = smu.plot_experiment_data(sim_data_total,reflect_data_total,ii)
+    # fig.suptitle(f"Testing Data for file {files[experiment]}")
+    fig,ax = smu.wind_rose(sim_data_total,ii)
+    ax.set_title(f"Wind for file {files[experiment]}")
+
+# %% 
+reflect_data_train = smu.daily_average(reflect_data_train,sim_data_train.time,sim_data_train.dt)
+reflect_data_total = smu.daily_average(reflect_data_total,sim_data_total.time,sim_data_total.dt)
+
+# %% Compute pair-average reflectance loss after clean state to avoid morning-evening recoveries
+
+# sim_data_train,reflect_data_train = smu.average_experiment_data(sim_data_train,reflect_data_train)  
+# sim_data_total,reflect_data_total = smu.average_experiment_data(sim_data_total,reflect_data_total)
+
+for ii in range(len(reflect_data_total.times)):
+    if len(reflect_data_total.average[ii])>2:   # if less or equal to 2, the resulting array would only include the starting point
+        if any("augusta".lower() in value.lower() for value in sim_data_total.file_name.values()):
+            fig,ax = smu.plot_experiment_PA(sim_data_total,reflect_data_total,ii)
+        else:
+            fig,ax = smu.plot_experiment_data(sim_data_total,reflect_data_total,ii)
+
+# %% Plot reflectance losses in each interval
+for m,mir in enumerate(train_mirrors):
+    for exp in sim_data_total.time.keys():
+        diff_array_times = -np.diff(reflect_data_total.times[exp])
+        diff_days = -diff_array_times.astype('timedelta64[s]').astype('int')/3600/24
+        idx_mir = reflect_data_total.mirror_names[exp].index(mir)
+        diff_ref = -np.diff(reflect_data_total.average[exp][:,idx_mir],axis=0)
+        diff_rates = diff_ref*100/diff_days  # contain soiling rates for mir in training_mirrors
+
+        df_dust = pd.DataFrame({'Time': sim_data_total.time[exp],
+                                'Value':sim_data_total.dust_concentration[exp]})
+        retiming_vector = pd.to_datetime(reflect_data_total.times[exp])
+        df_dust['Interval'] = pd.cut(df_dust['Time'], bins=retiming_vector, right=False, labels=False)
+        df_dust_retime = pd.DataFrame({
+            'Time': retiming_vector[1:],
+            'Mean_TSP': df_dust.groupby('Interval')['Value'].mean().values,
+            'Soiling_Rate': diff_rates
+            })
+        df_sorted = df_dust_retime.sort_values(by='Mean_TSP')
+        print(df_dust_retime)
+        print(df_sorted)
+        plt.plot(df_sorted['Mean_TSP'], df_sorted['Soiling_Rate'], marker='o', linestyle='-', color='b')
+        # plt.hist(df_sorted['Soiling_Rate'], bins='auto', edgecolor='black')
+        plt.xlabel('Mean_TSP, µg/m3')
+        plt.ylabel('Soiling_Rate, %/day')
+        plt.title(f"Soiling Rates for {files[exp]}")
+        plt.show()
 
 # %% Set mirror angles and get extinction weights
 imodel.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
@@ -106,9 +190,10 @@ imodel.save(sp_save_file,
 _,_,_ = imodel.plot_soiling_factor( sim_data_train,
                             reflectance_data=reflect_data_train,
                             reflectance_std='mean',
-                            save_path=f"{main_directory}/results/mount_isa_sp_training",
+                            save_path=f"{main_directory}/results/port_augusta_sp_training",
                             # fig_title="On Training Data (semi-physical)",
-                            orientation_strings=orientation)
+                            orientation_strings=orientation,
+                            figsize=[12,6])
 
 # %% Fit constant mean model & plot on training data
 log_param_hat_con,log_param_cov_con = imodel_constant.fit_mle(  sim_data_train,
@@ -133,40 +218,15 @@ imodel_constant.save(cm_save_file,
 _,_,_ = imodel_constant.plot_soiling_factor(    sim_data_train,
                                         reflectance_data=reflect_data_train,
                                         reflectance_std='mean',
-                                        save_path=f"{main_directory}/results/mount_isa_cm_training",
+                                        save_path=f"{main_directory}/results/port_augusta_cm_training",
                                         # fig_title="On Training Data",
-                                        orientation_strings=orientation  )
+                                        orientation_strings=orientation,
+                                        figsize = [12,8]  )
 
-# %% Load and trim total data
-sim_data_total = smb.simulation_inputs( files,
-                                        k_factors=k_factor,
-                                        dust_type=dust_type
-                                        )
-
-reflect_data_total = smb.reflectance_measurements(  files,
-                                                    sim_data_total.time,
-                                                    number_of_measurements=9.0,
-                                                    reflectometer_incidence_angle=reflectometer_incidence_angle,
-                                                    reflectometer_acceptance_angle=reflectometer_acceptance_angle,
-                                                    import_tilts=True,
-                                                    column_names_to_import=None
-                                                    )
-
-# Trim data and plot                                                           
-sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
-                                                                reflect_data_total,
-                                                                "reflectance_data" 
-                                                            )
-
-for ii,experiment in enumerate(sim_data_total.dt.keys()):
-    fig,ax = smu.plot_experiment_data(sim_data_total,reflect_data_total,ii)
-    fig.suptitle(f"Testing Data for file {files[experiment]}")
-    fig,ax = smu.wind_rose(sim_data_total,ii)
-    ax.set_title(f"Wind for file {files[experiment]}")
 
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
-file_inds = np.arange(len(files))
+file_inds = np.arange(len(reflect_data_total.file_name))
 imodel = smu.set_extinction_coefficients(imodel,ext_weights,file_inds)
 
 fig,ax = plot_for_paper(    imodel,reflect_data_total,
@@ -227,7 +287,7 @@ ax.set_xlabel('Loss (percentage points)',fontsize=fsz+2)
 ax.legend(fontsize=fsz)
 
 fig.set_size_inches(5,4)
-fig.savefig(f"{main_directory}/results/losses_mount_isa.pdf",dpi=300,bbox_inches='tight',pad_inches=0)
+fig.savefig(f"{main_directory}/results/losses_port_augusta.pdf",dpi=300,bbox_inches='tight',pad_inches=0)
 
 # %% Highest only
 
@@ -251,7 +311,7 @@ ax.set_xlabel('Loss (percentage points)',fontsize=fsz+2)
 # ax.legend(fontsize=fsz)
 
 fig.set_size_inches(5,4)
-fig.savefig(f"{main_directory}/results/highest_losses_mount_isa.pdf",dpi=300,bbox_inches='tight',pad_inches=0)
+fig.savefig(f"{main_directory}/results/highest_losses_port_augusta.pdf",dpi=300,bbox_inches='tight',pad_inches=0)
 
 # %% Fit quality plots (semi-physical)
 mirror_idxs = list(range(len(all_mirrors)))
@@ -370,6 +430,12 @@ ax.legend(loc='lower right')
 ax.set_title("Loss change prediction quality assessment (semi-physical)")
 
 # %% Fit Quality plots (constant-mean)
+
+mirror_idxs = list(range(len(all_mirrors)))
+test_experiments = [f for f in list(range(len(files))) if f not in train_experiments]
+train_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] in train_mirrors]
+test_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] not in train_mirrors]
+
 fig,ax = summarize_fit_quality( imodel_constant,
                                 reflect_data_total,
                                 train_experiments,
@@ -480,3 +546,4 @@ fit_quality_plots(imodel_constant,
 
 ax.set_xlabel(r"Measured $\Delta$loss",fontsize=16)
 ax.set_ylabel(r"Predicted $\Delta$loss",fontsize=16)
+# %%
