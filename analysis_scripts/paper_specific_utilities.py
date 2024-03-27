@@ -47,11 +47,19 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             tr = rdat.times[e]
             tr = (tr-tr[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
             idx, = np.where(rdat.tilts[e][:,0] == t)
+            
             if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
                 idx = idx[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
             idxs, = np.where(mod.helios.tilt[e][:,0] == t)
             if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
                 idxs = idxs[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
+                        
+            if t==0 and any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
+                idx = idx[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
+            idxs, = np.where(mod.helios.tilt[e][:,0] == t)
+            if t==0 and any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
+                idxs = idxs[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
+            
             idxs = idxs[0] # take first since all predictions are the same
             ts = sdat.time[e].values[0:rdat.prediction_indices[e][-1]]
             ts = (ts-ts[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
@@ -63,6 +71,8 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                 error_two_sigma = 1.96*s
 
                 color = colors[orientation[ii][kk]]
+                if np.ndim(ax) == 1:
+                    ax = np.vstack(ax)  # create a fictious 2D array with only one column
                 ax[jj,ii].errorbar(tr,m,yerr=error_two_sigma,label=f'Orientation {orientation[ii][kk]}',color=color)
 
                 if (e in train_experiments) and \
@@ -114,7 +124,8 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
         a2a.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
 
         if plot_rh:
-            rel_hum = sdat.relative_humidity[e]
+            # THE LINE BELOW AVOID THE LAST ELEMENT (SO IT HAS THE SAME DIMENSION)
+            rel_hum = sdat.relative_humidity[e][0:rdat.prediction_indices[e][-1]]
             a3 = ax[-1,ii]
             a3.plot(ts,rel_hum, color='blue')
             a3.tick_params(axis ='y', labelcolor = 'blue')

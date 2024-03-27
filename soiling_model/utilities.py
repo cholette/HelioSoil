@@ -70,33 +70,36 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
                 cleans[0:idx0,jj] = 1
     return cleans
 
-def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12)):
+def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,lgd_label=None,figsize=(7,12),lgd_size = 15):
     sim_data = simulation_inputs
     reflect_data = reflectance_data
     f = experiment_index
 
     fig,ax = plt.subplots(nrows=5,sharex=True,figsize=figsize)
     # fmt = r"${0:s}^\circ$"
-    fmt = "${0:s}$"
+    # fmt = r'${0:s}$'
     ave = reflect_data.average[f]
     t = reflect_data.times[f]
     std = reflect_data.sigma[f]
-    names = ["M"+str(ii+1) for ii in range(ave.shape[1])]
+    if lgd_label == None:
+        names = ["M"+str(ii+1) for ii in range(ave.shape[1])]
+    else:
+        names = lgd_label
     for ii in range(ave.shape[1]):
-        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=fmt.format(names[ii]),marker='o',capsize=4.0)
+        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=(names[ii][0:5]),marker='o',capsize=4.0)
 
     ax[0].grid(True) 
     label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data.reflectometer_incidence_angle[f]) 
     ax[0].set_ylabel(label_str)
-    ax[0].legend()
+    ax[0].legend(fontsize=lgd_size,ncol=len(ave)//2)
 
     ax[1].plot(sim_data.time[f],sim_data.dust_concentration[f],color='brown',label="measurements")
     ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = "Average")
     label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data.dust_type[0])
-    ax[1].set_ylabel(label_str,color='brown')
+    ax[1].set_ylabel(label_str,color='brown',fontsize=20)
     ax[1].tick_params(axis='y', labelcolor='brown')
     ax[1].grid(True)
-    ax[1].legend()
+    ax[1].legend(fontsize=lgd_size)
 
     # Rain intensity, if available
     if len(sim_data.rain_intensity)>0: # rain intensity is not an empty dict
@@ -118,7 +121,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
     ax[3].set_xlabel('Date')
     ax[3].tick_params(axis='y', labelcolor='green')
     ax[3].grid(True)
-    ax[3].legend()
+    ax[3].legend(fontsize=lgd_size)
 
     if len(sim_data.relative_humidity)>0: 
         ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='black',label="measurements")
@@ -132,7 +135,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
     ax[4].set_xlabel('Date')
     ax[4].tick_params(axis='y', labelcolor='black')
     ax[4].grid(True)
-    ax[4].legend()
+    ax[4].legend(fontsize=lgd_size)
     
     if len(sim_data.wind_direction)>0: 
         figwr,axwr = wind_rose(sim_data,f)
@@ -281,94 +284,6 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
     
     return sim_dat,ref_dat
 
-def average_experiment_data(simulation_data,reflectance_data):
-    """
-    This function computes the average among each pair of subsequent measurements,
-    leaving the clean value untouched and deleting the last one if the remaining
-    number of measurements is odd. It also computes the average between the two measurements time
-    and the pooled standard deviation of the measurements.
-    """
-
-    sim_dat = deepcopy(simulation_data)
-    ref_dat = deepcopy(reflectance_data)
-    files = ref_dat.times.keys()
-
-    for f in files:
-        
-        if reflectance_data is not None:
-            if len(ref_dat.times[f][1:])%2 == 0:
-                times = ref_dat.times[f][1:].reshape(-1, 2)[:,0]+ \
-                    np.squeeze(np.diff(ref_dat.times[f][1:].reshape(-1, 2),axis = 1))/2
-                refs = np.mean(ref_dat.average[f][1:,:].T.\
-                    reshape(ref_dat.average[f].shape[1],-1,2),axis=2)
-                sigpool = np.sqrt(np.sum(ref_dat.sigma[f][1:,:].T.\
-                    reshape(ref_dat.sigma[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
-                sigpool_mean = np.sqrt(np.sum(ref_dat.sigma_of_the_mean[f][1:,:].T.\
-                    reshape(ref_dat.sigma_of_the_mean[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
-            else:
-                times = ref_dat.times[f][1:-1].reshape(-1, 2)[:,0]+ \
-                    np.squeeze(np.diff(ref_dat.times[f][1:-1].reshape(-1, 2),axis = 1))/2
-                refs = np.mean(ref_dat.average[f][1:-1,:].T.\
-                    reshape(ref_dat.average[f].shape[1],-1,2),axis=2)            
-                sigpool = np.sqrt(np.sum(ref_dat.sigma[f][1:-1,:].T.\
-                    reshape(ref_dat.sigma[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
-                sigpool_mean = np.sqrt(np.sum(ref_dat.sigma_of_the_mean[f][1:-1,:].T.\
-                    reshape(ref_dat.sigma_of_the_mean[f].shape[1],-1,2) ** 2, axis=2, keepdims=True) / 2)
-
-            ref_dat.times[f] = np.insert(times,0,ref_dat.times[f][0])
-            ref_dat.average[f] = np.insert(refs.T, 0, ref_dat.rho0[f], axis=0)
-            ref_dat.sigma[f] = np.insert(np.squeeze(sigpool.T,axis=0),0,ref_dat.sigma[f][0], axis=0)
-            ref_dat.sigma_of_the_mean[f] = np.insert(np.squeeze(sigpool_mean.T,axis=0),0,ref_dat.sigma_of_the_mean[f][0], axis=0)
-
-            ref_dat.prediction_indices[f] = []
-            ref_dat.prediction_times[f] = []
-            for m in ref_dat.times[f]:
-                ref_dat.prediction_indices[f].append(np.argmin(np.abs(m-sim_dat.time[f])))        
-                ref_dat.prediction_times[f].append(sim_dat.time[f][ref_dat.prediction_indices[f]])
-
-        lb = ref_dat.times[f][0]
-        ub = ref_dat.times[f][-1]
-        mask = (sim_dat.time[f]>=lb) & (sim_dat.time[f]<=ub)
-        mask_ref = np.tile(mask.to_numpy().reshape(1,-1).astype(bool),(ref_dat.tilts[f].shape[0],1))
-        if all(mask==0):
-            raise ValueError(f"Provided date range of {lb} to {ub} for file {sim_dat.file_name[f]} excludes all data.")
-            
-        if len(ref_dat.tilts)>0:
-            ref_dat.tilts[f] = ref_dat.tilts[f][mask_ref]
-        sim_dat.time[f] = sim_dat.time[f][mask]
-        sim_dat.time_diff[f] = sim_dat.time_diff[f][mask]
-        sim_dat.air_temp[f] = sim_dat.air_temp[f][mask]
-        sim_dat.wind_speed[f] = sim_dat.wind_speed[f][mask]
-        sim_dat.dust_concentration[f] = sim_dat.dust_concentration[f][mask]
-        if len(sim_dat.rain_intensity)>0:
-            sim_dat.rain_intensity[f] = sim_dat.rain_intensity[f][mask]
-        if len(sim_dat.dni)>0:
-            sim_dat.dni[f] = sim_dat.dni[f][mask]
-        if len(sim_dat.relative_humidity)>0:
-            sim_dat.relative_humidity[f] = sim_dat.relative_humidity[f][mask]
-        if len(sim_dat.wind_direction)>0:
-            sim_dat.wind_direction[f] = sim_dat.wind_direction[f][mask]
-
-
-    ref_temp = deepcopy(ref_dat)
-
-    for key,value in ref_temp.times.items():
-        if len(value)<2:
-            print(key)
-            for a,b in vars(ref_dat).items():
-                del b[key]
-            for c,d in vars(sim_dat).items():
-                try:
-                    iter(d)
-                    if key in d:
-                        del d[key]
-                except TypeError:
-                    print('non iterable')
-
-    del ref_temp
-
-    return sim_dat,ref_dat
-
 def daily_average(ref_dat,time_grids,dt=None):
 
     # prediction indeces and times
@@ -403,8 +318,7 @@ def daily_average(ref_dat,time_grids,dt=None):
             ref_dat_new.sigma[f][:,ii] = np.sqrt(sum_var/N) # pooled variance
             
             ref_dat_new.sigma_of_the_mean[f][:,ii] = (ref_dat_new.sigma[f][:,ii] / 
-                                np.sqrt(ref_dat_new.number_of_measurements[f])
-            )
+                                np.sqrt(ref_dat_new.number_of_measurements[f]))
 
             ref_dat_new.average[f][:,ii] = daily.mean().average.values
             ref_dat_new.prediction_indices[f] = []
