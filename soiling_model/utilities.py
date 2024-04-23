@@ -93,7 +93,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,lgd
     ax[0].set_ylabel(label_str)
     ax[0].legend(fontsize=lgd_size,ncol=len(ave)//2)
 
-    ax[1].plot(sim_data.time[f],sim_data.dust_concentration[f],color='brown',label="measurements")
+    ax[1].plot(sim_data.time[f],sim_data.dust_conc_mov_avg[f],color='brown',label="measurements")
     ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = "Average")
     label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data.dust_type[0])
     ax[1].set_ylabel(label_str,color='brown',fontsize=20)
@@ -167,9 +167,9 @@ def plot_experiment_PA(simulation_inputs,reflectance_data,experiment_index,figsi
     label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data.reflectometer_incidence_angle[f]) 
     ax[0].set_ylabel(label_str)
     ax[0].legend(loc='upper left', bbox_to_anchor=(1, 1))
-    # ax[0].set_ylim(0.86, 0.97)
+    ax[0].set_ylim(0.85, 0.97)
 
-    ax[1].plot(sim_data.time[f],sim_data.dust_concentration[f],color='brown',label="Measurements")
+    ax[1].plot(sim_data.time[f],sim_data.dust_conc_mov_avg[f],color='brown',label="Measurements")
     ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = "Average")
     label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data.dust_type[0])
     ax[1].set_ylabel(label_str,color='brown')
@@ -177,8 +177,8 @@ def plot_experiment_PA(simulation_inputs,reflectance_data,experiment_index,figsi
     ax[1].grid(True)
     ax[1].legend()
     title_str = sim_data.dust_type[f] + r" (mean = {0:.2f} $\mu g$/$m^3$)" 
-    ax[1].set_title(title_str.format(sim_data.dust_concentration[f].mean()),fontsize=10)
-    # ax[1].set_ylim(0,70)
+    ax[1].set_title(title_str.format(sim_data.dust_concentration[f].mean()),fontsize=15)
+    ax[1].set_ylim(0,50)
 
     # # Rain intensity, if available
     # if len(sim_data.rain_intensity)>0: # rain intensity is not an empty dict
@@ -193,7 +193,7 @@ def plot_experiment_PA(simulation_inputs,reflectance_data,experiment_index,figsi
     # ax[2].set_ylim((0,YL[1]))
     # ax[2].grid(True)
 
-    ax[2].plot(sim_data.time[f],sim_data.wind_speed[f],color='green',label="Measurements")
+    ax[2].plot(sim_data.time[f],sim_data.wind_speed_mov_avg[f],color='green',label="Measurements")
     ax[2].axhline(y=sim_data.wind_speed[f].mean(),color='green',ls='--',label = "Average")
     label_str = r'Wind Speed [$m\,/\,s$]'
     ax[2].set_ylabel(label_str,color='green')
@@ -202,8 +202,8 @@ def plot_experiment_PA(simulation_inputs,reflectance_data,experiment_index,figsi
     ax[2].grid(True)
     ax[2].legend()
     title_str = "Wind Speed (mean = {0:.2f} m/s)".format(sim_data.wind_speed[f].mean())
-    ax[2].set_title(title_str,fontsize=10)
-    # ax[2].set_ylim(0,8)
+    ax[2].set_title(title_str,fontsize=15)
+    ax[2].set_ylim(0,9)
 
     # if len(sim_data.relative_humidity)>0: 
     #     ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='black',label="measurements")
@@ -232,15 +232,15 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
     for f in files:
         if isinstance(trim_ranges,list):  
             assert isinstance(trim_ranges[f],list) or isinstance(trim_ranges[f],np.ndarray), "trim_ranges must be a list of lists or a list of 1D np.arrays"
-            lb = trim_ranges[f][0]
-            ub = trim_ranges[f][1]
+            lb = trim_ranges[f][0].astype('datetime64[m]') # astype ensure they are comparable
+            ub = trim_ranges[f][1].astype('datetime64[m]') # astype ensure they are comparable
         elif trim_ranges=="reflectance_data":
             assert ref_dat is not None, "Reflectance data must be supplied for trim_ranges==""reflectance_data"""
-            lb = ref_dat.times[f][0]
-            ub = ref_dat.times[f][-1]
+            lb = ref_dat.times[f][0].astype('datetime64[m]') # astype ensure they are comparable
+            ub = ref_dat.times[f][-1].astype('datetime64[m]') # astype ensure they are comparable
         elif trim_ranges == "simulation_inputs":
-            lb = sim_dat.time[f].iloc[0]
-            ub = sim_dat.time[f].iloc[-1]
+            lb = sim_dat.time[f].iloc[0].astype('datetime64[m]') # astype ensure they are comparable
+            ub = sim_dat.time[f].iloc[-1].astype('datetime64[m]') # astype ensure they are comparable
         else:
             raise ValueError("""Value of trim_ranges not recognized. Must be a list of lists/np.array [lb,ub], """+\
                 """ "reflectance_data" or "simulation_inputs" """)
@@ -254,7 +254,10 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
         sim_dat.time_diff[f] = sim_dat.time_diff[f][mask]
         sim_dat.air_temp[f] = sim_dat.air_temp[f][mask]
         sim_dat.wind_speed[f] = sim_dat.wind_speed[f][mask]
+        sim_dat.wind_speed_mov_avg[f] = sim_dat.wind_speed_mov_avg[f][mask]
         sim_dat.dust_concentration[f] = sim_dat.dust_concentration[f][mask]
+        sim_dat.dust_conc_mov_avg[f] = sim_dat.dust_conc_mov_avg[f][mask]
+
         if len(sim_dat.rain_intensity)>0:
             sim_dat.rain_intensity[f] = sim_dat.rain_intensity[f][mask]
         if len(sim_dat.dni)>0:
@@ -286,7 +289,7 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
 
 def daily_average(ref_dat,time_grids,dt=None):
 
-    # prediction indeces and times
+    # prediction indices and times
     # tilts
 
     ref_dat_new = deepcopy(ref_dat)
@@ -316,9 +319,11 @@ def daily_average(ref_dat,time_grids,dt=None):
             N = daily.count()['sigma'].values
             sum_var = df.groupby('day')['sigma'].apply(lambda x: sum(x**2)).values
             ref_dat_new.sigma[f][:,ii] = np.sqrt(sum_var/N) # pooled variance
+            # ref_dat_new.sigma[f] = np.insert(ref_dat_new.sigma[f],0,ref_dat.sigma[f][0])
             
             ref_dat_new.sigma_of_the_mean[f][:,ii] = (ref_dat_new.sigma[f][:,ii] / 
                                 np.sqrt(ref_dat_new.number_of_measurements[f]))
+            # ref_dat_new.sigma_of_the_mean[f] = np.insert(ref_dat_new.sigma_of_the_mean[f],0,ref_dat.sigma_of_the_mean[f][0])
 
             ref_dat_new.average[f][:,ii] = daily.mean().average.values
             ref_dat_new.prediction_indices[f] = []
@@ -336,9 +341,6 @@ def daily_average(ref_dat,time_grids,dt=None):
             ref_dat_new.prediction_times[f].append(tg[ref_dat_new.prediction_indices[f]])
 
     return ref_dat_new
-            
-
-    
 
 def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,\
                              sheet_name=None,output_file_format="sample_{0:d}.xlsx",\

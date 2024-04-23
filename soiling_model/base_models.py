@@ -481,8 +481,10 @@ class simulation_inputs:
         self.end_datetime = {}                  # datetime64 for end
         self.air_temp = {}                      # [C] air temperature
         self.wind_speed = {}                    # [m/s] wind speed
+        self.wind_speed_mov_avg = {}            # [m/s] wind speed hourly moving average
         self.wind_direction = {}                # [degrees] wind direction
         self.dust_concentration = {}            # [µg/m3] PM10 or TSP concentration in air
+        self.dust_conc_mov_avg = {}             # [µg/m3] PM10 or TSP hourly moving average of dust concentration
         self.rain_intensity = {}                # [mm/hr] rain intensity
         self.dust_type = {}                     # Usually either "TSP" or "PM10", but coule be any PMX or PMX.X
         self.dni = {}                           # [W/m^2] Direct Normal Irradiance
@@ -563,6 +565,8 @@ class simulation_inputs:
             if len(idx_too_low) > 0:
                 self.wind_speed[ii][idx_too_low] = smallest_windspeed
                 _print_if(f"Warning: some windspeeds were <= 0 and were set to {smallest_windspeed}",verbose)
+            self.wind_speed_mov_avg[ii] = pd.Series(self.wind_speed[ii]).rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1).mean().values
+
 
             if 'DNI' in weather.columns: # only import DNI if it exists
                 self.dni[ii] = np.array(weather.loc[:,'DNI']) 
@@ -571,6 +575,9 @@ class simulation_inputs:
                 
             # import dust measurements
             self.dust_concentration[ii] = self.k_factors[ii]*np.array(weather.loc[:,dust_type[ii]])
+            self.dust_conc_mov_avg[ii] = pd.Series(self.dust_concentration[ii]).rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1).mean().values
+            
+
             self.dust_type[ii] = dust_type[ii]
 
             if "RainIntensity" in weather:

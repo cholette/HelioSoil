@@ -9,12 +9,18 @@ import soiling_model.fitting as smf
 # %% Plot for the paper
 plt.rc('xtick', labelsize=16)
 plt.rc('ytick', labelsize=16)
-plt.rc('legend', fontsize=10)
+plt.rc('legend', fontsize=14)
 plt.rc('axes',labelsize=18)
 
-def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
-                   rows_with_legend=[3],num_legend_cols=6,legend_shift=(0,0),plot_rh=True,
-                   yticks=None):
+def plot_for_paper(mod,rdat,sdat,
+                   train_experiments,
+                   train_mirrors,
+                   orientation,
+                   rows_with_legend=[3],
+                   num_legend_cols=6,
+                   legend_shift=(0,0),
+                   plot_rh=True,
+                   yticks=None,figsize=(12,15)):
     
     if any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
         plot_rh = False  # the RH sensor is broken since the beginning of Port Augusta experiments
@@ -26,9 +32,9 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
     tilts = np.unique(mod.helios.tilt[0])
 
     if plot_rh:
-        fig,ax = plt.subplots(nrows=len(tilts)+2,ncols=len(exps),figsize=(12,15),sharex='col')
+        fig,ax = plt.subplots(nrows=len(tilts)+2,ncols=len(exps),figsize=figsize,sharex='col')
     else:
-        fig,ax = plt.subplots(nrows=len(tilts)+1,ncols=len(exps),figsize=(12,15),sharex='col')
+        fig,ax = plt.subplots(nrows=len(tilts)+1,ncols=len(exps),figsize=figsize,sharex='col')
         
     ws_max = max([max(sdat.wind_speed[f]) for f in exps]) # max wind speed for setting y-axes
     dust_max = max([max(sdat.dust_concentration[f]) for f in exps]) # max dust concentration for setting y-axes
@@ -85,6 +91,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             
             
             ym = r0*mod.helios.soiling_factor[e][idxs,0:rdat.prediction_indices[e][-1]] # ensure columns are time index
+            np.savetxt(f'output_{jj}.csv', ym, delimiter=',')
             if ym.ndim == 1:
                 ym += (1.0-ym[0])
             else:
@@ -103,24 +110,26 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                 ax[jj,ii].set_title(f"Tilt: {t:.0f}"+r"$^{\circ}$")
             
     
-        new_var = sdat.dust_concentration[e][0:rdat.prediction_indices[e][-1]]
+        new_var = sdat.dust_conc_mov_avg[e][0:rdat.prediction_indices[e][-1]]
         dust_conc = new_var
-        ws = sdat.wind_speed[e][0:rdat.prediction_indices[e][-1]]
+        ws = sdat.wind_speed_mov_avg[e][0:rdat.prediction_indices[e][-1]]
         dust_type = sdat.dust_type[e][0:rdat.prediction_indices[e][-1]]
         if plot_rh:
             a2 = ax[-2,ii]
         else:
             a2 = ax[-1,ii]
 
-        a2.plot(ts,dust_conc, color='black')
-        a2.tick_params(axis ='y', labelcolor = 'black')
-        a2.set_ylim((0,1.01*dust_max))
+        a2.plot(ts,dust_conc, color='brown')
+        a2.tick_params(axis ='y', labelcolor = 'brown')
+        #a2.set_ylim((0,1.01*dust_max))
+        a2.set_ylim((0,50))
 
         a2a = a2.twinx()
         p = a2a.plot(ts,ws,color='green')
         a2a.tick_params(axis ='y', labelcolor = 'green')
-        a2a.set_ylim((0,1.01*ws_max))
-        a2a.set_yticks((0,ws_max/2,ws_max))
+        #a2a.set_ylim((0,1.01*ws_max))
+        a2a.set_ylim((0,30))
+        #a2a.set_yticks((0,ws_max/2,ws_max))
         a2a.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
 
         if plot_rh:
@@ -133,7 +142,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
         
         if ii==0:
             fs = r"{0:s} $\frac{{\mu g}}{{m^3}}$"
-            a2.set_ylabel(fs.format(dust_type),color='black')
+            a2.set_ylabel(fs.format(dust_type),color='brown')
 
             if plot_rh:
                 a3.set_ylabel("Relative \nHumidity (%)",color='blue')
@@ -143,7 +152,9 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
         if ii==len(exps)-1:
             fs = r"{0:s} $\frac{{\mu g}}{{m^3}}$"
             a2a.set_ylabel('Wind Speed (m/s)', color='green')
-
+    
+    h_legend,labels_legend = [],[]
+    legend_added = False
     for ii,row in enumerate(ax):
         for jj,a in enumerate(row):
             if ii < len(tilts):
@@ -158,14 +169,18 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                     a.set_yticklabels([])
                 if (ii in rows_with_legend) and (jj==0):
                     ang = rdat.reflectometer_incidence_angle[jj]
-                    a.set_ylabel(r"Normalized reflectance $\rho(0)-\rho(t)$ at "+str(ang)+"$^{{\circ}}$")
-                if (ii in rows_with_legend) and (jj==0):
-                    # a.legend(loc='center',ncol=2,bbox_to_anchor=(0.25,0.5))
-                    h_legend,labels_legend = a.get_legend_handles_labels()
-            elif ii == len(tilts):
-                a.set_yticks((0,150,300))
-            else:
-                a.set_yticks((0,50,100))
+                    if not legend_added:
+                        a.set_ylabel(r"Normalized reflectance $\rho(0)-\rho(t)$ at "+str(ang)+"$^{{\circ}}$")
+                        legend_added = True
+                    hl,ll = a.get_legend_handles_labels()
+                    h_legend.extend(hl)
+                    labels_legend.extend(ll)
+                    
+                    
+            # elif ii == len(tilts):
+            #     a.set_yticks((0,150,300))
+            # else:
+            #     a.set_yticks((0,50,100))
                 
             
             if ii == ax.shape[0]-1:
@@ -173,7 +188,8 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             a.grid('on')
 
 
-    fig.legend(h_legend,labels_legend,ncol=num_legend_cols,
+    labels_legend,lab_idx = np.unique(labels_legend,return_index=True)
+    fig.legend(np.array(h_legend)[lab_idx],labels_legend,ncol=num_legend_cols,
                bbox_to_anchor=(0.9025+legend_shift[0],1.025+legend_shift[1]),bbox_transform=fig.transFigure)
     fig.subplots_adjust(wspace=0.1, hspace=0.3)
     fig.tight_layout()

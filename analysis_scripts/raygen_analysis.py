@@ -25,7 +25,7 @@ reflectometer_incidence_angle = 15 # [deg] angle of incidence of reflectometer
 reflectometer_acceptance_angle = 12.5e-3 # [rad] half acceptance angle of reflectance measurements
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
 d = f"{main_directory}/data/mildura/"
-time_to_remove_at_end = [0,0,0,0,0,0]
+time_to_remove_at_end = [0,0]  # time to be removed for each experiment, in hours
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
 train_mirrors = ["ON_M1_T00"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for 
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
@@ -63,7 +63,14 @@ reflect_data_train = smb.reflectance_measurements(  files_train,
                                                     import_tilts=True,
                                                     column_names_to_import=train_mirrors
                                                     )
-# Trim data 
+
+# %% compute daily_averaged values of reflectance to avoid morning-afternoon (not understood) recoveries
+if DAILY_AVERAGE:
+    reflect_data_train = smu.daily_average(reflect_data_train,
+                                           sim_data_train.time,
+                                           dt=None)
+
+# %% Trim data 
 sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                                 reflect_data_train,
                                                                 training_intervals 
@@ -73,6 +80,7 @@ sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                                 reflect_data_train,
                                                                 "reflectance_data" 
                                                             )
+
 # %% Plot training data
 
 for ii,experiment in enumerate(train_experiments):
@@ -100,6 +108,12 @@ reflect_data_total = smb.reflectance_measurements(  files,
                                                     column_names_to_import=None
                                                     )
 
+# %% compute daily_averaged values of reflectance to avoid morning-afternoon (not understood) recoveries
+if DAILY_AVERAGE:
+    reflect_data_total = smu.daily_average(reflect_data_total,
+                                           sim_data_total.time,
+                                           dt=None)
+
 # %% Trim data and plot                                                           
 sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
                                                                 reflect_data_total,
@@ -115,12 +129,6 @@ for ii,experiment in enumerate(sim_data_total.dt.keys()):
     # fig,ax = smu.wind_rose(sim_data_total,ii)
     # ax.set_title(f"Wind for file {files[experiment]}")
 
-# %% compute daily_averaged values of reflectance to avoid morning-afternoon (not understood) recoveries
-    
-if DAILY_AVERAGE:
-    reflect_data_train = smu.daily_average(reflect_data_train,sim_data_train.time,sim_data_train.dt)
-    reflect_data_total = smu.daily_average(reflect_data_total,sim_data_total.time,sim_data_total.dt)
-
 # %% Plot training and total data after daily averaging
 if DAILY_AVERAGE:
     for ii,experiment in enumerate(train_experiments):
@@ -135,9 +143,10 @@ if DAILY_AVERAGE:
 
     for ii,experiment in enumerate(files):
         if any("augusta".lower() in value.lower() for value in sim_data_total.file_name.values()):
-            fig,ax = smu.plot_experiment_PA(sim_data_total,reflect_data_train,ii)
+            fig,ax = smu.plot_experiment_PA(sim_data_total,reflect_data_total,ii)
         else:
             fig,ax = smu.plot_experiment_data(sim_data_total,reflect_data_total,ii)
+
 # %% PLOT EXPERIMENTAL DATA AFTER DAILY AVERAGE
 
 f=0
@@ -157,7 +166,7 @@ ax[0].grid(True)
 label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0]) 
 ax[0].set_ylabel(label_str)
 ax[0].legend(fontsize=lgd_size,loc='center right',bbox_to_anchor=(1.15,0.5))
-plt.suptitle('Raygen Experiments Summary',fontsize = 20,x=0.5,y=0.92)
+plt.suptitle('Raygen Experiments Summary ',fontsize = 20,x=0.5,y=0.92)
 
 ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")
 # label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
@@ -176,7 +185,6 @@ ax[2].set_ylabel(label_str,color='green')
 ax[2].tick_params(axis='y', labelcolor='green')
 ax[2].grid(True)
 ax[2].legend(fontsize=lgd_size)
-
 
 # %% Plot reflectance losses in each interval
 for m,mir in enumerate(train_mirrors):
@@ -208,7 +216,7 @@ for m,mir in enumerate(train_mirrors):
 
 # %% Set mirror angles and get extinction weights
 imodel.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
-imodel.helios.compute_extinction_weights(sim_data_train,imodel.loss_model,verbose=True)
+imodel.helios.compute_extinction_weights(sim_data_train,imodel.loss_model,verbose=True,options={"grid_size_x":100,"grid_size_mu":10000})
 imodel.helios.plot_extinction_weights(sim_data_train,fig_kwargs={})
 ext_weights = imodel.helios.extinction_weighting[0].copy()
 
@@ -237,13 +245,16 @@ imodel.save(sp_save_file,
             training_simulation_data=sim_data_train,
             training_reflectance_data=reflect_data_train)
 
+# %% plot fitted semi-physical model on training data
 _,_,_ = imodel.plot_soiling_factor( sim_data_train,
                             reflectance_data=reflect_data_train,
                             reflectance_std='mean',
                             save_path=f"{main_directory}/results/mildura_sp_training",
                             # fig_title="On Training Data (semi-physical)",
                             orientation_strings=orientation,
-                            figsize=[12,6])
+                            figsize=[12,6],
+                            names_mir_train = train_mirrors,
+                            )
 
 # %% Fit constant mean model & plot on training data
 log_param_hat_con,log_param_cov_con = imodel_constant.fit_mle(  sim_data_train,
@@ -271,7 +282,9 @@ _,_,_ = imodel_constant.plot_soiling_factor(    sim_data_train,
                                         save_path=f"{main_directory}/results/mildura_cm_training",
                                         # fig_title="On Training Data",
                                         orientation_strings=orientation,
-                                        figsize = [12,8]  )
+                                        figsize = [12,8],
+                                        names_mir_train = train_mirrors
+                                        )
 
 
 # %% Performance of semi-physical model on total data
@@ -279,19 +292,23 @@ imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_sur
 file_inds = np.arange(len(reflect_data_total.file_name))
 imodel = smu.set_extinction_coefficients(imodel,ext_weights,file_inds)
 
+# %% run plot
 fig,ax = plot_for_paper(    imodel,reflect_data_total,
                             sim_data_total,
                             train_experiments,
                             train_mirrors,
                             orientation,
                             legend_shift=(0.04,0),
-                            yticks=(0.88,0.92,0.96,1.0))
+                            yticks=(0.94,0.96,0.98,1.0),
+                            figsize=(12,25),
+                            rows_with_legend=[2,4]
+                            )
 
 fig.savefig(sp_save_file+".pdf",bbox_inches='tight')
 
 # %% Performance of constant-mean model on total data
 imodel_constant.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
-
+# %%
 fig,ax = plot_for_paper(    imodel_constant,
                             reflect_data_total,
                             sim_data_total,
@@ -299,7 +316,10 @@ fig,ax = plot_for_paper(    imodel_constant,
                             train_mirrors,
                             orientation,
                             legend_shift=(0.04,0),
-                            yticks=(0.92,0.94,0.96,0.98,1.0))
+                            yticks=(0.94,0.96,0.98,1.0),
+                            figsize=(12,25),
+                            rows_with_legend=[2,4]
+                            )
 
 fig.savefig(cm_save_file+".pdf",bbox_inches='tight')
 

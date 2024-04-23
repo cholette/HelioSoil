@@ -220,7 +220,8 @@ class common_fitting_methods:
     def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,
                         reflectance_data=None,figsize=None,reflectance_std='measurements',
                         save_path=None,fig_title=None,return_handles=False,
-                        repeat_y_labels=True,orientation_strings=None):
+                        repeat_y_labels=True,orientation_strings=None,
+                        names_mir_train=None):
     
         if reflectance_data is not None:
             self.predict_soiling_factor(simulation_inputs,rho0=reflectance_data.rho0)
@@ -269,7 +270,10 @@ class common_fitting_methods:
                     tilt_str = r"tilt = ${0:.0f}^{{\circ}}$" # tilt only
                 
                 if orientation_strings is not None:
-                    tilt_str += ", Orientation: "+orientation_strings[ii][jj]
+                    # tilt_str += ", Orientation: "+orientation_strings[ii][jj]
+                    u_idx = names_mir_train[0].find('_')
+                    tilt_str += ", Orientation: " + names_mir_train[0][:u_idx].replace('O','')
+
 
                 # get the axis handles
                 if N_experiments == 1:
