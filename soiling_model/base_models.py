@@ -1215,19 +1215,54 @@ class reflectance_measurements:
         if import_tilts:
             self.tilts = {}
             
-        self.import_reflectance_data(reflectance_files,time_grids,reflectometer_incidence_angle,
+        self.import_heliostats_ref_data(reflectance_files,time_grids,reflectometer_incidence_angle,
                                      reflectometer_acceptance_angle,import_tilts=import_tilts,
                                      column_names_to_import=column_names_to_import)
         
-    def import_reflectance_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
+    # def import_reflectance_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
+    #                             reflectometer_acceptance_angle,import_tilts=False,
+    #                             column_names_to_import=None):
+
+    #     for ii in range(len(reflectance_files)):
+            
+    #         self.file_name[ii] = reflectance_files[ii]
+    #         reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Average"),\
+    #             "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Sigma")}
+
+    #         self.times[ii] = reflectance_data['Average']['Time'].values
+    #         if column_names_to_import != None: # extract relevant column names of the pandas dataframe
+    #             self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.mirror_names[ii] = column_names_to_import
+    #         else:
+    #             self.average[ii] = reflectance_data['Average'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1::]
+
+    #         self.prediction_indices[ii] = []
+    #         self.prediction_times[ii] = []
+    #         for m in self.times[ii]:
+    #             self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))        
+    #         self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
+    #         self.rho0[ii] = self.average[ii][0,:]
+
+    #         # idx = reflectance_files.index(f) 
+    #         self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
+    #         self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(self.number_of_measurements[ii])
+    #         self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
+
+    #         if import_tilts:
+    #             self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[self.mirror_names[ii]].values.transpose()
+                    
+    def import_heliostats_ref_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
                                 reflectometer_acceptance_angle,import_tilts=False,
                                 column_names_to_import=None):
 
         for ii in range(len(reflectance_files)):
             
             self.file_name[ii] = reflectance_files[ii]
-            reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Average"),\
-                "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Sigma")}
+            reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Heliostats_Ref"),\
+                "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Heliostats_Sigma")}
 
             self.times[ii] = reflectance_data['Average']['Time'].values
             if column_names_to_import != None: # extract relevant column names of the pandas dataframe

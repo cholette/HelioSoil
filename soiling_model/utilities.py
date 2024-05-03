@@ -224,7 +224,7 @@ def plot_experiment_PA(simulation_inputs,reflectance_data,experiment_index,figsi
 
     return fig,ax
 
-def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
+def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges,tilt=True):
     sim_dat = deepcopy(simulation_inputs)
     ref_dat = deepcopy(reflectance_data)
     files = sim_dat.time.keys()
@@ -269,8 +269,9 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
         
         if reflectance_data is not None:
             # trim reflectance data
-            if len(ref_dat.tilts)>0:
-                ref_dat.tilts[f] = ref_dat.tilts[f][:,mask]
+            if tilt:
+                if len(ref_dat.tilts)>0:
+                    ref_dat.tilts[f] = ref_dat.tilts[f][:,mask]
             mask = (ref_dat.times[f]>=lb) & (ref_dat.times[f]<=ub)
             ref_dat.times[f] = ref_dat.times[f][mask] 
             ref_dat.average[f] = ref_dat.average[f][mask,:]
@@ -507,7 +508,7 @@ def set_extinction_coefficients(destination_model,extinction_weights,file_inds):
                                 "those in destination_model.helios.tilt")
     return dm
 
-def get_training_data(d,file_start,time_to_remove_at_end=0):
+def get_training_data(d,file_start,time_to_remove_at_end=0,helios=False):
     files = [f for f in os.listdir(d) if f.startswith(file_start)]
 
     # get training time intervals
@@ -530,8 +531,13 @@ def get_training_data(d,file_start,time_to_remove_at_end=0):
 
     # get mirror names in each file
     mirror_names = [ [] for f in files]
-    for ii,f in enumerate(files):
-        mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Reflectance_Average").columns[1::])
+    if not helios:
+        for ii,f in enumerate(files):
+            mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Reflectance_Average").columns[1::])
+    else:
+        for ii,f in enumerate(files):
+            mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Heliostats_Ref").columns[1::])
+        
 
     # get mirror names that show up in all files
     common = []
