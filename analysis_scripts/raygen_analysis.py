@@ -147,11 +147,31 @@ if DAILY_AVERAGE:
         else:
             fig,ax = smu.plot_experiment_data(sim_data_total,reflect_data_total,ii)
 
+# %% PLOT FOR SOLARPACES EXTENDED ABSTRACT
+f=0
+lgd_size=16
+fig,ax = plt.subplots(nrows=1,figsize=(8,5))
+
+ave = reflect_data_total.average[f]*100
+t = reflect_data_total.times[f]
+std = reflect_data_total.sigma[f]*100
+lgd_label = [lg[:5].replace("O","").replace("_M","") for lg in mirror_name_list[f]]      
+for ii in range(ave.shape[1]):
+    if lgd_label[ii]=='W1':
+        ax.errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
+    else:
+        ax.errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],marker='o',capsize=4.0)
+ax.grid(True) 
+ax.tick_params(axis='x', rotation=15, labelsize = 18)
+ax.tick_params(axis='y', labelsize = 18)
+ax.legend(fontsize=lgd_size,loc='center right',bbox_to_anchor=(1.21,0.5))
+
+
 # %% PLOT EXPERIMENTAL DATA AFTER DAILY AVERAGE
 
 f=0
 lgd_size=15
-fig,ax = plt.subplots(nrows=3,figsize=(12,15))
+fig,ax = plt.subplots(nrows=,figsize=(12,15))
 
 ave = reflect_data_total.average[f]
 t = reflect_data_total.times[f]
