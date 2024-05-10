@@ -165,13 +165,14 @@ ax.grid(True)
 ax.tick_params(axis='x', rotation=15, labelsize = 18)
 ax.tick_params(axis='y', labelsize = 18)
 ax.legend(fontsize=lgd_size,loc='center right',bbox_to_anchor=(1.21,0.5))
+ax.yaxis.set_major_formatter(ticker.StrMethodFormatter("{x:.1f}"))
 
 
 # %% PLOT EXPERIMENTAL DATA AFTER DAILY AVERAGE
 
 f=0
 lgd_size=15
-fig,ax = plt.subplots(nrows=,figsize=(12,15))
+fig,ax = plt.subplots(nrows=3,figsize=(12,15))
 
 ave = reflect_data_total.average[f]
 t = reflect_data_total.times[f]
@@ -321,16 +322,20 @@ fig,ax = plot_for_paper(    imodel,reflect_data_total,
                             legend_shift=(0.04,0),
                             yticks=(0.94,0.96,0.98,1.0),
                             figsize=(12,25),
-                            rows_with_legend=[2,4]
-                            )
+                            rows_with_legend=[1],
+                            lgd_size = 15)
+
+
+[axp.tick_params(axis='y', labelsize=25) for axp in ax.flatten()]
+[axp.tick_params(axis='x', labelsize=25) for axp in ax.flatten()]
+[axp.title.set_size(25) for axp in ax.flatten()]
 
 fig.savefig(sp_save_file+".pdf",bbox_inches='tight')
 
 # %% Performance of constant-mean model on total data
 imodel_constant.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
-# %%
-fig,ax = plot_for_paper(    imodel_constant,
-                            reflect_data_total,
+
+fig,ax = plot_for_paper(    imodel,reflect_data_total,
                             sim_data_total,
                             train_experiments,
                             train_mirrors,
@@ -338,8 +343,13 @@ fig,ax = plot_for_paper(    imodel_constant,
                             legend_shift=(0.04,0),
                             yticks=(0.94,0.96,0.98,1.0),
                             figsize=(12,25),
-                            rows_with_legend=[2,4]
-                            )
+                            rows_with_legend=[1],
+                            lgd_size = 15)
+
+
+[axp.tick_params(axis='y', labelsize=25) for axp in ax.flatten()]
+[axp.tick_params(axis='x', labelsize=25) for axp in ax.flatten()]
+[axp.title.set_size(25) for axp in ax.flatten()]
 
 fig.savefig(cm_save_file+".pdf",bbox_inches='tight')
 

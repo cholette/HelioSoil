@@ -20,7 +20,9 @@ def plot_for_paper(mod,rdat,sdat,
                    num_legend_cols=6,
                    legend_shift=(0,0),
                    plot_rh=True,
-                   yticks=None,figsize=(12,15)):
+                   yticks=None,
+                   figsize=(12,15),
+                   lgd_size=10):
     
     if any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
         plot_rh = False  # the RH sensor is broken since the beginning of Port Augusta experiments
@@ -190,7 +192,9 @@ def plot_for_paper(mod,rdat,sdat,
 
     labels_legend,lab_idx = np.unique(labels_legend,return_index=True)
     fig.legend(np.array(h_legend)[lab_idx],labels_legend,ncol=num_legend_cols,
-               bbox_to_anchor=(0.9025+legend_shift[0],1.025+legend_shift[1]),bbox_transform=fig.transFigure)
+               bbox_to_anchor=(0.9025+legend_shift[0],1.025+legend_shift[1]),
+               bbox_transform=fig.transFigure,fontsize=lgd_size)
+    
     fig.subplots_adjust(wspace=0.1, hspace=0.3)
     fig.tight_layout()
     return fig,ax
