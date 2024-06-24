@@ -615,6 +615,7 @@ class dust:
         self.youngs_modulus = {} # [Pa] young's modulus of dust
         self.PM10 = {}           # [µg/m^3] PM10 concentration computed with the given dust size distribution
         self.TSP = {}            # [µg/m^3] TSP concentration computed with the given dust size distribution
+        self.PMT = {}            # [µg/m^3] PMT concentration computed with the given dust size distribution        
         self.Nd = {}
         self.log10_mu = {}
         self.log10_sig = {}
@@ -664,6 +665,7 @@ class dust:
             self.pdfA[ii] = pdfNii*(np.pi/4*Dii**2)*1e-6 # pdfA (area) dA[m^2/m^3]/dLog10(D[µm]), 1e-6 factor from { D^2(µm^2->m^2) 1e-12 , V(cm^3->m^3) 1e6 }
             self.pdfM[ii] = pdfNii*(rhoii*np.pi/6*Dii**3)*1e-3 # pdfm (mass) dm[µg/m^3]/dLog10(D[µm]), 1e-3 factor from { D^3(µm^3->m^3) 1e-18 , m(kg->µg) 1e9 , V(cm^3->m^3) 1e6 }
             self.TSP[ii] = np.trapz(self.pdfM[ii],np.log10(Dii)) 
+            self.PMT[ii] = self.TSP[ii]
             self.PM10[ii] = np.trapz(self.pdfM[ii][Dii<=10],np.log10(Dii[Dii<=10]))  # PM10 = np.trapz(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
 
             self.hamaker[ii] = float(table.loc['hamaker_dust'].Value)
@@ -672,7 +674,7 @@ class dust:
 
         # add dust measurements if they are PMX
         for dt in dust_measurement_type:
-            if dt not in [None,"TSP"]: # another concentration is of interest (possibly because we have PMX measurements)
+            if dt not in [None,"TSP","PMT"]: # another concentration is of interest (possibly because we have PMX measurements)
                 X = dt[2::]
                 if len(X) in [1,2]: # integer, e.g. PM20
                     X = int(X)
