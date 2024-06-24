@@ -29,7 +29,7 @@ time_to_remove_at_end = [0,0,0,0,0,0]
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
 train_mirrors = ["ON_M1_T00"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for 
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
-dust_type = "PM10"
+dust_type = "PMT" # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
 
 # %% Get file list and time intervals. Import training data.
 parameter_file = d+"parameters_mildura_experiments.xlsx"
@@ -313,7 +313,7 @@ sims,a,a2 = daily_soiling_rate(  sim_data_total,
                                 cm_save_file,
                                 M = 100000,
                                 percents=pers,
-                                dust_type=dust_type)
+                                dust_type = dust_type)
 # xL,xU = np.percentile(sims,[0.1,99.9])
 xL,xU = -0.25,3.0
 lg = np.linspace(xL,xU,1000)
