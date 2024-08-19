@@ -12,6 +12,19 @@ import scipy.stats as sps
 import pickle
 
 class semi_physical(base_model):
+    """""
+        This is the constructor method for the `semi_physical` class, which is a subclass of the `base_model` class. 
+        The constructor reads in parameters from an Excel file specified by the `file_params` argument, and sets 
+        various attributes of the `helios` object, which is a property of the `semi_physical` class.
+        
+        The constructor reads in the following parameters from the Excel file:
+        - `hamaker_glass`: The Hamaker constant for glass.
+        - `poisson_glass`: The Poisson's ratio for glass.
+        - `youngs_modulus_glass`: The Young's modulus for glass.
+        - `nominal_reflectance`: The nominal reflectance of the heliostat surface.
+        - 'stow_tilt' (optional): The tilt angle of the heliostat when it is stowed. 
+            If not a float or integer, it is set to `None`.
+    """
     def __init__(self,file_params):
         table = pd.read_excel(file_params,index_col="Parameter")
         super().__init__(file_params)
@@ -23,7 +36,19 @@ class semi_physical(base_model):
             self.helios.stow_tilt = None
 
     def helios_angles(self,simulation_inputs,reflectance_data,verbose=True,second_surface=True):
+        """
+        Computes the tilt angles and incidence angles for each heliostat in the given experiments, and sets the 
+        corresponding attributes in the `self.helios` object.
 
+        Args:
+            simulation_inputs (dict): A dictionary containing the simulation input data, with keys corresponding to the experiment file names.
+            reflectance_data (dict): A dictionary containing the reflectance data, with keys corresponding to the experiment file names.
+            verbose (bool, optional): If True, prints progress messages. Defaults to True.
+            second_surface (bool, optional): If True, uses the second surface model for computing the incidence reflection factor. If False, uses the first surface model. Defaults to True.
+
+        Returns:
+            None
+        """
         sim_in = simulation_inputs
         ref_dat = reflectance_data
         files = list(sim_in.time.keys())
@@ -227,7 +252,24 @@ class semi_physical(base_model):
 
     def fit_mle(self,simulation_inputs,reflectance_data,verbose=True,x0=None,
                 transform_to_original_scale=False,save_file=None,**optim_kwargs):
+        """
+        Fits the soiling model parameters using maximum likelihood estimation (MLE).
         
+        This function fits the soiling model parameters, `hrz0` and `sigma_dep`, using maximum likelihood estimation (MLE). It can initialize the optimization using least squares and 1D MLE, and provides the option to transform the parameter estimates back to the original scale.
+        
+        Args:
+            simulation_inputs (dict): A dictionary containing the simulation inputs.
+            reflectance_data (dict): A dictionary containing the reflectance data.
+            verbose (bool, optional): Whether to print progress messages. Defaults to True.
+            x0 (numpy.ndarray, optional): Initial guess for the model parameters. If not provided, the function will initialize using least squares and 1D MLE.
+            transform_to_original_scale (bool, optional): Whether to transform the parameter estimates back to the original scale. Defaults to False.
+            save_file (str, optional): Path to save the optimization results to a file.
+            **optim_kwargs: Additional keyword arguments to pass to the optimization function.
+        
+        Returns:
+            tuple: A tuple containing the estimated model parameters (`p_hat`) and their covariance matrix (`p_cov`).
+        """
+                
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
 
@@ -258,7 +300,6 @@ class semi_physical(base_model):
         H_log = ndt.Hessian(nloglike)(y) # Hessian is in the log transformed space
 
         if transform_to_original_scale:
-            
             # Get standard errors using observed information
             x_hat,H = self.transform_scale(y,likelihood_hessian=H_log)
             x_cov = np.linalg.inv(H)
@@ -278,8 +319,14 @@ class semi_physical(base_model):
 
         else:
             y_hat = y
-            y_cov = np.linalg.inv(H_log) # Paramter covariance in the log space
-
+            try:
+                y_cov = np.linalg.inv(H_log)  # Parameter covariance in the log space
+            except np.linalg.LinAlgError:
+                if np.linalg.det(H_log) == 0:
+                    y_cov = np.linalg.pinv(H_log)  # Use pseudoinverse if determinant is zero
+                else:
+                    raise  # Re-raise the exception if it's not due to zero determinant
+            
             # print estimates
             fmt = "log(log(hrz0)) = {0:.2e}, log(sigma_dep) = {1:.2e}"
             _print_if("... done! \n"+fmt.format(y_hat[0],y_hat[1]),verbose)
@@ -346,6 +393,18 @@ class semi_physical(base_model):
         return x_hat,x_cov
 
     def transform_scale(self,x,likelihood_hessian=None,direction="inverse"):
+        """
+        Transform parameters between the original scale and the log-transformed scale.
+        
+        Parameters:
+            x (numpy.ndarray): The parameters to transform, either in the original or log-transformed scale.
+            likelihood_hessian (numpy.ndarray, optional): The Hessian matrix of the log-likelihood function, used to transform the parameter covariance.
+            direction (str, optional): The direction of the transformation, either "forward" (to log-scaled space) or "inverse" (back to original scale). Defaults to "inverse".
+        
+        Returns:
+            numpy.ndarray: The transformed parameters.
+            numpy.ndarray: The transformed Hessian matrix, if `likelihood_hessian` is provided.
+        """
         # direction is either "forward" (to log-scaled space) or "inverse" (back to original scale)
         x = np.array(x)
         if direction == "inverse":
@@ -374,7 +433,25 @@ class semi_physical(base_model):
                             reflectance_data=None,figsize=None,reflectance_std='measurements',
                             save_path=None,fig_title=None,return_handles=False,
                             repeat_y_labels=True,orientation_strings=None):
+        """
+        Plots the soiling factor over time for a set of simulation inputs and reflectance data.
         
+        Parameters:
+            simulation_inputs (dict): A dictionary containing the simulation input data, including time, dust concentration, wind speed, and dust type for each experiment.
+            posterior_predictive_distribution_samples (dict, optional): A dictionary containing the posterior predictive distribution samples for each experiment.
+            reflectance_data (dict, optional): A dictionary containing the reflectance data for each experiment, including the average reflectance, reflectance standard deviation, and tilt angles.
+            figsize (tuple, optional): The size of the figure to be plotted.
+            reflectance_std (str, optional): Specifies whether to use the "measurements" or "mean" standard deviation for the reflectance data. Defaults to "measurements".
+            save_path (str, optional): The file path to save the plot.
+            fig_title (str, optional): The title of the figure.
+            return_handles (bool, optional): If True, returns the figure, axis, and prediction data. Otherwise, only returns the prediction data.
+            repeat_y_labels (bool, optional): If True, repeats the y-axis labels for each experiment.
+            orientation_strings (list, optional): A list of orientation strings for each mirror in each experiment.
+        
+        Returns:
+            tuple or dict: If return_handles is True, returns the figure, axis, and prediction data. Otherwise, returns only the prediction data.
+        """
+                
         if reflectance_data is not None:
             self.predict_soiling_factor(simulation_inputs,rho0=reflectance_data.rho0)
         else:
@@ -575,6 +652,13 @@ class semi_physical(base_model):
             return mean_predictions,CI_lower_predictions,CI_upper_predictions
     
     def update_model_parameters(self,x):
+        """
+        Updates the model parameters `hrz0` and `sigma_dep` based on the input `x`.
+        
+        If `x` is a list or NumPy array, the first element is assigned to `hrz0` and the second element (if present) is assigned to `sigma_dep`.
+        
+        If `x` is a single value, it is assigned to `hrz0` and `sigma_dep` is set to `None`.
+        """
         if isinstance(x,list) or isinstance(x,np.ndarray) :
             self.hrz0 = x[0]
             if len(x)>1:
@@ -585,6 +669,19 @@ class semi_physical(base_model):
     
     def save(self,file_name,log_p_hat=None,log_p_hat_cov=None,
              training_simulation_data=None,training_reflectance_data=None):
+        """
+        Saves the model and associated data to a file using pickle.
+        
+        Args:
+            file_name (str): The file path to save the model and data to.
+            log_p_hat (numpy.ndarray, optional): The transformed model parameters.
+            log_p_hat_cov (numpy.ndarray, optional): The covariance of the transformed model parameters.
+            training_simulation_data (dict, optional): The simulation data used for training the model.
+            training_reflectance_data (dict, optional): The reflectance data used for training the model.
+        
+        Returns:
+            None
+        """
         with open(file_name,'wb') as f:
             save_data = {'model':self,
                          'type':'semi-physical'}
@@ -808,6 +905,16 @@ class constant_mean_deposition_velocity(semi_physical):
 
     def save(self,file_name,log_p_hat=None,log_p_hat_cov=None,
              training_simulation_data=None,training_reflectance_data=None):
+        """
+        Saves the soiling model and associated data to a file.
+        
+        Args:
+            file_name (str): The name of the file to save the data to.
+            log_p_hat (numpy.ndarray, optional): The transformed model parameters.
+            log_p_hat_cov (numpy.ndarray, optional): The covariance of the transformed model parameters.
+            training_simulation_data (object, optional): The simulation data used for training the model.
+            training_reflectance_data (object, optional): The reflectance data used for training the model.
+        """    
         with open(file_name,'wb') as f:
             save_data = {'model':self,
                          'type':'constant-mean'}

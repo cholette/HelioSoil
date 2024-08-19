@@ -15,7 +15,29 @@ plt.rc('axes',labelsize=18)
 def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                    rows_with_legend=[3],num_legend_cols=6,legend_shift=(0,0),plot_rh=True,
                    yticks=None):
+    """
+    Plot reflectance data and model predictions for a set of experiments and mirror tilts.
     
+    This function generates a figure with multiple subplots, where each subplot shows the
+    reflectance data and model predictions for a specific experiment and mirror tilt. The
+    figure also includes plots of the dust concentration and wind speed for each experiment.
+    
+    Parameters:
+        mod (soiling_model.base_models.SoilingModel): The soiling model to use for the predictions.
+        rdat (soiling_model.base_models.ReflectanceData): The reflectance data for the experiments.
+        sdat (soiling_model.base_models.SimulationData): The simulation data for the experiments.
+        train_experiments (list): The names of the experiments used for training the model.
+        train_mirrors (list): The names of the mirrors used for training the model.
+        orientation (list): The orientation of each mirror in the experiments.
+        rows_with_legend (list, optional): The row indices where the legend should be placed.
+        num_legend_cols (int, optional): The number of columns in the legend.
+        legend_shift (tuple, optional): A tuple specifying the x and y shift of the legend.
+        plot_rh (bool, optional): Whether to plot the relative humidity.
+        yticks (list, optional): The y-axis tick values for the reflectance plots.
+    
+    Returns:
+        tuple: The figure and axis objects for the generated plot.
+    """
     mod.predict_soiling_factor(sdat,rho0=rdat.rho0) # ensure predictions are fresh
     r0 = mod.helios.nominal_reflectance
 
@@ -43,8 +65,10 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
 
             idxs, = np.where(mod.helios.tilt[e][:,0] == t)
             idxs = idxs[0] # take first since all predictions are the same
+            
             ts = sdat.time[e]
-            ts = (ts-ts[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
+            start_ts = ts.index[0]
+            ts = (ts-ts[start_ts]).astype('timedelta64[s]').astype(np.float64)/3600/24
             
             for kk in idx: # reflectance data
                 m = rdat.average[e][:,kk].squeeze().copy()
@@ -161,6 +185,18 @@ def soiling_rate(alphas: np.ndarray,
                  alphas2: np.ndarray,
                  save_file: str,
                  M: int =1000):
+    """
+    Simulates the soiling rate based on the given parameters and a saved model.
+
+    Args:
+        alphas (np.ndarray): Daily sum of alpha values corresponding to the specified percentiles.
+        alphas2 (np.ndarray): Daily sum of alpha^2 values corresponding to the specified percentiles.
+        save_file (str): File path to the saved model.
+        M (int, optional): Number of simulations to run. Defaults to 1000.
+
+    Returns:
+        np.ndarray: Simulated daily soiling rates.
+    """
 
     # load in parameters
     with open(save_file,'rb') as f:
@@ -198,6 +234,22 @@ def daily_soiling_rate( sim_dat: smb.simulation_inputs,
                         percents: list or np.ndarray = None,
                         M: int = 10000,
                         dust_type="TSP"):
+    """
+    Calculates the daily soiling rate based on simulation inputs and a saved model.
+    
+    Args:
+        sim_dat (smb.simulation_inputs): Simulation input data.
+        model_save_file (str): File path to the saved model.
+        percents (list or np.ndarray, optional): Percentiles of interest for the daily sum of alpha and alpha^2. Defaults to None.
+        M (int, optional): Number of simulations to run. Defaults to 10000.
+        dust_type (str, optional): Type of dust to use. Defaults to "TSP".
+    
+    Returns:
+        tuple:
+            sims (np.ndarray): Simulated daily soiling rates.
+            sa (np.ndarray): Daily sum of alpha values corresponding to the specified percentiles.
+            sa2 (np.ndarray): Daily sum of alpha^2 values corresponding to the specified percentiles.
+    """
     # This assumes a horizontal reflector
 
     # get daily sums for \alpha and \alpha^2
@@ -231,6 +283,32 @@ def daily_soiling_rate( sim_dat: smb.simulation_inputs,
     return sims,sa,sa2
 
 def fit_quality_plots(mod,rdat,files,mirrors,ax=None,min_loss=None,max_loss=None,include_fits=True,data_ls='b.',data_label="Data",replot=True,vertical_adjust=0,cumulative=False):
+    """
+    Plots the fit quality of a model by generating three subplots:
+    1. Fit quality on the training mirror(s)
+    2. Fit quality on the test mirror(s) (using the training interval)
+    3. Fit quality on the test experiments (using all tilts)
+    
+    The function takes in the model, reference data, training and test data, and other parameters to control the plot appearance and save the figure.
+    
+    Args:
+        mod (object): The trained model to evaluate.
+        rdat (object): The reference data to compare the model predictions against.
+        files (list): The list of training experiment IDs.
+        mirrors (list): The list of training or test mirror IDs.
+        ax (matplotlib.axes.Axes, optional): The axis to plot on. If None, a new figure and axis will be created.
+        min_loss (float, optional): The minimum loss value to use for the plot axes.
+        max_loss (float, optional): The maximum loss value to use for the plot axes.
+        include_fits (bool, optional): Whether to include linear fit lines in the plots.
+        data_ls (str, optional): The line style for the data points.
+        data_label (str, optional): The label for the data points.
+        replot (bool, optional): Whether to replot the ideal 1:1 line.
+        vertical_adjust (float, optional): Vertical adjustment for the annotation.
+        cumulative (bool, optional): Whether to plot cumulative loss instead of daily loss.
+    
+    Returns:
+        tuple: The generated figure and axis objects.
+    """    
     pi = rdat.prediction_indices
     meas = rdat.average
     r0 = rdat.rho0
@@ -250,14 +328,14 @@ def fit_quality_plots(mod,rdat,files,mirrors,ax=None,min_loss=None,max_loss=None
         if cumulative:
             cumulative_loss = 100*(r0[f][mirrors]-mm)
             cumulative_loss -= cumulative_loss[0,:]
-            cumulative_loss_prediction = 100*r0[f][mirrors][:,np.newaxis]*(1-sfm[:,pi[f]])
+            cumulative_loss_prediction = 100*r0[f][mirrors][:,np.newaxis]*(1-sfm[:,pi[f]-pi[f][0]])
             cumulative_loss_prediction -= cumulative_loss_prediction[:,0][:,np.newaxis]
             cumulative_loss_prediction = cumulative_loss_prediction.transpose()
             y += [cumulative_loss.flatten()]
             y_hat += [cumulative_loss_prediction.flatten()]
         else:
             delta_loss = -100*np.diff(mm,axis=0).flatten()
-            delta_rho_prediction = 100*r0[f][mirrors]*sfm[:,pi[f]].transpose()
+            delta_rho_prediction = 100*r0[f][mirrors]*sfm[:,pi[f]-pi[f][0]].transpose()
             mu_delta_loss = -np.diff(delta_rho_prediction,axis=0).flatten()
             y += [delta_loss]
             y_hat += [mu_delta_loss]
@@ -303,7 +381,30 @@ def fit_quality_plots(mod,rdat,files,mirrors,ax=None,min_loss=None,max_loss=None
 def summarize_fit_quality(model,ref,train_experiments,train_mirrors,
                             test_mirrors,test_experiments,min_loss,max_loss,
                             save_file,figsize=(8,6),include_fits=True):
+    """
+    Summarize the fit quality of a model by generating three subplots:
+    1. Fit quality on the training mirror(s)
+    2. Fit quality on the test mirror(s) (using the training interval)
+    3. Fit quality on the test experiments (using all tilts)
 
+    The function takes in the model, reference data, training and test data, and other parameters to control the plot appearance and save the figure.
+
+    Args:
+        model (object): The trained model to evaluate.
+        ref (object): The reference data to compare the model predictions against.
+        train_experiments (list): The list of training experiment IDs.
+        train_mirrors (list): The list of training mirror IDs.
+        test_mirrors (list): The list of test mirror IDs.
+        test_experiments (list): The list of test experiment IDs.
+        min_loss (float): The minimum loss value to use for the plot axes.
+        max_loss (float): The maximum loss value to use for the plot axes.
+        save_file (str): The file path to save the generated figure.
+        figsize (tuple): The figure size in inches.
+        include_fits (bool): Whether to include linear fit lines in the plots.
+
+    Returns:
+        tuple: The generated figure and axis objects.
+    """
     fig,ax = plt.subplots(nrows=1,ncols=3,
                           sharex=True,sharey=True,
                           figsize=figsize)

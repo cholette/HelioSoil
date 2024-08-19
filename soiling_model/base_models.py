@@ -25,6 +25,23 @@ from copylot import CoPylot
 tol = np.finfo(float).eps # machine floating point precision
 
 class base_model:
+    """
+        Initializes the base model class with parameters from a file.
+        
+        Args:
+            file_params (str): Path to the Excel file containing the model parameters.
+        
+        Attributes:
+            latitude (float): Latitude of the site in degrees.
+            longitude (float): Longitude of the site in degrees.
+            timezone_offset (float): Timezone offset from GMT in hours.
+            hrz0 (float): Site roughness height ratio.
+            loss_model (str): Either "geometry" or "mie" to specify the loss model.
+            constants (constants): An instance of the constants class.
+            helios (helios): An instance of the helios class.
+            sigma_dep (float): Standard deviation of the deposition velocity.
+            Ra (float): Aerodynamic resistance.
+    """
     def __init__(self,file_params):
         table = pd.read_excel(file_params,index_col="Parameter")
 
@@ -384,6 +401,22 @@ class base_model:
         ax1.set_xticks([0.001,0.01,0.1,1,2.5,4,10,20,100])
 
 class simulation_inputs:
+    """
+    Defines a `simulation_inputs` class that manages the input data for a soiling model simulation.
+    
+    The class provides methods to import weather and dust data from Excel files, and stores the data in dictionaries
+    with the file number as the key. The class also includes a `dust` attribute that stores the dust properties
+    for each experiment.
+    
+    The `import_weather` method reads weather data such as air temperature, wind speed, dust concentration, etc.
+    from the Excel files and stores them in the corresponding dictionaries.
+    
+    The `import_source_intensity` method reads the source intensity data from the Excel files and stores it in
+    the `source_wavelength` and `source_normalized_intensity` dictionaries.
+    
+    The `get_experiment_subset` method creates a copy of the `simulation_inputs` object with only the specified
+    experiments included.
+    """
     def __init__(self,experiment_files=None,k_factors=None,dust_type=None,verbose=True):
 
         # the below will be dictionaries of 1D arrays with file numbers as keys 
@@ -877,6 +910,24 @@ class helios:
         self.heliostats_in_sector = hel_sec
 
     def sectorize_corn(self,whole_field_file,n_hor,n_vert,verbose=True):
+        """
+        Sectorize the solar field by dividing it into a grid of horizontal and vertical sectors.
+        
+        This function reads the solar field coordinates from a CSV or XLSX file, generates a grid around 
+        the solar field, and assigns each heliostat to the closest grid point. The function then computes 
+        the representative heliostat for each sector and stores the sector information in the object's 
+        attributes.
+        
+        Parameters:
+            whole_field_file (str): The file path to the CSV or XLSX file containing the solar field coordinates.
+            n_hor (int): The number of horizontal sectors to divide the solar field into.
+            n_vert (int): The number of vertical sectors to divide the solar field into.
+            verbose (bool, optional): Whether to print progress messages. Defaults to True.
+        
+        Returns:
+            None
+        """
+                
             
         def read_solarfield(field_filepath): # Load CSV containing solarfield coordintes
             positions = []
@@ -965,6 +1016,18 @@ class helios:
             plt.show()
 
     def compute_extinction_weights(self,simulation_data,loss_model=None,verbose=True,options={}):
+        """
+        Computes the extinction weights for the heliostat field based on the specified loss model.
+        
+        Parameters:
+            simulation_data (object): An object containing simulation data, including dust properties and source information.
+            loss_model (str, optional): The loss model to use for computing the extinction weights. Can be either 'mie' or 'geometry'. Defaults to None.
+            verbose (bool, optional): Whether to print progress messages. Defaults to True.
+            options (dict, optional): Additional options to pass to the extinction function.
+        
+        Returns:
+            None
+        """
         sim_dat = simulation_data
         dust = sim_dat.dust
         files = list(sim_dat.file_name.keys())
@@ -1009,7 +1072,19 @@ class helios:
                 self.extinction_weighting[f] = np.ones((num_heliostats[f],num_diameters))
 
     def plot_extinction_weights(self,simulation_data,fig_kwargs={},plot_kwargs={}):
+        """
+        Plot the extinction weights for each heliostat and file in the simulation data.
         
+        Parameters:
+            simulation_data (object): The simulation data object containing the dust and other simulation parameters.
+            fig_kwargs (dict, optional): Additional keyword arguments to pass to the `plt.figure()` function.
+            plot_kwargs (dict, optional): Additional keyword arguments to pass to the `ax.semilogx()` function.
+        
+        Returns:
+            fig (matplotlib.figure.Figure): The figure object containing the plots.
+            ax (list of matplotlib.axes.Axes): The list of axes objects for each plot.
+        """
+                
         files = list(self.extinction_weighting.keys())
         Nhelios = [len(self.tilt[f]) for f in files]
         phia = [self.acceptance_angles[f] for f in files]
@@ -1110,6 +1185,22 @@ class constants:
         self.D0 = float(table.loc['D0'].Value)                          # [m] common value of separation distance (Ahmadi)
 
 class reflectance_measurements:
+    """
+    Represents a class for managing reflectance measurement data.
+    
+    The `reflectance_measurements` class is used to import and manage reflectance data from multiple experiments. It can handle multiple files, each containing 
+    average and standard deviation of reflectance measurements, as well as optional tilt information. The class provides methods to access the imported data and generate plots.
+    
+    Args:
+        reflectance_files (str or list): Path(s) to the Excel file(s) containing the reflectance data.
+        time_grids (list): List of time grids corresponding to each reflectance file.
+        number_of_measurements (int or list, optional): Number of reflectance measurements for each file. If not provided, defaults to 1 for each file.
+        reflectometer_incidence_angle (float or list, optional): Incidence angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
+        reflectometer_acceptance_angle (float or list, optional): Acceptance angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
+        import_tilts (bool, optional): Whether to import tilt information from the files. Defaults to False.
+        column_names_to_import (list, optional): List of column names to import from the data sheets. If not provided, all columns will be imported.
+        verbose (bool, optional): Whether to print progress messages. Defaults to True.
+    """
     def __init__(self,reflectance_files,time_grids,number_of_measurements=None, 
                     reflectometer_incidence_angle=None,reflectometer_acceptance_angle=None,
                     import_tilts=False,column_names_to_import=None,verbose=True):
@@ -1153,14 +1244,29 @@ class reflectance_measurements:
     def import_reflectance_data(self,reflectance_files,time_grids,number_of_measurements,
                                 reflectometer_incidence_angle,reflectometer_acceptance_angle,
                                 import_tilts=False,column_names_to_import=None):
+        """
+        Imports reflectance data from Excel files and stores the data in the object's attributes.
 
+        Args:
+            reflectance_files (str or list): Path(s) to the Excel file(s) containing the reflectance data.
+            time_grids (list): List of time grids corresponding to each reflectance file.
+            number_of_measurements (int or list, optional): Number of reflectance measurements for each file. If not provided, defaults to 1 for each file.
+            reflectometer_incidence_angle (float or list, optional): Incidence angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
+            reflectometer_acceptance_angle (float or list, optional): Acceptance angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
+            import_tilts (bool, optional): Whether to import tilt information from the files. Defaults to False.
+            column_names_to_import (list, optional): List of column names to import from the data sheets. If not provided, all columns will be imported.
+        """
         for ii in range(len(reflectance_files)):
             
             self.file_name[ii] = reflectance_files[ii]
             reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Average"),\
                 "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Sigma")}
 
-            self.times[ii] = reflectance_data['Average']['Time'].values
+            time_column = next((col for col in reflectance_data['Average'].columns if col.lower() in ['time', 'timestamp']), None)
+            if time_column is not None:
+                self.times[ii] = reflectance_data['Average'][time_column].values
+            else:
+                raise ValueError(f"No 'Time' or 'Timestamp' column found in file {reflectance_files[ii]}")            
             if column_names_to_import != None: # extract relevant column names of the pandas dataframe
                 self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
@@ -1268,6 +1374,17 @@ class field_model(base_model):
         self.sun = sun # update sun in the main model 
     
     def helios_angles(self,plant,verbose=True,second_surface=True):
+        """
+        Calculates the heliostat movement and angles for a given solar field and simulation inputs.
+        
+        Parameters:
+            plant (object): The solar plant object containing information about the plant configuration.
+            verbose (bool, optional): Whether to print progress messages. Defaults to True.
+            second_surface (bool, optional): Whether to use the second surface model for the incidence reflection factor. Defaults to True.
+        
+        Returns:
+            None
+        """
         sun = self.sun  
         helios = self.helios
 
