@@ -343,5 +343,40 @@ def summarize_fit_quality(model,ref,train_experiments,train_mirrors,
     return fig,ax
 
 
+def daily_soiling_tilt_all_data( sim_dat: smb.simulation_inputs,
+                                    model_save_file: str,
+                                    M: int = 1000,
+                                    dust_type="TSP",
+                                    tilt:float = None,
+                                    trim_percents = None):
 
+    # get daily sums for \alpha and \alpha^2
+    df = [pd.read_excel(f,"Weather") for f in sim_dat.file_name.values()]
+    df = pd.concat(df)
+    df.sort_values(by="Time",inplace=True)
 
+    prototype_pm = getattr(sim_dat.dust,dust_type)[0]
+    df['alpha'] = df[dust_type]/prototype_pm
+    df['date'] = (df['Time'].dt.date)
+    df['alpha2'] = df['alpha']**2
+    daily_sum_alpha = (df.groupby('date')['alpha'].sum()).values
+    daily_sum_alpha2 = (df.groupby('date')['alpha2'].sum()).values
+
+    if trim_percents is not None:
+        xl,xu = np.percentile(daily_sum_alpha,trim_percents,axis=None)
+        mask = ((daily_sum_alpha>=xl) & (daily_sum_alpha<=xu))
+        daily_sum_alpha = daily_sum_alpha[mask]
+        daily_sum_alpha2 = daily_sum_alpha2[mask]
+
+    if tilt is not None:
+        daily_sum_alpha = daily_sum_alpha*np.cos(np.radians(tilt))
+        daily_sum_alpha2 = daily_sum_alpha2*np.cos(np.radians(tilt))**2
+
+    # simulate
+    sims = soiling_rate(daily_sum_alpha,
+                        daily_sum_alpha2,
+                        model_save_file,
+                        M=M)
+
+    
+    return sims,daily_sum_alpha,daily_sum_alpha2

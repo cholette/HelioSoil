@@ -11,7 +11,7 @@ from soiling_model.utilities import _print_if,_ensure_list,\
                                     _extinction_function,_same_ext_coeff,\
                                     _import_option_helper,_parse_dust_str
 from textwrap import dedent
-from scipy.integrate import cumtrapz
+from scipy.integrate import cumulative_trapezoid
 from scipy.spatial.distance import cdist
 import copy
 from tqdm import tqdm
@@ -254,7 +254,7 @@ class physical_base(soiling_base):
                 _print_if("  No common stow_tilt. Use values in helios.tilt to compute removal moments. This might take some time.",verbose)
                 Nhelios = helios.tilt[f].shape[0]
                 Ntimes = helios.tilt[f].shape[1]
-                helios.pdfqN[f] = cumtrapz(y=helios.pdfqN[f],dx=dt[f],axis=1,initial=0) # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
+                helios.pdfqN[f] = cumulative_trapezoid(y=helios.pdfqN[f],dx=dt[f],axis=1,initial=0) # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
                 for h in range(Nhelios):
                     for k in range(Ntimes):
                         mom_removal = np.sin(rad(helios.tilt[f][h,k]))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity at each tilt for each diameter
@@ -554,7 +554,7 @@ class simulation_inputs:
                 _print_if("Length of simulation for file "+files[ii]+": "+str(T)+" days",verbose)
 
             self.dt[ii] = (self.time[ii][1]-self.time[ii][0]).total_seconds() #np.diff(self.time[ii])[0].astype(float) # [s] assumed constant. Make float for later computations
-            self.time_diff[ii] = (self.time[ii]-self.time[ii].astype('datetime64[D]')).astype('timedelta64[h]').astype('int')  # time difference from midnight in integer hours
+            self.time_diff[ii] = (self.time[ii].values-self.time[ii].values.astype('datetime64[D]')).astype('timedelta64[h]').astype('int')  # time difference from midnight in integer hours
             self.air_temp[ii] = np.array(weather.loc[:,'AirTemp'])
             
             # import windspeed and set a minimum value

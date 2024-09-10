@@ -17,9 +17,6 @@ from textwrap import dedent
 from pysolar import solar, radiation
 import datetime
 import pytz
-from scipy.optimize import minimize_scalar
-from scipy.integrate import cumtrapz
-from scipy.spatial.distance import cdist
 import copy
 from copylot import CoPylot
 from soiling_model.base_models import physical_base,constant_mean_base, sun
