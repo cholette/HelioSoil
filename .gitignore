@@ -10,4 +10,5 @@ analysis_scripts/confidential/
 data/
 notes/
 SolTrace/
-.venv
+.venv/
+dev/

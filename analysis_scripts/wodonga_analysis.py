@@ -78,7 +78,7 @@ reflect_data_train = smb.reflectance_measurements(  files_train,
                                                     import_tilts=True,
                                                     column_names_to_import=train_mirrors
                                                     )
-
+#%%
 # Trim data and plot
 sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                                 reflect_data_train,

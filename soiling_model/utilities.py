@@ -71,6 +71,18 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
     return cleans
 
 def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12)):
+    """
+    Plot the experiment data, including reflectance, dust concentration, rain intensity, wind speed, and relative humidity.
+    
+    Args:
+        simulation_inputs (SimulationInputs): The simulation input data.
+        reflectance_data (ReflectanceData): The reflectance data.
+        experiment_index (int): The index of the experiment to plot.
+        figsize (tuple): The size of the figure.
+    
+    Returns:
+        tuple: The figure and axes objects.
+    """
     sim_data = simulation_inputs
     reflect_data = reflectance_data
     f = experiment_index
@@ -144,6 +156,17 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
     return fig,ax
 
 def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
+    """
+    Trims the simulation input data and reflectance data based on the provided trim ranges.
+    
+    Args:
+        simulation_inputs (SimulationInputs): The simulation input data to be trimmed.
+        reflectance_data (ReflectanceData): The reflectance data to be trimmed.
+        trim_ranges (list, str): The trim ranges to be applied. Can be a list of [lower_bound, upper_bound] for each file, "reflectance_data" to use the reflectance data time range, or "simulation_inputs" to use the simulation input time range.
+    
+    Returns:
+        SimulationInputs, ReflectanceData: The trimmed simulation input and reflectance data.
+    """
     sim_dat = deepcopy(simulation_inputs)
     ref_dat = deepcopy(reflectance_data)
     files = sim_dat.time.keys()
@@ -155,8 +178,8 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
             ub = trim_ranges[f][1]
         elif trim_ranges=="reflectance_data":
             assert ref_dat is not None, "Reflectance data must be supplied for trim_ranges==""reflectance_data"""
-            lb = ref_dat.times[f][0]
-            ub = ref_dat.times[f][-1]
+            lb = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][0]
+            ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][-1]        
         elif trim_ranges == "simulation_inputs":
             lb = sim_dat.time[f].iloc[0]
             ub = sim_dat.time[f].iloc[-1]
@@ -195,7 +218,7 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
 
             ref_dat.prediction_indices[f] = []
             ref_dat.prediction_times[f] = []
-            time_grid = sim_dat.time[f]
+            time_grid = sim_dat.time[f].reset_index(drop=True)
             for m in ref_dat.times[f]:
                 ref_dat.prediction_indices[f].append(np.argmin(np.abs(m-time_grid)))        
                 ref_dat.prediction_times[f].append(time_grid.iloc[ref_dat.prediction_indices[f]])
@@ -368,17 +391,43 @@ def set_extinction_coefficients(destination_model,extinction_weights,file_inds):
     return dm
 
 def get_training_data(d,file_start,time_to_remove_at_end=0):
+    """
+    Get training data for a soiling model.
+    
+    This function loads training data from a directory of files, where each file contains
+    start and end dates for a training interval, as well as the names of mirrors used
+    in the training data.
+    
+    Args:
+        d (str): The directory containing the training data files.
+        file_start (str): The prefix of the training data files to load.
+        time_to_remove_at_end (int or list[int], optional): The number of hours to remove from the
+            end of each training interval. If a list, the length must match the number of files.
+    
+    Returns:
+        tuple:
+            - files (list[str]): The full paths to the training data files.
+            - training_intervals (numpy.ndarray): A 2D array of start and end dates for each
+              training interval, in datetime64[m] format.
+            - mirror_names (list[list[str]]): A list of lists, where each inner list contains
+              the names of mirrors used in the corresponding training data file.
+            - common (list[str]): The names of mirrors that are common to all training data files.
+    """
     files = [f for f in os.listdir(d) if f.startswith(file_start)]
 
     # get training time intervals
     if np.isscalar(time_to_remove_at_end):
         time_to_remove_at_end = [time_to_remove_at_end]*len(files)
     training_intervals = []
-    parse_date = lambda x: np.datetime64(f"{x[0:4]}-{x[4:6]}-{x[6::]}T00:00:00")
+    def parse_date(x):
+        if '-' in x:
+            return np.datetime64(x + 'T00:00:00')
+        else:
+            return np.datetime64(f"{x[0:4]}-{x[4:6]}-{x[6::]}T00:00:00")
     for ii,f in enumerate(files):
         f = f.split(".")[0]
-        dates = [parse_date(s) for s in f.split("_") if s.isnumeric()]
-        assert len(dates)==2, "File name must contain start and end dates in YYYYMMDD format."
+        dates = [parse_date(s) for s in f.split("_") if s.replace('-', '').isnumeric()]
+        assert len(dates)==2, "File name must contain start and end dates in YYYYMMDD or YYYY-MM-DD format."
         s = min(dates)
         e = max(dates)
 
@@ -417,7 +466,16 @@ def _parse_dust_str(dust_type):
     return attr
 
 def wind_rose(simulation_data,exp_idx):
+    """
+    Generate a wind rose plot from the provided simulation data.
     
+    Args:
+        simulation_data (pandas.DataFrame): A DataFrame containing the simulation data, including wind direction and wind speed.
+        exp_idx (int): The index of the experiment to plot.
+    
+    Returns:
+        matplotlib.figure.Figure, windrose.WindroseAxes: The figure and axes objects for the wind rose plot.
+    """ 
     from windrose import WindroseAxes
     fig = plt.figure()
     wd = simulation_data.wind_direction[exp_idx]
