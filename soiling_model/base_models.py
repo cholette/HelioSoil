@@ -11,7 +11,7 @@ from soiling_model.utilities import _print_if,_ensure_list,\
                                     _extinction_function,_same_ext_coeff,\
                                     _import_option_helper,_parse_dust_str
 from textwrap import dedent
-from scipy.integrate import cumtrapz
+from scipy.integrate import cumulative_trapezoid
 from scipy.spatial.distance import cdist
 import copy
 from tqdm import tqdm
@@ -254,7 +254,7 @@ class physical_base(soiling_base):
                 _print_if("  No common stow_tilt. Use values in helios.tilt to compute removal moments. This might take some time.",verbose)
                 Nhelios = helios.tilt[f].shape[0]
                 Ntimes = helios.tilt[f].shape[1]
-                helios.pdfqN[f] = cumtrapz(y=helios.pdfqN[f],dx=dt[f],axis=1,initial=0) # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
+                helios.pdfqN[f] = cumulative_trapezoid(y=helios.pdfqN[f],dx=dt[f],axis=1,initial=0) # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
                 for h in range(Nhelios):
                     for k in range(Ntimes):
                         mom_removal = np.sin(rad(helios.tilt[f][h,k]))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity at each tilt for each diameter
