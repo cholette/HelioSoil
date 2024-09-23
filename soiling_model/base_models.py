@@ -562,68 +562,86 @@ class simulation_inputs:
                 self.source_normalized_intensity[ii] = None
             xl.close()
 
-    def import_weather(self,files,dust_type,verbose=True,smallest_windspeed=1e-6):
-        
+
+    def import_weather(self, files, dust_type, verbose=True, smallest_windspeed=1e-6):
         files = _ensure_list(files)
-        dust_type = _import_option_helper(files,dust_type)
-        for ii in range(len(files)):
+        dust_type = _import_option_helper(files, dust_type)
+        
+        weather_variables = { # List of possible weather variable names and the combination of possibly names
+            'air_temp': ['AirTemp', 'Temperature', 'Temp'],
+            'wind_speed': ['WindSpeed', 'WS'],
+            'dni': ['DNI', 'DirectNormalIrradiance'],
+            'rain_intensity': ['RainIntensity', 'Precipitation'],
+            'relative_humidity': ['RH', 'RelativeHumidity'],
+            'wind_direction': ['WD', 'WindDirection']
+        }
+        
+        dust_names = { # List of possible dust concentration names and the combination of possibly names
+            'PM_tot': ['PM_tot', 'PM_TOT', 'PMTOT', 'PMT', 'PM20'],
+            'TSP': ['TSP'],
+            'PM10': ['PM10'],
+            'PM2p5': ['PM2_5', 'PM2p5'],
+            'PM1': ['PM1'],
+            'PM4': ['PM4']
+        }
 
-            self.file_name[ii] = files[ii]
-            weather = pd.read_excel(files[ii],sheet_name="Weather")
+        self.weather_variables = []
 
-            # Set time vector. Get from the weather file
-            time = pd.to_datetime(weather['Time']) #weather['Time'].to_numpy(dtype = 'datetime64[s]')
-            self.start_datetime[ii] = time.iloc[0] # pd.to_datetime(weather['Time'].iloc[0]).to_numpy()
-            self.end_datetime[ii] = time.iloc[-1] # pd.to_datetime(weather['Time'].iloc[-1]).to_numpy()
-            # time =  pd.date_range(self.start_datetime[ii],self.end_datetime[ii],freq='1H').to_numpy(dtype = 'datetime64[s]')  # allow for flexible frequency later
-                    
-            _print_if("Importing site data (weather,time). Using dust_type = "+dust_type[ii]+", test_length = "+\
-                str( (self.end_datetime[ii]-self.start_datetime[ii]).days )+" days",verbose)
+        for ii, file in enumerate(files): # Loop through each campaign and import weather files
+            self.file_name[ii] = file
+            weather = pd.read_excel(file, sheet_name="Weather")
+
+            time = pd.to_datetime(weather['Time'])
+            self.start_datetime[ii] = time.iloc[0]
+            self.end_datetime[ii] = time.iloc[-1]
+            
+            _print_if(f"Importing site data (weather,time). Using dust_type = {dust_type[ii]}, test_length = {(self.end_datetime[ii]-self.start_datetime[ii]).days} days", verbose)
             
             self.time[ii] = time
+            self.dt[ii] = (self.time[ii][1] - self.time[ii][0]).total_seconds()
+            self.time_diff[ii] = (self.time[ii].values - self.time[ii].values.astype('datetime64[D]')).astype('timedelta64[h]').astype('int')
 
-            if verbose:
-                T = ( (time.iloc[-1]-time.iloc[0]).days)
-                _print_if("Length of simulation for file "+files[ii]+": "+str(T)+" days",verbose)
+            for attr_name, column_names in weather_variables.items(): # Search for weather variables inside the weather file and save them to self
+                for column in column_names:
+                    if column in weather.columns:
+                        setattr(self, attr_name, {}) if not hasattr(self, attr_name) else None
+                        getattr(self, attr_name)[ii] = np.array(weather.loc[:, column])
+                        _print_if(f"Importing {column} data as {attr_name}...", verbose)
+                        if attr_name not in self.weather_variables:
+                            self.weather_variables.append(attr_name)
+                        break
+                else:
+                    _print_if(f"No {attr_name} data to import.", verbose)
 
-            self.dt[ii] = (self.time[ii][1]-self.time[ii][0]).total_seconds() #np.diff(self.time[ii])[0].astype(float) # [s] assumed constant. Make float for later computations
-            self.time_diff[ii] = (self.time[ii].values-self.time[ii].values.astype('datetime64[D]')).astype('timedelta64[h]').astype('int')  # time difference from midnight in integer hours
-            self.air_temp[ii] = np.array(weather.loc[:,'AirTemp'])
-            
-            # import windspeed and set a minimum value
-            self.wind_speed[ii] = np.array(weather.loc[:,'WindSpeed'])
-            idx_too_low, = np.where(self.wind_speed[ii]==0)
-            if len(idx_too_low) > 0:
-                self.wind_speed[ii][idx_too_low] = smallest_windspeed
-                _print_if(f"Warning: some windspeeds were <= 0 and were set to {smallest_windspeed}",verbose)
+            if hasattr(self, 'wind_speed') and ii in self.wind_speed:
+                idx_too_low = np.where(self.wind_speed[ii] == 0)[0]
+                if len(idx_too_low) > 0:
+                    self.wind_speed[ii][idx_too_low] = smallest_windspeed
+                    _print_if(f"Warning: some windspeeds were <= 0 and were set to {smallest_windspeed}", verbose)
 
-            if 'DNI' in weather.columns: # only import DNI if it exists
-                self.dni[ii] = np.array(weather.loc[:,'DNI']) 
-            else:
-                _print_if("No DNI data to import. Skipping.",verbose)
-                
-            # import dust measurements
-            self.dust_concentration[ii] = self.k_factors[ii]*np.array(weather.loc[:,dust_type[ii]])
+            self.dust_concentration[ii] = self.k_factors[ii] * np.array(weather.loc[:, dust_type[ii]]) # Set dust concentration to be used for soiling predictions
+            if 'dust_concentration' not in self.weather_variables:
+                self.weather_variables.append('dust_concentration')
             self.dust_type[ii] = dust_type[ii]
 
-            if "RainIntensity" in weather:
-                _print_if("Importing rain intensity data...",verbose)
-                self.rain_intensity[ii] = np.array(weather.loc[:,'RainIntensity'])
-            else:
-                _print_if("No rain intensity data to import.",verbose)
+            for dust_key, dust_aliases in dust_names.items(): # Load all dust concentration data inside weather file
+                for alias in dust_aliases:
+                    if alias in weather.columns:
+                        dust_value = np.array(weather.loc[:, alias])
+                        if not hasattr(self, dust_key.lower()):
+                            setattr(self, dust_key.lower(), {})
+                        getattr(self, dust_key.lower())[ii] = dust_value
+                        _print_if(f"Importing {dust_key} data...", verbose)
+                        if dust_key.lower() not in self.weather_variables:
+                            self.weather_variables.append(dust_key.lower())
+                        break
+                else:
+                    _print_if(f"No {dust_key} data to import.", verbose)
 
-            if "RH" in weather:
-                _print_if("Importing relative humidity data...",verbose)
-                self.relative_humidity[ii] = np.array(weather.loc[:,'RH'])
-            else:
-                _print_if("No relative humidity data to import.",verbose)
-
-            if "WD" in weather:
-                _print_if("Importing wind direction data ...",verbose)
-                self.wind_direction[ii] = np.array(weather.loc[:,'WD'])
-            else:
-                _print_if("No wind direction data to import.",verbose)
-
+            if verbose:
+                T = (time.iloc[-1] - time.iloc[0]).days
+                _print_if(f"Length of simulation for file {file}: {T} days", verbose)
+                
     def get_experiment_subset(self,idx):
         attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes
         self_out = copy.deepcopy(self)

@@ -155,7 +155,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
 
     return fig,ax
 
-def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
+def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
     """
     Trims the simulation input data and reflectance data based on the provided trim ranges.
     
@@ -167,6 +167,15 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
     Returns:
         SimulationInputs, ReflectanceData: The trimmed simulation input and reflectance data.
     """
+    if hasattr(simulation_inputs, 'weather_variables'):
+        weather_variables = simulation_inputs.weather_variables
+        if 'time' not in weather_variables:
+            weather_variables.append('time')
+        if 'time_diff' not in weather_variables:
+            weather_variables.append('time_diff')
+    else:
+        weather_variables = ['time', 'dt', 'time_diff', 'air_temp', 'wind_speed', 'wind_direction', 
+                             'dust_concentration', 'rain_intensity', 'dni', 'relative_humidity']
     sim_dat = deepcopy(simulation_inputs)
     ref_dat = deepcopy(reflectance_data)
     files = sim_dat.time.keys()
@@ -192,19 +201,9 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
         if all(mask==0):
             raise ValueError(f"Provided date range of {lb} to {ub} for file {sim_dat.file_name[f]} excludes all data.")
             
-        sim_dat.time[f] = sim_dat.time[f][mask]
-        sim_dat.time_diff[f] = sim_dat.time_diff[f][mask]
-        sim_dat.air_temp[f] = sim_dat.air_temp[f][mask]
-        sim_dat.wind_speed[f] = sim_dat.wind_speed[f][mask]
-        sim_dat.dust_concentration[f] = sim_dat.dust_concentration[f][mask]
-        if len(sim_dat.rain_intensity)>0:
-            sim_dat.rain_intensity[f] = sim_dat.rain_intensity[f][mask]
-        if len(sim_dat.dni)>0:
-            sim_dat.dni[f] = sim_dat.dni[f][mask]
-        if len(sim_dat.relative_humidity)>0:
-            sim_dat.relative_humidity[f] = sim_dat.relative_humidity[f][mask]
-        if len(sim_dat.wind_direction)>0:
-            sim_dat.wind_direction[f] = sim_dat.wind_direction[f][mask]
+        for var in weather_variables:
+            if hasattr(sim_dat, var) and len(getattr(sim_dat, var)) > 0:
+                setattr(sim_dat, var, {**getattr(sim_dat, var), f: getattr(sim_dat, var)[f][mask]})
         
         if reflectance_data is not None:
             # trim reflectance data

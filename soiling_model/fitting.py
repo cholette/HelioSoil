@@ -157,7 +157,9 @@ class common_fitting_methods:
         """
         Fits the soiling model parameters using maximum likelihood estimation (MLE).
         
-        This function fits the soiling model parameters, `hrz0` and `sigma_dep`, using maximum likelihood estimation (MLE). It can initialize the optimization using least squares and 1D MLE, and provides the option to transform the parameter estimates back to the original scale.
+        This function fits the soiling model parameters, `hrz0` and `sigma_dep`, using maximum likelihood estimation (MLE). 
+        It can initialize the optimization using least squares and 1D MLE, and provides the option to transform the parameter 
+        estimates back to the original scale.
         
         Args:
             simulation_inputs (dict): A dictionary containing the simulation inputs.
