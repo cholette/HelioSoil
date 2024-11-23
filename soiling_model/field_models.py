@@ -34,24 +34,49 @@ class central_tower_plant:
         self.power_block_efficiency = []
         self.aim_point_strategy = []
         
-    def import_plant(self,file_params):
-        table = pd.read_excel(file_params,index_col="Parameter")
+    def import_plant(self, file_params):
+        table = pd.read_excel(file_params, index_col="Parameter")
+        
+        required_params = [
+            'receiver_type',
+            'receiver_tower_height',
+            'receiver_height',
+            'receiver_thermal_losses',
+            'minimum_receiver_power',
+            'maximum_receiver_power',
+            'power_block_efficiency',
+            'heliostat_aim_point_strategy'
+        ]
+        
+        width_params = ['receiver_width_diameter', 'receiver_width', 'receiver_diameter']
+        if not any(param in table.index for param in width_params):
+            required_params.append('receiver_width_diameter')
+        
+        missing_params = [param for param in required_params if param not in table.index]
+        
+        if missing_params:
+            raise ValueError(f"Missing required parameters in input file: {', '.join(missing_params)}")
         
         self.receiver['receiver_type'] = table.loc['receiver_type'].Value
-        self.receiver['width_diameter'] = float(table.loc['receiver_width_diameter'].Value) # Width/Diameter for Flat/Circular receiver
+        if 'receiver_width_diameter' in table.index:
+            self.receiver['width_diameter'] = float(table.loc['receiver_width_diameter'].Value)
+        elif 'receiver_width' in table.index:
+            self.receiver['width_diameter'] = float(table.loc['receiver_width'].Value)
+        elif 'receiver_diameter' in table.index:
+            self.receiver['width_diameter'] = float(table.loc['receiver_diameter'].Value)
+        else:
+            raise ValueError("Missing receiver width/diameter parameter in input file")
         if self.receiver['receiver_type'] == 'Flat plate':
-            try:
-                self.receiver['orientation_elevation'] = float(table.loc['receiver_orientation_elevation'].Value)
-            except:
+            if 'receiver_orientation_elevation' not in table.index:
                 raise ValueError("receiver_orientation_elevation for Flat plate not specified in parameters file")
+            self.receiver['orientation_elevation'] = float(table.loc['receiver_orientation_elevation'].Value)
         self.receiver['tower_height'] = float(table.loc['receiver_tower_height'].Value)
         self.receiver['panel_height'] = float(table.loc['receiver_height'].Value)
         self.receiver['thermal_losses'] = float(table.loc['receiver_thermal_losses'].Value)
         self.receiver['thermal_min'] = float(table.loc['minimum_receiver_power'].Value)
         self.receiver['thermal_max'] = float(table.loc['maximum_receiver_power'].Value)
         self.power_block_efficiency = float(table.loc['power_block_efficiency'].Value)
-        self.aim_point_strategy = table.loc['heliostat_aim_point_strategy'].Value
-
+        self.aim_point_strategy = table.loc['heliostat_aim_point_strategy'].Value        
 class field_common_methods:
     def sun_angles(self,simulation_inputs,verbose=True):
         sim_in = simulation_inputs
@@ -134,7 +159,19 @@ class field_common_methods:
         self.helios = helios
 
     def reflectance_loss(self,simulation_inputs,cleans,verbose=True):
+        """
+        Calculates the reflectance losses with cleaning for the given simulation inputs and cleaning schedule.
         
+        This method computes the hourly soiling factor for each heliostat in the solar field, taking into account the cleaning schedule provided. It accumulates the soiling between cleaning events and applies the appropriate reflectance loss factor based on the incidence angle.
+        
+        Args:
+            simulation_inputs (object): An object containing the simulation inputs, including the time series data.
+            cleans (numpy.ndarray): A 2D array indicating the cleaning schedule for each heliostat, where each row represents a heliostat and each column represents a day.
+            verbose (bool, optional): Whether to print verbose output. Defaults to True.
+        
+        Returns:
+            None
+        """
         sim_in = simulation_inputs
         N_sims = sim_in.N_simulations
         _print_if("Calculating reflectance losses with cleaning for "+str(N_sims)+" simulations",verbose)
@@ -175,11 +212,28 @@ class field_common_methods:
                     temp_soil2[hh,clean_idx[cc]:clean_idx[cc+1]] = \
                         np.cumsum(sra[clean_idx[cc]:clean_idx[cc+1]])
                                 
+            helios.arealoss = temp_soil2
             helios.soiling_factor[f] = 1-temp_soil2*helios.inc_ref_factor[f]  # hourly soiling factor for each sector of the solar field
         
         self.helios = helios
 
     def optical_efficiency(self,plant,simulation_inputs,climate_file,verbose=True,n_az=10,n_el=10):
+        """
+        Computes the optical efficiency of a heliostat field for a given set of simulation inputs and climate data.
+        
+        This method sets up the simulation parameters in the CoPylot library, including the heliostat field layout, receiver properties, and simulation settings. It then computes the optical efficiency of each heliostat in the field for a grid of solar azimuth and elevation angles, and uses this lookup table to compute the time series of optical efficiency for each heliostat during the simulation.
+        
+        Args:
+            plant (object): A plant object containing information about the receiver and aim point strategy.
+            simulation_inputs (object): An object containing the simulation inputs, including the time series data.
+            climate_file (str): The path to the climate data file (in .epw format).
+            verbose (bool, optional): Whether to print verbose output. Defaults to True.
+            n_az (int, optional): The number of azimuth angles to use in the lookup table. Defaults to 10.
+            n_el (int, optional): The number of elevation angles to use in the lookup table. Defaults to 10.
+        
+        Returns:
+            None
+        """
         helios = self.helios
         sim_in = simulation_inputs
         sun = self.sun

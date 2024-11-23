@@ -160,7 +160,7 @@ class physical_base(soiling_base):
 
         return(aerodynamic_resistance,boundary_layer_resistance,vg,vt,vz)
 
-    def deposition_flux(self,simulation_inputs,hrz0=None,verbose=True,Ra=True):
+    def deposition_flux(self,simulation_inputs,hrz0=None,verbose=True,Ra=True, plot_deposition=False):
         sim_in = simulation_inputs
         helios = self.helios
         dust = sim_in.dust
@@ -248,6 +248,23 @@ class physical_base(soiling_base):
                 helios.pdfqN[f][idx,:,:] = Fd.transpose()*dust.pdfN[f]*1e6  # Dust flux pdf, i.e. [dq[particles/(s*m^2)]/dLog_{10}(D[µm]) ] deposited on 1m2. 1e6 for cm^3->m^3 
             
         self.helios = helios
+        if plot_deposition:
+            plt.figure(figsize=(6, 6))
+        
+            plt.loglog(dust.D[0], vz[:,-1], label='deposition', linestyle='-')
+            plt.loglog(dust.D[0], vg, label='settling', linestyle='--')
+            plt.loglog(dust.D[0], vt.transpose()[:,-1], label='turbulence_diffusion', linestyle='--')
+            
+            plt.xlabel('Particle Diameter (μm)')
+            plt.ylabel('Velocity (m/s)')
+            plt.title('Velocity Components vs Particle Diameter')
+            plt.grid(True, which="both", ls="-", alpha=0.2)
+            plt.legend()
+            plt.ylim(1e-5, 1e0)
+            plt.xlim(0.1,100)
+            plt.tight_layout()
+            plt.show()      
+            
         
     def adhesion_removal(self,simulation_inputs,verbose=True):
         _print_if("Calculating adhesion/removal balance",verbose)
@@ -568,21 +585,21 @@ class simulation_inputs:
         dust_type = _import_option_helper(files, dust_type)
         
         weather_variables = { # List of possible weather variable names and the combination of possibly names
-            'air_temp': ['AirTemp', 'Temperature', 'Temp'],
-            'wind_speed': ['WindSpeed', 'WS'],
-            'dni': ['DNI', 'DirectNormalIrradiance'],
-            'rain_intensity': ['RainIntensity', 'Precipitation'],
-            'relative_humidity': ['RH', 'RelativeHumidity'],
-            'wind_direction': ['WD', 'WindDirection']
+            'air_temp': ['airtemp', 'temperature', 'temp', 'ambt'],
+            'wind_speed': ['windspeed', 'ws'],
+            'dni': ['dni', 'directnormalirradiance'],
+            'rain_intensity': ['rainintensity', 'precipitation'],
+            'relative_humidity': ['rh', 'relativehumidity','rhx'],
+            'wind_direction': ['wd', 'winddirection']
         }
         
         dust_names = { # List of possible dust concentration names and the combination of possibly names
-            'PM_tot': ['PM_tot', 'PM_TOT', 'PMTOT', 'PMT', 'PM20'],
-            'TSP': ['TSP'],
-            'PM10': ['PM10'],
-            'PM2p5': ['PM2_5', 'PM2p5'],
-            'PM1': ['PM1'],
-            'PM4': ['PM4']
+            'PM_tot': ['pm_tot', 'pmtot', 'pmt', 'pm20'],
+            'TSP': ['tsp'],
+            'PM10': ['pm10'],
+            'PM2p5': ['pm2_5', 'pm2p5'],
+            'PM1': ['pm1'],
+            'PM4': ['pm4']
         }
 
         self.weather_variables = []
@@ -603,9 +620,9 @@ class simulation_inputs:
 
             for attr_name, column_names in weather_variables.items(): # Search for weather variables inside the weather file and save them to self
                 for column in column_names:
-                    if column in weather.columns:
+                    if column in [col.lower() for col in weather.columns]:
                         setattr(self, attr_name, {}) if not hasattr(self, attr_name) else None
-                        getattr(self, attr_name)[ii] = np.array(weather.loc[:, column])
+                        getattr(self, attr_name)[ii] = np.array(weather.loc[:, [col for col in weather.columns if col.lower() == column][0]])
                         _print_if(f"Importing {column} data as {attr_name}...", verbose)
                         if attr_name not in self.weather_variables:
                             self.weather_variables.append(attr_name)
@@ -626,8 +643,8 @@ class simulation_inputs:
 
             for dust_key, dust_aliases in dust_names.items(): # Load all dust concentration data inside weather file
                 for alias in dust_aliases:
-                    if alias in weather.columns:
-                        dust_value = np.array(weather.loc[:, alias])
+                    if alias in [col.lower() for col in weather.columns]:
+                        dust_value = np.array(weather.loc[:, [col for col in weather.columns if col.lower() == alias][0]])
                         if not hasattr(self, dust_key.lower()):
                             setattr(self, dust_key.lower(), {})
                         getattr(self, dust_key.lower())[ii] = dust_value
@@ -723,7 +740,7 @@ class dust:
 
         # add dust measurements if they are PMX
         for dt in dust_measurement_type:
-            if dt not in [None,"TSP"]: # another concentration is of interest (possibly because we have PMX measurements)
+            if dt.lower() not in [None,"tsp"]: # another concentration is of interest (possibly because we have PMX measurements)
                 X = dt[2::]
                 if len(X) in [1,2]: # integer, e.g. PM20
                     X = int(X)
@@ -1069,7 +1086,6 @@ class helios:
             else:
                 closest_grid = np.vstack([closest_grid,np.hstack([positions[i,:],distance_grid,closest_idx])])
         
-        
         # Store Heliostat Field information
         self.full_field['x'] = (closest_grid[:,1])
         self.full_field['y'] = (closest_grid[:,2])
@@ -1091,7 +1107,7 @@ class helios:
         self.heliostats_in_sector = np.array(representative_helio[:,-1],dtype=np.int64)
         self.sector_area = self.heliostats_in_sector * self.height * self.width
     
-    def sector_plot(self):
+    def sector_plot(self,plot_title='Solar Field Sectors', plot_size=None):
         Ns = self.x.shape[0]
         n_theta = self.num_theta_sectors
         n_radius = self.num_radial_sectors
@@ -1109,15 +1125,20 @@ class helios:
             c_map = turbo(c_map)
 
             sid = self.full_field['sector_id']
-            fig,ax = plt.subplots()
+            fig,ax = plt.subplots(figsize=(10,10))
             for ii in range(Ns):
                 ax.scatter(self.full_field['x'][sid==ii],self.full_field['y'][sid==ii],color=c_map[ii])
             ax.scatter(self.x,self.y,color='black',marker='o',label='representative heliostats')
-            plt.legend()
-            plt.xlabel('distance from receiver - x [m]')
-            plt.ylabel('distance from receiver -y [m]')
-            plt.title('Solar Field Sectors')
+            ax.legend(fontsize=12)
+            ax.tick_params(axis='both', which='major', labelsize=12)
+            if plot_size is not None:
+                ax.set_xlim(plot_size[0])
+                ax.set_ylim(plot_size[1])
+            plt.xlabel('distance from receiver - x [m]',fontsize=14)
+            plt.ylabel('distance from receiver -y [m]',fontsize=14)
+            plt.title(plot_title,fontsize=16)
             plt.show()
+            return fig
 
     def compute_extinction_weights(self,simulation_data,loss_model=None,verbose=True,show_plots=False,options={}):
         """

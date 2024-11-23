@@ -40,7 +40,7 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
     if clean_interval < min_clean_interval:
         clean_interval = min_clean_interval
         n_cleans = int(np.floor(T_days/clean_interval))
-        print("Warning: Cannot clean that many times. Setting number of cleans = "+str(n_cleans))
+        print("Warning: Cannot clean that many times with "+str(n_trucks)+" crews. Setting number of cleans = "+str(n_cleans))
 
     # evenly space cleaning ends
     clean_ends = np.linspace(0,n_hours-1,num=n_cleans+1,dtype=int)
@@ -453,6 +453,15 @@ def get_training_data(d,file_start,time_to_remove_at_end=0):
     return files,training_intervals,mirror_names,common
 
 def _parse_dust_str(dust_type):
+    """
+    Parse a dust type string into a standardized attribute name.
+    
+    Args:
+        dust_type (str): The dust type string, which must start with "TSP" or "PM".
+    
+    Returns:
+        str: The standardized attribute name for the dust type.
+    """
     assert dust_type.startswith(("TSP","PM")), "dust_type must be PMX, PMX.X or TSP"
     if dust_type.startswith("TSP"):
         attr = "TSP"
