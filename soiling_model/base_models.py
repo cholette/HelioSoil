@@ -260,6 +260,9 @@ class physical_base(soiling_base):
                         mom_removal = np.sin(rad(helios.tilt[f][h,k]))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity at each tilt for each diameter
                         mom_adhesion =  (F_adhesion+F_gravity*np.cos(rad(helios.tilt[f][h,k])))*radius_sep             # [Nm] adhesion moment  
                         helios.pdfqN[f][h,k::,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
+                        if any(mom_adhesion<mom_removal):
+                            _print_if("Some dust is removed",verbose)
+
                 
                 helios.pdfqN[f] = np.gradient(helios.pdfqN[f],dt[f],axis=1) # Take derivative so that pdfqN is the rate at wich dust is deposited at each diameter
 
@@ -554,7 +557,7 @@ class simulation_inputs:
                 _print_if("Length of simulation for file "+files[ii]+": "+str(T)+" days",verbose)
 
             self.dt[ii] = (self.time[ii][1]-self.time[ii][0]).total_seconds() #np.diff(self.time[ii])[0].astype(float) # [s] assumed constant. Make float for later computations
-            self.time_diff[ii] = (self.time[ii]-self.time[ii].astype('datetime64[D]')).astype('timedelta64[h]').astype('int')  # time difference from midnight in integer hours
+            self.time_diff[ii] = (self.time[ii].values-self.time[ii].values.astype('datetime64[D]')).astype('timedelta64[h]').astype('int')  # time difference from midnight in integer hours
             self.air_temp[ii] = np.array(weather.loc[:,'AirTemp'])
             
             # import windspeed and set a minimum value
@@ -1239,7 +1242,8 @@ class reflectance_measurements:
             for m in self.times[ii]:
                 self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))        
             self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
-            self.rho0[ii] = self.average[ii][0,:]
+            for jj in range(self.average[ii].shape[1]):
+                self.rho0[ii] = np.nanmax(self.average[ii], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
 
             # idx = reflectance_files.index(f) 
             self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]

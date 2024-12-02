@@ -85,8 +85,16 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,lgd
         names = ["M"+str(ii+1) for ii in range(ave.shape[1])]
     else:
         names = lgd_label
+    # for ii in range(ave.shape[1]):
+    #     # remove NaNs
+    #     ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=(names[ii][0:5]),marker='o',capsize=4.0)
     for ii in range(ave.shape[1]):
-        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=(names[ii][0:5]),marker='o',capsize=4.0)
+        # remove NaNs for irregular data measurements
+        valid_indices = ~np.isnan(ave[:,ii])
+        t_valid = t[valid_indices].squeeze()
+        ave_valid = ave[valid_indices,ii].squeeze()
+        std_valid = std[valid_indices,ii].squeeze()
+        ax[0].errorbar(t_valid,ave_valid,yerr=1.96*std_valid,label=(names[ii][0:5]),marker='o',capsize=4.0)
 
     ax[0].grid(True) 
     label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data.reflectometer_incidence_angle[f]) 
@@ -94,10 +102,14 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,lgd
     ax[0].legend(fontsize=lgd_size,ncol=len(ave)//2)
 
     ax[1].plot(sim_data.time[f],sim_data.dust_concentration[f],color='brown',label="measurements")
-    ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = "Average")
+    # ax[1].plot(sim_data.hours[f],sim_data.hourly_dust_avg[f],color='black',ls='--',label="hourly")
+    ax[1].plot(sim_data.days[f],sim_data.daily_dust_avg[f],color='black',ls='--',label="daily")
+    ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = r"Average = {0:.2f}".format(sim_data.dust_concentration[f].mean()))
     label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data.dust_type[0])
     ax[1].set_ylabel(label_str,color='brown',fontsize=20)
     ax[1].tick_params(axis='y', labelcolor='brown')
+    YL_dust = 3*sim_data.dust_concentration[f].mean()
+    ax[1].set_ylim((0,YL_dust))
     ax[1].grid(True)
     ax[1].legend(fontsize=lgd_size)
 
@@ -115,7 +127,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,lgd
     ax[2].grid(True)
 
     ax[3].plot(sim_data.time[f],sim_data.wind_speed[f],color='green',label="measurements")
-    ax[3].axhline(y=sim_data.wind_speed[f].mean(),color='green',ls='--',label = "Average")
+    ax[3].axhline(y=sim_data.wind_speed[f].mean(),color='green',ls='--',label = r"Average = {0:.2f}".format(sim_data.wind_speed[f].mean()))
     label_str = r'Wind Speed [$m\,/\,s$]'
     ax[3].set_ylabel(label_str,color='green')
     ax[3].set_xlabel('Date')
@@ -125,7 +137,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,lgd
 
     if len(sim_data.relative_humidity)>0: 
         ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='black',label="measurements")
-        ax[4].axhline(y=sim_data.relative_humidity[f].mean(),color='black',ls='--',label = "Average")
+        ax[4].axhline(y=sim_data.relative_humidity[f].mean(),color='black',ls='--',label = r"Average = {0:.2f}".format(sim_data.relative_humidity[f].mean()))
     else:
         rain_nan = np.nan*np.ones(sim_data.time[f].shape)
         ax[4].plot(sim_data.time[f],rain_nan)
@@ -229,6 +241,14 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
     ref_dat = deepcopy(reflectance_data)
     files = sim_dat.time.keys()
 
+    # Ensure sim_dat has hourly_dust_avg and daily_dust_avg attributes
+    if not hasattr(sim_dat, 'hourly_dust_avg'):
+        sim_dat.hourly_dust_avg = {}
+        sim_dat.hours = {}
+    if not hasattr(sim_dat, 'daily_dust_avg'):
+        sim_dat.daily_dust_avg = {}
+        sim_dat.days = {}
+
     for f in files:
         if isinstance(trim_ranges,list):  
             assert isinstance(trim_ranges[f],list) or isinstance(trim_ranges[f],np.ndarray), "trim_ranges must be a list of lists or a list of 1D np.arrays"
@@ -264,6 +284,16 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
         if len(sim_dat.wind_direction)>0:
             sim_dat.wind_direction[f] = sim_dat.wind_direction[f][mask]
         
+        # Calculate hourly and daily averages of dust_concentration
+        dust_conc_temp = pd.Series(sim_dat.dust_concentration[f], index=pd.to_datetime(sim_dat.time[f]))
+        hourly_avg = dust_conc_temp.resample('H').mean()
+        daily_avg = dust_conc_temp.resample('D').mean()
+
+        sim_dat.hourly_dust_avg[f] = hourly_avg
+        sim_dat.daily_dust_avg[f] = daily_avg            
+        sim_dat.hours[f] = hourly_avg.index  # Store hourly timestamps
+        sim_dat.days[f] = daily_avg.index    # Store daily timestamps
+
         if reflectance_data is not None:
             # trim reflectance data
             if len(ref_dat.tilts)>0:
@@ -280,7 +310,8 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
             for m in ref_dat.times[f]:
                 ref_dat.prediction_indices[f].append(np.argmin(np.abs(m-time_grid)))        
                 ref_dat.prediction_times[f].append(time_grid.iloc[ref_dat.prediction_indices[f]])
-                ref_dat.rho0[f] = ref_dat.average[f][0,:]
+                ref_dat.rho0[f] = np.nanmax(ref_dat.average[f], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
+                 
     
     return sim_dat,ref_dat
 
@@ -314,7 +345,7 @@ def daily_average(ref_dat,time_grids,dt=None):
             
             daily = df.groupby("day")
             N = daily.count()['sigma'].values
-            sum_var = df.groupby('day')['sigma'].apply(lambda x: sum(x**2)).values
+            sum_var = df.groupby('day')['sigma'].apply(lambda x: sum(x.dropna()**2)).values
             ref_dat_new.sigma[f][:,ii] = np.sqrt(sum_var/N) # pooled variance
             
             ref_dat_new.sigma_of_the_mean[f][:,ii] = (ref_dat_new.sigma[f][:,ii] / 
@@ -505,7 +536,7 @@ def set_extinction_coefficients(destination_model,extinction_weights,file_inds):
                                 "those in destination_model.helios.tilt")
     return dm
 
-def get_training_data(d,file_start,time_to_remove_at_end=0):
+def get_training_data(d,file_start,time_to_remove_at_end):
     files = [f for f in os.listdir(d) if f.startswith(file_start)]
 
     # get training time intervals

@@ -307,9 +307,9 @@ class common_fitting_methods:
 
                     tilt = reflectance_data.tilts[f][jj]
                     if all(tilt==tilt[0]):
-                        a.set_title(tilt_str.format(tilt[0]))
+                        a.set_title(tilt_str.format(tilt[0]),fontsize=20)
                     else:
-                        a.set_title(tilt_str.format(tilt.mean())+" (average)")
+                        a.set_title(tilt_str.format(tilt.mean())+" (average)",fontsize=20)
                 else: # predictions are from clean
                     r0 = self.helios.nominal_reflectance
                     if samples == None: 
@@ -322,9 +322,9 @@ class common_fitting_methods:
                     
                     tilt = self.helios.tilt[f][jj,:]
                     if all(tilt==tilt[0]):
-                        a.set_title(tilt_str.format(tilt[0]))            
+                        a.set_title(tilt_str.format(tilt[0]),fontsize=20)            
                     else:
-                        a.set_title(tilt_str.format(tilt.mean())+" (average)")
+                        a.set_title(tilt_str.format(tilt.mean())+" (average)",fontsize=20)
 
                 if samples==None and len(self.helios.soiling_factor_prediction_variance)>0: # add +/- 2 sigma limits to the predictions, if sigma_dep is set
                     # var_predict = self.helios.delta_soiled_area_variance[f][jj,:]
@@ -362,7 +362,7 @@ class common_fitting_methods:
                 except:
                     mean_predictions[f][jj,:] = ym
             
-            am.legend()
+            am.legend(fontsize = 16)
             label_str = dust_type + r" (mean = {0:.2f} $\mu g$/$m^3$)" 
             a2.plot(ts,dust_conc,label=label_str.format(dust_conc.mean()), color='blue')
             a2.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval
@@ -387,7 +387,7 @@ class common_fitting_methods:
             else:
                 a2a.set_yticklabels([]) 
             
-            a2.set_title(label_str.format(dust_conc.mean())+", \n Wind Speed (mean = {0:.2f} m/s)".format(ws.mean()),fontsize=10)
+            a2.set_title(label_str.format(dust_conc.mean())+", \n Wind Speed (mean = {0:.2f} m/s)".format(ws.mean()),fontsize=20)
         
         if N_experiments > 1:
 
