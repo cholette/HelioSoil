@@ -7,7 +7,7 @@ os.sys.path.append(main_directory)
 DAILY_AVERAGE = True
 
 # CHOOSE WHETHER TO WORK ON HELIOSTATS OR ON THE MIRROR RIG
-HELIOSTATS = False
+HELIOSTATS = True
 
 # %% modules
 import numpy as np
@@ -42,9 +42,7 @@ orientation = [ [s[1] for s in mirrors] for mirrors in exp_mirrors]
 
 # January 2024 (first experiments --- nothing to remove)
 all_intervals[0][0] = np.datetime64('2024-01-30T10:00:00')
-# all_intervals[0][0] = np.datetime64('2024-01-30T13:15:00')
-all_intervals[0][1] = np.datetime64('2024-02-05T08:00:00')
-# all_intervals[0][1] = np.datetime64('2024-02-04T10:00:00')
+all_intervals[0][1] = np.datetime64('2024-02-05T09:00:00')  # mirrors data at 8am, heliostats data at 9am
 
 # June 2024 (second experiments --- already removed rainy data - consider adding them back)
 all_intervals[1][0] = np.datetime64('2024-06-06T17:00:00')
@@ -100,7 +98,7 @@ for ii,experiment in enumerate(train_experiments):
 # %% Load total simulation data
 
 if HELIOSTATS==True:
-    files,all_intervals,exp_mirrors,all_mirrors = smu.get_training_data(d,"hel_experiment_",time_to_remove_at_end=time_to_remove_at_end)
+    files,_,exp_mirrors,all_mirrors = smu.get_training_data(d,"hel_experiment_",time_to_remove_at_end=time_to_remove_at_end)
 
 
 sim_data_total = smb.simulation_inputs( files,
@@ -196,6 +194,8 @@ ax[0].legend(fontsize=lgd_size,loc='center right',bbox_to_anchor=(1.15,0.5))
 title_Jan = 'Raygen Experiments Summary - January 2024'
 if DAILY_AVERAGE:
     title_Jan += ' - Daily Average'
+if HELIOSTATS:
+    title_Jan += ' - HELIOSTATS'
 plt.suptitle(title_Jan,fontsize = 20,x=0.5,y=0.92)
 
 ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")
@@ -224,54 +224,54 @@ ax[3].tick_params(axis='y', labelcolor='blue')
 ax[3].grid(True)
 ax[3].legend(fontsize=lgd_size)
 
+if HELIOSTATS!=True:  # Heliostats data are currently only available for January 2024
+    f=1
+    lgd_size=15
+    fig,ax = plt.subplots(nrows=4,figsize=(12,15))
 
-f=1
-lgd_size=15
-fig,ax = plt.subplots(nrows=4,figsize=(12,15))
+    ave = reflect_data_total.average[f]
+    t = reflect_data_total.times[f]
+    std = reflect_data_total.sigma[f]
+    lgd_label = [lg[:5].replace("O","").replace("_M","") for lg in all_mirrors]      
+    for ii in range(ave.shape[1]):
+        if lgd_label[ii]=='W2':
+            ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
+        else:
+            ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],marker='o',capsize=4.0)
+    ax[0].grid(True) 
+    label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0]) 
+    ax[0].set_ylabel(label_str)
+    ax[0].legend(fontsize=lgd_size,loc='center right',bbox_to_anchor=(1.15,0.5))
+    title_Jun = 'Raygen Experiments Summary - June 2024'
+    if DAILY_AVERAGE:
+        title_Jun += ' - Daily Average'
+    plt.suptitle(title_Jun,fontsize = 20,x=0.5,y=0.92)
 
-ave = reflect_data_total.average[f]
-t = reflect_data_total.times[f]
-std = reflect_data_total.sigma[f]
-lgd_label = [lg[:5].replace("O","").replace("_M","") for lg in all_mirrors]      
-for ii in range(ave.shape[1]):
-    if lgd_label[ii]=='W2':
-        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
-    else:
-        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],marker='o',capsize=4.0)
-ax[0].grid(True) 
-label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0]) 
-ax[0].set_ylabel(label_str)
-ax[0].legend(fontsize=lgd_size,loc='center right',bbox_to_anchor=(1.15,0.5))
-title_Jun = 'Raygen Experiments Summary - June 2024'
-if DAILY_AVERAGE:
-    title_Jun += ' - Daily Average'
-plt.suptitle(title_Jun,fontsize = 20,x=0.5,y=0.92)
+    ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")
+    # label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
+    ax[1].axhline(y=sim_data_total.dust_concentration[f].mean(),color='brown',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.dust_concentration[f].mean()))
+    label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data_total.dust_type[0])
+    ax[1].set_ylabel(label_str,color='brown',fontsize=20)
+    ax[1].tick_params(axis='y', labelcolor='brown')
+    ax[1].grid(True)
+    ax[1].legend(fontsize=lgd_size)
+    ax[1].set_ylim(0,100)
 
-ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")
-# label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
-ax[1].axhline(y=sim_data_total.dust_concentration[f].mean(),color='brown',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.dust_concentration[f].mean()))
-label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data_total.dust_type[0])
-ax[1].set_ylabel(label_str,color='brown',fontsize=20)
-ax[1].tick_params(axis='y', labelcolor='brown')
-ax[1].grid(True)
-ax[1].legend(fontsize=lgd_size)
-ax[1].set_ylim(0,100)
+    ax[2].plot(sim_data_total.time[f],sim_data_total.wind_speed[f],color='green',label="Measurements")
+    ax[2].axhline(y=sim_data_total.wind_speed[f].mean(),color='green',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean()))
+    label_str = r'Wind Speed [$m\,/\,s$]'
+    ax[2].set_ylabel(label_str,color='green')
+    ax[2].tick_params(axis='y', labelcolor='green')
+    ax[2].grid(True)
+    ax[2].legend(fontsize=lgd_size)
 
-ax[2].plot(sim_data_total.time[f],sim_data_total.wind_speed[f],color='green',label="Measurements")
-ax[2].axhline(y=sim_data_total.wind_speed[f].mean(),color='green',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean()))
-label_str = r'Wind Speed [$m\,/\,s$]'
-ax[2].set_ylabel(label_str,color='green')
-ax[2].tick_params(axis='y', labelcolor='green')
-ax[2].grid(True)
-ax[2].legend(fontsize=lgd_size)
-
-ax[3].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")
-ax[3].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.3f}".format(sim_data_total.relative_humidity[f].mean()))
-label_str = r'Relative Humidity [%]'
-ax[3].set_ylabel(label_str,color='blue')
-ax[3].tick_params(axis='y', labelcolor='blue')
-ax[3].grid(True)
-ax[3].legend(fontsize=lgd_size)
+    ax[3].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")
+    ax[3].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.3f}".format(sim_data_total.relative_humidity[f].mean()))
+    label_str = r'Relative Humidity [%]'
+    ax[3].set_ylabel(label_str,color='blue')
+    ax[3].tick_params(axis='y', labelcolor='blue')
+    ax[3].grid(True)
+    ax[3].legend(fontsize=lgd_size)
 
 # %% Plot reflectance losses in each interval for train mirrors (with mirror rig), or horizontal heliostat (H58)
 if HELIOSTATS==True:
@@ -305,7 +305,7 @@ for m,mir in enumerate(train_mirrors):
         plt.title(f"Soiling Rates for {files[exp]}")
         plt.show()
 
-# %% Set mirror angles and get extinction weights for fitting
+# %% Set mirror angles and get extinction weights for fitting (using train data)
 imodel.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
 imodel.helios.compute_extinction_weights(sim_data_train,imodel.loss_model,verbose=True)
 imodel.helios.plot_extinction_weights(sim_data_train,fig_kwargs={})

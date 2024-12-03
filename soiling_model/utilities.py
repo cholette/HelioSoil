@@ -286,7 +286,7 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
         
         # Calculate hourly and daily averages of dust_concentration
         dust_conc_temp = pd.Series(sim_dat.dust_concentration[f], index=pd.to_datetime(sim_dat.time[f]))
-        hourly_avg = dust_conc_temp.resample('H').mean()
+        hourly_avg = dust_conc_temp.resample('h').mean()
         daily_avg = dust_conc_temp.resample('D').mean()
 
         sim_dat.hourly_dust_avg[f] = hourly_avg
@@ -316,6 +316,7 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
             ref_dat.prediction_times[f].extend(time_grid.iloc[ref_dat.prediction_indices[f]].tolist())
             ref_dat.rho0[f] = np.nanmax(ref_dat.average[f], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
             
+        sim_dat.time[f] = sim_dat.time[f].reset_index(drop=True) # reset indices to start at 0 to allow repeated iterations
             
                  
     
@@ -558,7 +559,7 @@ def get_training_data(d,file_start,time_to_remove_at_end):
         e = max(dates)
 
         e += np.timedelta64(1,'D') # since I'm appending midnight, need to use next day to get all data
-        e -= np.timedelta64(time_to_remove_at_end[ii],'h') # leave specified testing time at the end (in minutes)
+        e -= np.timedelta64(time_to_remove_at_end[ii],'h') # leave specified testing time at the end (in hours)
         training_intervals.append(np.array([s,e]))
 
     training_intervals = np.stack(training_intervals).astype('datetime64[m]')
