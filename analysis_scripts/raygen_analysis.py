@@ -42,6 +42,7 @@ orientation = [ [s[1] for s in mirrors] for mirrors in exp_mirrors]
 
 # January 2024 (first experiments --- nothing to remove)
 all_intervals[0][0] = np.datetime64('2024-01-30T10:00:00')
+# all_intervals[0][0] = np.datetime64('2024-01-30T13:15:00')
 all_intervals[0][1] = np.datetime64('2024-02-05T08:00:00')
 # all_intervals[0][1] = np.datetime64('2024-02-04T10:00:00')
 
@@ -74,7 +75,7 @@ reflect_data_train = smb.reflectance_measurements(  files_train,
                                                     import_tilts=True,
                                                     column_names_to_import=train_mirrors
                                                     )
-# Trim data 
+# %% Trim training data 
 sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                                 reflect_data_train,
                                                                 training_intervals 
@@ -137,13 +138,21 @@ for ii,experiment in enumerate(sim_data_total.dt.keys()):
     # fig,ax = smu.wind_rose(sim_data_total,ii)
     # ax.set_title(f"Wind for file {files[experiment]}")
 
-# %% compute daily_averaged values of reflectance to avoid morning-afternoon (not understood) recoveries
+# %% Daily average of reflectance values and trimming of simulation inputs (Training data)
     
 if DAILY_AVERAGE:
-    reflect_data_train = smu.daily_average(reflect_data_train,sim_data_train.time,sim_data_train.dt)
-# %%
+    reflect_data_train = smu.daily_average(reflect_data_train,sim_data_train.time,sim_data_train.dt)    # compute daily_averaged values of reflectance to avoid morning-afternoon (not understood) recoveries
+    # sim_data_train , _ = smu.trim_experiment_data(      sim_data_train,                                 # trim the correspoding simulation inputs to align with the new reflectance values (start and end time can be modified by the average)
+    #                                                 reflect_data_train,
+    #                                                 "reflectance_data")
+    
+# %% Daily average of reflectance values and trimming of simulation inputs (Total data)
+
 if DAILY_AVERAGE:
     reflect_data_total = smu.daily_average(reflect_data_total,sim_data_total.time,sim_data_total.dt)
+    # sim_data_total , _ = smu.trim_experiment_data(      sim_data_total,
+    #                                                 reflect_data_total,
+    #                                                 "reflectance_data" )
 
 # %% Plot training data after daily averaging
 if DAILY_AVERAGE:
@@ -184,7 +193,10 @@ ax[0].grid(True)
 label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0]) 
 ax[0].set_ylabel(label_str)
 ax[0].legend(fontsize=lgd_size,loc='center right',bbox_to_anchor=(1.15,0.5))
-plt.suptitle('Raygen Experiments Summary - January 2024',fontsize = 20,x=0.5,y=0.92)
+title_Jan = 'Raygen Experiments Summary - January 2024'
+if DAILY_AVERAGE:
+    title_Jan += ' - Daily Average'
+plt.suptitle(title_Jan,fontsize = 20,x=0.5,y=0.92)
 
 ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")
 # label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
@@ -230,7 +242,10 @@ ax[0].grid(True)
 label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0]) 
 ax[0].set_ylabel(label_str)
 ax[0].legend(fontsize=lgd_size,loc='center right',bbox_to_anchor=(1.15,0.5))
-plt.suptitle('Raygen Experiments Summary - June 2024',fontsize = 20,x=0.5,y=0.92)
+title_Jun = 'Raygen Experiments Summary - June 2024'
+if DAILY_AVERAGE:
+    title_Jun += ' - Daily Average'
+plt.suptitle(title_Jun,fontsize = 20,x=0.5,y=0.92)
 
 ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")
 # label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
@@ -290,7 +305,7 @@ for m,mir in enumerate(train_mirrors):
         plt.title(f"Soiling Rates for {files[exp]}")
         plt.show()
 
-# %% Set mirror angles and get extinction weights
+# %% Set mirror angles and get extinction weights for fitting
 imodel.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
 imodel.helios.compute_extinction_weights(sim_data_train,imodel.loss_model,verbose=True)
 imodel.helios.plot_extinction_weights(sim_data_train,fig_kwargs={})
@@ -300,7 +315,7 @@ imodel_constant.helios_angles(sim_data_train,reflect_data_train,second_surface=s
 file_inds = np.arange(len(files_train))
 imodel_constant = smu.set_extinction_coefficients(imodel_constant,ext_weights,file_inds)
 
-# %% Fit semi-physical model & plot on training data
+# %% Fit semi-physical model 
 log_param_hat,log_param_cov = imodel.fit_mle(   sim_data_train,
                                                 reflect_data_train,
                                                 transform_to_original_scale=False)
@@ -320,16 +335,8 @@ imodel.save(sp_save_file,
             log_p_hat_cov=log_param_cov,
             training_simulation_data=sim_data_train,
             training_reflectance_data=reflect_data_train)
-# %% PLOT
-_,_,_ = imodel.plot_soiling_factor( sim_data_train,
-                            reflectance_data=reflect_data_train,
-                            reflectance_std='mean',
-                            save_path=f"{main_directory}/results/mildura_sp_training",
-                            # fig_title="On Training Data (semi-physical)",
-                            orientation_strings=orientation,
-                            figsize=[12,8])
 
-# %% Fit constant mean model & plot on training data
+# %% Fit constant mean model 
 log_param_hat_con,log_param_cov_con = imodel_constant.fit_mle(  sim_data_train,
                                                                 reflect_data_train,
                                                                 transform_to_original_scale=False)
@@ -349,6 +356,31 @@ imodel_constant.save(cm_save_file,
                      training_simulation_data=sim_data_train,
                      training_reflectance_data=reflect_data_train)
 
+# %% Compute daily averaged data of training data and updated imodel (DOES THIS MAKE SENSE?? IT IS DOING TWICE THE SAME JOB)
+if DAILY_AVERAGE:
+    sim_data_train , reflect_data_train = smu.trim_experiment_data( sim_data_train,      # trim the correspoding simulation inputs to align with the new reflectance values (start and end time can be modified by the average)
+                                                                    reflect_data_train,
+                                                                    "reflectance_data")
+    
+# %%
+if DAILY_AVERAGE:
+    imodel.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
+    imodel.helios.compute_extinction_weights(sim_data_train,imodel.loss_model,verbose=True)  # ASSESS HOW TO AVOID REPEATING COMPUTING THIS
+    imodel_constant.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
+    file_inds = np.arange(len(files_train))
+    imodel_constant = smu.set_extinction_coefficients(imodel_constant,ext_weights,file_inds)
+
+
+# %% plot SM on training data
+_,_,_ = imodel.plot_soiling_factor( sim_data_train,
+                            reflectance_data=reflect_data_train,
+                            reflectance_std='mean',
+                            save_path=f"{main_directory}/results/mildura_sp_training",
+                            # fig_title="On Training Data (semi-physical)",
+                            orientation_strings=orientation,
+                            figsize=[12,8])
+
+# %% plot CM on training data
 _,_,_ = imodel_constant.plot_soiling_factor(    sim_data_train,
                                                 reflectance_data=reflect_data_train,
                                                 reflectance_std='mean',
@@ -357,7 +389,11 @@ _,_,_ = imodel_constant.plot_soiling_factor(    sim_data_train,
                                                 orientation_strings=orientation,
                                                 figsize = [12,8]  )
 
-
+# %% Compute daily averaged data of total data and updated imodel (DOES THIS MAKE SENSE?? IT IS DOING TWICE THE SAME JOB)
+if DAILY_AVERAGE:
+    sim_data_total , reflect_data_total = smu.trim_experiment_data( sim_data_total,      # trim the correspoding simulation inputs to align with the new reflectance values (start and end time can be modified by the average)
+                                                                    reflect_data_total,
+                                                                    "reflectance_data")
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
 file_inds = np.arange(len(reflect_data_total.file_name))
@@ -374,8 +410,6 @@ if HELIOSTATS==True:
                                     yticks=(0.98,0.99,1.01))#0.97,0.98,
     fig.set_size_inches(10, 20) 
     plt.show()    
-
-
 else:
     fig,ax = plot_for_paper(    imodel,
                                 reflect_data_total,
@@ -409,7 +443,7 @@ else:
                                 train_mirrors,
                                 orientation,
                                 legend_shift=(0.04,0),
-                                yticks=(0.92,0.94,0.96,0.98,1.0))
+                                yticks=(0.95,0.96,0.97,0.98,0.99,1.0))
 
 fig.suptitle('Constant-Mean Model', fontsize=16, fontweight='bold', y=1.045)
 fig.savefig(cm_save_file+".pdf",bbox_inches='tight')

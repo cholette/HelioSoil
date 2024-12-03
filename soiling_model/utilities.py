@@ -266,7 +266,7 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
                 """ "reflectance_data" or "simulation_inputs" """)
 
         # trim simulation data
-        mask = (sim_dat.time[f]>=lb) & (sim_dat.time[f]<=ub)
+        mask = (sim_dat.time[f]>=lb.astype('datetime64[ns]')) & (sim_dat.time[f]<=ub.astype('datetime64[ns]'))   # .astype('datetime64[ns]') guarantees compatibility with Pandas Timestamp
         if all(mask==0):
             raise ValueError(f"Provided date range of {lb} to {ub} for file {sim_dat.file_name[f]} excludes all data.")
             
@@ -297,20 +297,26 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
         if reflectance_data is not None:
             # trim reflectance data
             if len(ref_dat.tilts)>0:
-                ref_dat.tilts[f] = ref_dat.tilts[f][:,mask]
-            mask = (ref_dat.times[f]>=lb) & (ref_dat.times[f]<=ub)
-            ref_dat.times[f] = ref_dat.times[f][mask] 
-            ref_dat.average[f] = ref_dat.average[f][mask,:]
-            ref_dat.sigma[f] = ref_dat.sigma[f][mask,:]
-            ref_dat.sigma_of_the_mean[f] = ref_dat.sigma_of_the_mean[f][mask,:]
+                mask_indices = mask.index[mask].to_numpy()  # Extract the indices where mask is True and  convert to NumPy array
+                ref_dat.tilts[f] = ref_dat.tilts[f][:, mask_indices]
+                # ref_dat.tilts[f] = ref_dat.tilts[f][:,mask]
+            mask_ref = (ref_dat.times[f]>=lb) & (ref_dat.times[f]<=ub)
+            ref_dat.times[f] = ref_dat.times[f][mask_ref] 
+            ref_dat.average[f] = ref_dat.average[f][mask_ref,:]
+            ref_dat.sigma[f] = ref_dat.sigma[f][mask_ref,:]
+            ref_dat.sigma_of_the_mean[f] = ref_dat.sigma_of_the_mean[f][mask_ref,:]
 
             ref_dat.prediction_indices[f] = []
             ref_dat.prediction_times[f] = []
             time_grid = sim_dat.time[f]
             for m in ref_dat.times[f]:
-                ref_dat.prediction_indices[f].append(np.argmin(np.abs(m-time_grid)))        
-                ref_dat.prediction_times[f].append(time_grid.iloc[ref_dat.prediction_indices[f]])
-                ref_dat.rho0[f] = np.nanmax(ref_dat.average[f], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
+                ref_dat.prediction_indices[f].append(np.argmin(np.abs(m.astype('datetime64[ns]')-time_grid)))        # .astype('datetime64[ns]') guarantees compatibility with Numpy datetime64
+                # ref_dat.prediction_times[f].append(time_grid.iloc[ref_dat.prediction_indices[f]])
+                # ref_dat.rho0[f] = np.nanmax(ref_dat.average[f], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
+            ref_dat.prediction_times[f].extend(time_grid.iloc[ref_dat.prediction_indices[f]].tolist())
+            ref_dat.rho0[f] = np.nanmax(ref_dat.average[f], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
+            
+            
                  
     
     return sim_dat,ref_dat

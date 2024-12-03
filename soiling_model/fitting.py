@@ -446,14 +446,17 @@ class semi_physical(smb.physical_base,common_fitting_methods):
         _print_if("Setting tilts for "+str(N_experiments)+" experiments",verbose)
         helios = self.helios
         helios.tilt = {f: None for f in files} # clear the existing tilts
-        helios.acceptance_angles = {f: None for f in files} # clear the existing tilts
+        helios.acceptance_angles = {f: None for f in files} # clear the existing acceptance angles
         for ii in range(N_experiments):
             f = files[ii]
-            tilts = ref_dat.tilts[f]
+            # start_idx = ref_dat.prediction_indices[f][0]        # Define the start index
+            # end_idx = ref_dat.prediction_indices[f][-1]         # Define the start last index
+            # tilts = ref_dat.tilts[f][:, start_idx:end_idx + 1]  # Extract the subset of tilts (end_idx + 1 include the last index)
+            tilts = ref_dat.tilts[f] # THIS CANNOT MANAGE THE TRANSFORMATION OF SIM_IN WITH DAILY AVERAGE WHEN CHANGING START TIME (IF APPLIED AT THE BEGINNING)
             N_times = len(sim_in.time[f])
             N_helios = tilts.shape[0]
             self.helios.acceptance_angles[f] = [ref_dat.reflectometer_acceptance_angle[ii]]*N_helios
-            self.helios.extinction_weighting[f] = [] # reset extinction weighting since heliostats are "new"
+            self.helios.extinction_weighting[f] = [] # reset extinction weighting since heliostats are "new" - WHY?? THIS DEPENDS ONLY ON DUST! NOT?
             
             helios.tilt[f] = np.zeros((0,N_times))
             for jj in range(N_helios):
@@ -591,7 +594,10 @@ class constant_mean_deposition(smb.constant_mean_base,common_fitting_methods):
         helios.acceptance_angles = {f: None for f in files} # clear the existing tilts
         for ii in range(N_experiments):
             f = files[ii]
-            tilts = ref_dat.tilts[f]
+            # start_idx = ref_dat.prediction_indices[f][0]        # Define the start index
+            # end_idx = ref_dat.prediction_indices[f][-1]         # Define the start last index
+            # tilts = ref_dat.tilts[f][:, start_idx:end_idx + 1]  # Extract the subset of tilts (end_idx + 1 include the last index)
+            tilts = ref_dat.tilts[f] # THIS COULD NOT MANAGE THE TRANSFORMATION OF SIM_IN WITH DAILY AVERAGE WHEN CHANGING START TIME
             N_times = len(sim_in.time[f])
             N_helios = tilts.shape[0]
             self.helios.acceptance_angles[f] = [ref_dat.reflectometer_acceptance_angle[ii]]*N_helios
