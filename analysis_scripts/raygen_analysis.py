@@ -4,10 +4,10 @@ import os
 os.sys.path.append(main_directory)
 
 # CHOOSE WHETHER TO USE DAILY AVERAGE OF REFLECTANCE VALUES OR NOT
-DAILY_AVERAGE = True
+DAILY_AVERAGE = False
 
 # CHOOSE WHETHER TO WORK ON HELIOSTATS OR ON THE MIRROR RIG
-HELIOSTATS = True
+HELIOSTATS = False
 
 # %% modules
 import numpy as np
@@ -29,7 +29,7 @@ reflectometer_acceptance_angle = 12.5e-3 # [rad] half acceptance angle of reflec
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
 d = f"{main_directory}/data/mildura/"
 time_to_remove_at_end = [0,0,0,0,0,0]
-train_experiments = [0] # indices for training experiments from 0 to len(files)-1
+train_experiments = [1] # indices for training experiments from 0 to len(files)-1
 train_mirrors = ["ON_M1_T00"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for training
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
 dust_type = "PM10" # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
@@ -172,7 +172,7 @@ if DAILY_AVERAGE:
         else:
             fig,ax = smu.plot_experiment_data(sim_data_total,reflect_data_total,ii)
 
-# %% PLOT EXPERIMENTAL DATA AFTER DAILY AVERAGE
+# %% PLOT EXPERIMENTAL DATA 
 
 f=0
 lgd_size=15
@@ -223,6 +223,7 @@ ax[3].set_ylabel(label_str,color='blue')
 ax[3].tick_params(axis='y', labelcolor='blue')
 ax[3].grid(True)
 ax[3].legend(fontsize=lgd_size)
+plt.show()
 
 if HELIOSTATS!=True:  # Heliostats data are currently only available for January 2024
     f=1
@@ -272,6 +273,46 @@ if HELIOSTATS!=True:  # Heliostats data are currently only available for January
     ax[3].tick_params(axis='y', labelcolor='blue')
     ax[3].grid(True)
     ax[3].legend(fontsize=lgd_size)
+    plt.show()
+
+# PLOT average REFLECTANCE LOSSES AND RELATIVE HUMIDITY between measurements
+for ii in range(len(reflect_data_total.average)):
+
+    # Convert arrays to pandas DatetimeIndex for easier slicing
+    sim_times = pd.to_datetime(sim_data_total.time[ii])  # Simulation time
+    sim_humidity = sim_data_total.relative_humidity[ii]  # Simulation relative humidity
+    reflect_times = pd.to_datetime(reflect_data_total.times[ii].astype('datetime64[ns]'))  # Reflectance times
+
+    # Initialize an empty list to store average values
+    relative_humidity_averages = []
+
+    # Compute average relative humidity for each interval
+    for start, end in zip(reflect_times[:-1], reflect_times[1:]):
+        # Select humidity values between start and end times
+        mask = (sim_times >= start) & (sim_times < end)
+        average_humidity = np.mean(sim_humidity[mask])  # Compute average
+        relative_humidity_averages.append(average_humidity)
+
+    # Convert results to a NumPy array (optional)
+    relative_humidity_averages = np.array(relative_humidity_averages)
+
+    # Print the results
+    print("Relative Humidity Averages:", relative_humidity_averages)
+
+    fig, ax1 = plt.subplots()
+    ax1.plot(reflect_data_total.times[ii][1:],np.mean(reflect_data_total.delta_ref[ii][1:, [2, -1]] * 1e2, axis=1), color='tab:blue')
+    ax1.set_xlabel('Time')  # x-axis label
+    ax1.set_ylabel('Reflectance Loss, %' , color='tab:blue')  # y-axis label for the first plot
+
+    ax1.tick_params(axis='y', labelcolor='tab:blue')
+    ax1.tick_params(axis='x', rotation=45)
+
+    ax2 = ax1.twinx()
+    ax2.plot(reflect_data_total.times[ii][1:],relative_humidity_averages, color='tab:green')
+    ax2.set_ylabel('Relative Humidity, %', color='tab:green')  # y-axis label for the second plot
+    ax2.tick_params(axis='y', labelcolor='tab:green')
+
+    plt.show()
 
 # %% Plot reflectance losses in each interval for train mirrors (with mirror rig), or horizontal heliostat (H58)
 if HELIOSTATS==True:
@@ -362,7 +403,7 @@ if DAILY_AVERAGE:
                                                                     reflect_data_train,
                                                                     "reflectance_data")
     
-# %%
+# %% updated imodel with new daily-averaged training data
 if DAILY_AVERAGE:
     imodel.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
     imodel.helios.compute_extinction_weights(sim_data_train,imodel.loss_model,verbose=True)  # ASSESS HOW TO AVOID REPEATING COMPUTING THIS
@@ -389,11 +430,12 @@ _,_,_ = imodel_constant.plot_soiling_factor(    sim_data_train,
                                                 orientation_strings=orientation,
                                                 figsize = [12,8]  )
 
-# %% Compute daily averaged data of total data and updated imodel (DOES THIS MAKE SENSE?? IT IS DOING TWICE THE SAME JOB)
+# %% Compute daily averaged data of total data (DOES THIS MAKE SENSE?? IT IS DOING TWICE THE SAME JOB)
 if DAILY_AVERAGE:
     sim_data_total , reflect_data_total = smu.trim_experiment_data( sim_data_total,      # trim the correspoding simulation inputs to align with the new reflectance values (start and end time can be modified by the average)
                                                                     reflect_data_total,
                                                                     "reflectance_data")
+
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
 file_inds = np.arange(len(reflect_data_total.file_name))

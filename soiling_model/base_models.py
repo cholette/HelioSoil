@@ -1201,6 +1201,7 @@ class reflectance_measurements:
         self.file_name = {}
         self.times = {}
         self.average = {}
+        self.delta_ref = {}
         self.sigma = {}
         self.sigma_of_the_mean = {}
         self.prediction_indices = {}
@@ -1230,10 +1231,12 @@ class reflectance_measurements:
             self.times[ii] = reflectance_data['Average']['Time'].values
             if column_names_to_import != None: # extract relevant column names of the pandas dataframe
                 self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])),  -np.diff(self.average[ii], axis=0)))  # compute reflectance loss between measurements
                 self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.mirror_names[ii] = column_names_to_import
             else:
                 self.average[ii] = reflectance_data['Average'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])),  -np.diff(self.average[ii], axis=0))) # compute reflectance loss between measurements
                 self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1::]
 

@@ -303,6 +303,7 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
             mask_ref = (ref_dat.times[f]>=lb) & (ref_dat.times[f]<=ub)
             ref_dat.times[f] = ref_dat.times[f][mask_ref] 
             ref_dat.average[f] = ref_dat.average[f][mask_ref,:]
+            ref_dat.delta_ref[f] = ref_dat.delta_ref[f][mask_ref,:]
             ref_dat.sigma[f] = ref_dat.sigma[f][mask_ref,:]
             ref_dat.sigma_of_the_mean[f] = ref_dat.sigma_of_the_mean[f][mask_ref,:]
 
@@ -344,6 +345,7 @@ def daily_average(ref_dat,time_grids,dt=None):
         ref_dat_new.sigma[f] = np.zeros((num_times,num_mirrors))
         ref_dat_new.average[f] = np.zeros((num_times,num_mirrors))
         ref_dat_new.sigma_of_the_mean[f] = np.zeros((num_times,num_mirrors))
+        ref_dat_new.delta_ref[f] = np.zeros((num_times,num_mirrors))
         for ii in range(num_mirrors):
             df = pd.DataFrame( {"average":ref_dat.average[f][:,ii],
                                 "sigma": ref_dat.sigma[f][:,ii],
@@ -372,6 +374,7 @@ def daily_average(ref_dat,time_grids,dt=None):
                 idx = np.argmin(np.abs(m-tg))
                 ref_dat_new.prediction_indices[f].append(idx)        
             ref_dat_new.prediction_times[f].append(tg[ref_dat_new.prediction_indices[f]])
+        ref_dat_new.delta_ref[f] = np.vstack((np.zeros((1, ref_dat_new.average[f].shape[1])), -np.diff(ref_dat_new.average[f], axis=0)))  # compute reflectance loss between subsequent measurements (0 given to first timestamp)
 
     return ref_dat_new
             
