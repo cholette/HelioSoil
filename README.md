@@ -22,7 +22,7 @@ In addition to a soiling model, this library provides a basic economic and clean
 
 ## Input Files
 
-The model takes as inputs three `.xlsx` files: one for the basic model parameters, one for the input data, and for one for solar field layout. One input document in `.epw` format is also required to define the climate and the geographical coordinates of the simulated plant. Examples of these sheets are provided in the `woomera_data/` subfolder.
+The model takes as inputs three `.xlsx` files: one for the basic model parameters, one for the input data, and for one for solar field layout. One input document in `.epw` format is also required to define the climate and the geographical coordinates of the simulated plant. Examples of these sheets are provided in the `woomera_demo/` subfolder.
 
 The input data workbook has the following sheets:
 
