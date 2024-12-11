@@ -726,7 +726,55 @@ def loss_table_from_sim(sim_res,sim_data):
 
     return df_sim
 
+# # EXTRACT VALUES FROM PLOT (NEED FIXING!)
+def loss_table_from_plot(ax):
+    table_data = []
 
+    # Iterate over rows (tilts) and columns (campaigns)
+    for campaign_idx, row in enumerate(ax.T):  # Transpose to iterate over columns (campaigns)
+        for _ , subplot in enumerate(row):  # Iterate over individual subplots (tilts)
+            # Check if the word "Tilt" is in the title of the subplot
+            if "Tilt" in subplot.get_title():
+                lines = subplot.get_lines()
+                
+                # Process only the first line (Mean)
+                line = lines[0]  # The first line is the mean line
+                x_data = line.get_xdata()
+                y_data = line.get_ydata()
+                
+                # Calculate metrics
+                initial_value = y_data[0]         # Initial value
+                final_value = y_data[-1]          # Final value
+                elapsed_time = x_data[-1] - x_data[0]  # Time difference
+                
+                # Ensure no division by zero
+                if elapsed_time > 0:
+                    avg_daily_loss = (initial_value - final_value) / elapsed_time
+                else:
+                    avg_daily_loss = np.nan  # Handle edge case for no elapsed time
+                
+                # Add to the table
+                table_data.append({
+                    "Campaign": f"Campaign {campaign_idx + 1}",
+                    "Tilt": subplot.get_title().split(" ")[-1],  # Extract the tilt from the title
+                    "Line Type": "Mean",
+                    "Initial Value": initial_value,
+                    "Final Value": final_value,
+                    "Elapsed Time (days)": elapsed_time,
+                    "Total Loss": initial_value - final_value,
+                    "Average Daily Loss": avg_daily_loss
+                })
+
+    # Convert to DataFrame for easier handling and export
+    df_plot = pd.DataFrame(table_data)
+
+    # # Save to CSV
+    # df_plot.to_csv(cm_save_file+"loss_summary.csv", index=False)
+
+    # Display the DataFrame
+    # print(df_plot)
+
+    return df_plot
 
 class DustDistribution():
     """
