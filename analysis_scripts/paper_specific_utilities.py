@@ -42,26 +42,27 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
     else:
         colors = {'N':'blue','S':'red','E':'green','W':'magenta','N/A':'blue'}
     
+    ref_output = {}
     for ii,e in enumerate(exps):
         for jj,t in enumerate(tilts):
             tr = rdat.times[e]
             tr = (tr-tr[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
-            idx, = np.where(rdat.tilts[e][:,0] == t)
             
+            idx, = np.where(rdat.tilts[e][:,0] == t)
+            idxs, = np.where(mod.helios.tilt[e][:,0] == t)
+
             if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
                 idx = idx[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
-            idxs, = np.where(mod.helios.tilt[e][:,0] == t)
             if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
                 idxs = idxs[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
                         
             if t==0 and any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
                 idx = idx[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
-            idxs, = np.where(mod.helios.tilt[e][:,0] == t)
             if t==0 and any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
                 idxs = idxs[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
             
             idxs = idxs[0] # take first since all predictions are the same
-            ts = sdat.time[e].values[0:rdat.prediction_indices[e][-1]]
+            ts = sdat.time[e].values[0:rdat.prediction_indices[e][-1]+1]
             ts = (ts-ts[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
             
             for kk in idx: # reflectance data
@@ -83,13 +84,14 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                     a.patch.set_facecolor(color='yellow')
                     a.patch.set_alpha(0.2)
             
-            
-            ym = r0*mod.helios.soiling_factor[e][idxs,0:rdat.prediction_indices[e][-1]] # ensure columns are time index
+            ym = r0*mod.helios.soiling_factor[e][idxs,0:rdat.prediction_indices[e][-1]+1] # ensure columns are time index # +1 is required to include the last time point (slicing would exclude it)
+            # ref_output[e][jj] = ym
+            ref_output[(e, int(t))] = ym.copy()
             if ym.ndim == 1:
                 ym += (1.0-ym[0])
             else:
                 ym += (1.0-ym[:,0])
-            var_predict = mod.helios.soiling_factor_prediction_variance[e][idxs,0:rdat.prediction_indices[e][-1]]
+            var_predict = mod.helios.soiling_factor_prediction_variance[e][idxs,0:rdat.prediction_indices[e][-1]+1]
             sigma_predict = r0*np.sqrt(var_predict)
             Lp = ym - 1.96*sigma_predict
             Up = ym + 1.96*sigma_predict
@@ -103,10 +105,10 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                 ax[jj,ii].set_title(f"Tilt: {t:.0f}"+r"$^{\circ}$")
             
     
-        new_var = sdat.dust_concentration[e][0:rdat.prediction_indices[e][-1]]
+        new_var = sdat.dust_concentration[e][0:rdat.prediction_indices[e][-1]+1]
         dust_conc = new_var
-        ws = sdat.wind_speed[e][0:rdat.prediction_indices[e][-1]]
-        dust_type = sdat.dust_type[e][0:rdat.prediction_indices[e][-1]]
+        ws = sdat.wind_speed[e][0:rdat.prediction_indices[e][-1]+1]
+        dust_type = sdat.dust_type[e][0:rdat.prediction_indices[e][-1]+1]
         if plot_rh:
             a2 = ax[-2,ii]
         else:
@@ -125,7 +127,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
 
         if plot_rh:
             # THE LINE BELOW AVOID THE LAST ELEMENT (SO IT HAS THE SAME DIMENSION)
-            rel_hum = sdat.relative_humidity[e][0:rdat.prediction_indices[e][-1]]
+            rel_hum = sdat.relative_humidity[e][0:rdat.prediction_indices[e][-1]+1]
             a3 = ax[-1,ii]
             a3.plot(ts,rel_hum, color='blue')
             a3.tick_params(axis ='y', labelcolor = 'blue')
@@ -177,7 +179,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                bbox_to_anchor=(0.9025+legend_shift[0],1.025+legend_shift[1]),bbox_transform=fig.transFigure)
     fig.subplots_adjust(wspace=0.1, hspace=0.3)
     fig.tight_layout()
-    return fig,ax
+    return fig,ax,ref_output
 
 def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                    rows_with_legend=[3],num_legend_cols=6,legend_shift=(0,0),plot_rh=True,
@@ -226,7 +228,7 @@ def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientatio
             #     idxs = idxs[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
             
             # idxs = idxs[0] # take first since all predictions are the same
-            ts = sdat.time[e].values[0:rdat.prediction_indices[e][-1]]
+            ts = sdat.time[e].values[0:rdat.prediction_indices[e][-1]+1]
             ts = (ts-ts[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
             
             # the below for loop is not useful for the heliostats (one line each subplot)
@@ -258,8 +260,8 @@ def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientatio
                 #     a.patch.set_alpha(0.2)
 
 
-            ym = r0*mod.helios.soiling_factor[e][jj,0:rdat.prediction_indices[e][-1]] # ensure columns are time index
-            var_predict = mod.helios.soiling_factor_prediction_variance[e][jj,0:rdat.prediction_indices[e][-1]]
+            ym = r0*mod.helios.soiling_factor[e][jj,0:rdat.prediction_indices[e][-1]+1] # ensure columns are time index
+            var_predict = mod.helios.soiling_factor_prediction_variance[e][jj,0:rdat.prediction_indices[e][-1]+1]
             if ym.ndim == 1:
                 ym += (1.0-ym[0])
             else:
@@ -278,10 +280,10 @@ def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientatio
                 ax[jj,ii].set_title(f"Heliostat {t}")
             
     
-        new_var = sdat.dust_concentration[e][0:rdat.prediction_indices[e][-1]]
+        new_var = sdat.dust_concentration[e][0:rdat.prediction_indices[e][-1]+1]
         dust_conc = new_var
-        ws = sdat.wind_speed[e][0:rdat.prediction_indices[e][-1]]
-        dust_type = sdat.dust_type[e][0:rdat.prediction_indices[e][-1]]
+        ws = sdat.wind_speed[e][0:rdat.prediction_indices[e][-1]+1]
+        dust_type = sdat.dust_type[e][0:rdat.prediction_indices[e][-1]+1]
         if plot_rh:
             a2 = ax[-2,ii]
         else:
@@ -300,7 +302,7 @@ def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientatio
 
         if plot_rh:
             # THE LINE BELOW AVOID THE LAST ELEMENT (SO IT HAS THE SAME DIMENSION)
-            rel_hum = sdat.relative_humidity[e][0:rdat.prediction_indices[e][-1]]
+            rel_hum = sdat.relative_humidity[e][0:rdat.prediction_indices[e][-1]+1]
             a3 = ax[-1,ii]
             a3.plot(ts,rel_hum, color='blue')
             a3.tick_params(axis ='y', labelcolor = 'blue')
@@ -353,7 +355,6 @@ def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientatio
     fig.subplots_adjust(wspace=0.1, hspace=0.3)
     fig.tight_layout()
     return fig,ax
-
 
 def soiling_rate(alphas: np.ndarray,
                  alphas2: np.ndarray,
@@ -543,7 +544,6 @@ def summarize_fit_quality(model,ref,train_experiments,train_mirrors,
     fig.savefig(save_file+"_fit_quality.pdf",bbox_inches='tight')
 
     return fig,ax
-
 
 def daily_soiling_tilt_all_data( sim_dat: smb.simulation_inputs,
                                     model_save_file: str,

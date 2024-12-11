@@ -4,7 +4,7 @@ import os
 os.sys.path.append(main_directory)
 
 # CHOOSE WHETHER TO USE DAILY AVERAGE OF REFLECTANCE VALUES OR NOT
-DAILY_AVERAGE = False
+DAILY_AVERAGE = True
 
 # CHOOSE WHETHER TO WORK ON HELIOSTATS OR ON THE MIRROR RIG
 HELIOSTATS = False
@@ -20,6 +20,7 @@ import matplotlib.ticker as ticker
 from paper_specific_utilities import plot_for_paper, plot_for_heliostats, daily_soiling_rate, \
                                      fit_quality_plots, summarize_fit_quality
 import scipy.stats as sps
+from collections import defaultdict
 
 pad = 0.05
 sp_save_file = f"{main_directory}/results/sp_fitting_results_mildura"
@@ -29,7 +30,7 @@ reflectometer_acceptance_angle = 12.5e-3 # [rad] half acceptance angle of reflec
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
 d = f"{main_directory}/data/mildura/"
 time_to_remove_at_end = [0,0,0,0,0,0]
-train_experiments = [1] # indices for training experiments from 0 to len(files)-1
+train_experiments = [0] # indices for training experiments from 0 to len(files)-1
 train_mirrors = ["ON_M1_T00"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for training
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
 dust_type = "PM10" # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
@@ -234,7 +235,12 @@ if HELIOSTATS!=True:  # Heliostats data are currently only available for January
     t = reflect_data_total.times[f]
     std = reflect_data_total.sigma[f]
     lgd_label = [lg[:5].replace("O","").replace("_M","") for lg in all_mirrors]      
-    for ii in range(ave.shape[1]):
+    # for ii in range(ave.shape[1]):
+    #     if lgd_label[ii]=='W2':
+    #         ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
+    #     else:
+    #         ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],marker='o',capsize=4.0)
+    for ii in [2,-1]:
         if lgd_label[ii]=='W2':
             ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
         else:
@@ -248,59 +254,77 @@ if HELIOSTATS!=True:  # Heliostats data are currently only available for January
         title_Jun += ' - Daily Average'
     plt.suptitle(title_Jun,fontsize = 20,x=0.5,y=0.92)
 
-    ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")
-    # label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
-    ax[1].axhline(y=sim_data_total.dust_concentration[f].mean(),color='brown',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.dust_concentration[f].mean()))
-    label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data_total.dust_type[0])
-    ax[1].set_ylabel(label_str,color='brown',fontsize=20)
-    ax[1].tick_params(axis='y', labelcolor='brown')
+    # ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")
+    # # label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
+    # ax[1].axhline(y=sim_data_total.dust_concentration[f].mean(),color='brown',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.dust_concentration[f].mean()))
+    # label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data_total.dust_type[0])
+    # ax[1].set_ylabel(label_str,color='brown',fontsize=20)
+    # ax[1].tick_params(axis='y', labelcolor='brown')
+    # ax[1].grid(True)
+    # ax[1].legend(fontsize=lgd_size)
+    # ax[1].set_ylim(0,100)
+
+    # ax[2].plot(sim_data_total.time[f],sim_data_total.wind_speed[f],color='green',label="Measurements")
+    # ax[2].axhline(y=sim_data_total.wind_speed[f].mean(),color='green',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean()))
+    # label_str = r'Wind Speed [$m\,/\,s$]'
+    # ax[2].set_ylabel(label_str,color='green')
+    # ax[2].tick_params(axis='y', labelcolor='green')
+    # ax[2].grid(True)
+    # ax[2].legend(fontsize=lgd_size)
+
+    # ax[3].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")
+    # ax[3].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.3f}".format(sim_data_total.relative_humidity[f].mean()))
+    # label_str = r'Relative Humidity [%]'
+    # ax[3].set_ylabel(label_str,color='blue')
+    # ax[3].tick_params(axis='y', labelcolor='blue')
+    # ax[3].grid(True)
+    # ax[3].legend(fontsize=lgd_size)
+
+    ax[1].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")
+    ax[1].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.3f}".format(sim_data_total.relative_humidity[f].mean()))
+    label_str = r'Relative Humidity [%]'
+    ax[1].set_ylabel(label_str,color='blue')
+    ax[1].tick_params(axis='y', labelcolor='blue')
     ax[1].grid(True)
     ax[1].legend(fontsize=lgd_size)
-    ax[1].set_ylim(0,100)
-
-    ax[2].plot(sim_data_total.time[f],sim_data_total.wind_speed[f],color='green',label="Measurements")
-    ax[2].axhline(y=sim_data_total.wind_speed[f].mean(),color='green',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean()))
-    label_str = r'Wind Speed [$m\,/\,s$]'
-    ax[2].set_ylabel(label_str,color='green')
-    ax[2].tick_params(axis='y', labelcolor='green')
-    ax[2].grid(True)
-    ax[2].legend(fontsize=lgd_size)
-
-    ax[3].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")
-    ax[3].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.3f}".format(sim_data_total.relative_humidity[f].mean()))
-    label_str = r'Relative Humidity [%]'
-    ax[3].set_ylabel(label_str,color='blue')
-    ax[3].tick_params(axis='y', labelcolor='blue')
-    ax[3].grid(True)
-    ax[3].legend(fontsize=lgd_size)
     plt.show()
 
-# PLOT average REFLECTANCE LOSSES AND RELATIVE HUMIDITY between measurements
+# %% PLOT average REFLECTANCE LOSSES, RELATIVE HUMIDITY, and PM10 between measurements
 for ii in range(len(reflect_data_total.average)):
 
     # Convert arrays to pandas DatetimeIndex for easier slicing
     sim_times = pd.to_datetime(sim_data_total.time[ii])  # Simulation time
     sim_humidity = sim_data_total.relative_humidity[ii]  # Simulation relative humidity
+    sim_dust_conc = sim_data_total.dust_concentration[ii] # Simulation dust concentration
     reflect_times = pd.to_datetime(reflect_data_total.times[ii].astype('datetime64[ns]'))  # Reflectance times
 
     # Initialize an empty list to store average values
     relative_humidity_averages = []
+    dust_conc_averages = []
 
     # Compute average relative humidity for each interval
     for start, end in zip(reflect_times[:-1], reflect_times[1:]):
         # Select humidity values between start and end times
         mask = (sim_times >= start) & (sim_times < end)
         average_humidity = np.mean(sim_humidity[mask])  # Compute average
+        dust_conc = np.mean(sim_dust_conc[mask])  # Compute average
         relative_humidity_averages.append(average_humidity)
+        dust_conc_averages.append(dust_conc)
 
     # Convert results to a NumPy array (optional)
     relative_humidity_averages = np.array(relative_humidity_averages)
+    dust_conc_averages = np.array(dust_conc_averages)
+
+    # Compute average reflectance losses for horizontal mirrors (check it is true for January experiments)
+    ref_loss_ave = np.mean(reflect_data_total.delta_ref[ii][1:, [2, -1]] * 1e2, axis=1)
 
     # Print the results
     print("Relative Humidity Averages:", relative_humidity_averages)
+    print("Dust Concentration Averages", dust_conc_averages)
+    print("Reflectance Loss Averages", ref_loss_ave)
 
     fig, ax1 = plt.subplots()
-    ax1.plot(reflect_data_total.times[ii][1:],np.mean(reflect_data_total.delta_ref[ii][1:, [2, -1]] * 1e2, axis=1), color='tab:blue')
+    ax1.plot(reflect_data_total.times[ii][1:],ref_loss_ave, color='tab:blue')
     ax1.set_xlabel('Time')  # x-axis label
     ax1.set_ylabel('Reflectance Loss, %' , color='tab:blue')  # y-axis label for the first plot
 
@@ -311,6 +335,12 @@ for ii in range(len(reflect_data_total.average)):
     ax2.plot(reflect_data_total.times[ii][1:],relative_humidity_averages, color='tab:green')
     ax2.set_ylabel('Relative Humidity, %', color='tab:green')  # y-axis label for the second plot
     ax2.tick_params(axis='y', labelcolor='tab:green')
+
+    ax3 = ax1.twinx()
+    ax3.spines['right'].set_position(('outward', 60))  # Offset the third axis
+    ax3.plot(reflect_data_total.times[ii][1:],dust_conc_averages, color='tab:orange', label='Dust Concentration')
+    ax3.set_ylabel('Dust Concentration, µg/m³', color='tab:orange')
+    ax3.tick_params(axis='y', labelcolor='tab:orange')
 
     plt.show()
 
@@ -436,6 +466,11 @@ if DAILY_AVERAGE:
                                                                     reflect_data_total,
                                                                     "reflectance_data")
 
+# %% Compute average measured reflectance losses for each tilt (only for mirror rig experiments)
+
+ref_data_summary = smu.soiling_rates_summary(reflect_data_total,sim_data_total)
+ref_data_summary
+
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
 file_inds = np.arange(len(reflect_data_total.file_name))
@@ -453,7 +488,7 @@ if HELIOSTATS==True:
     fig.set_size_inches(10, 20) 
     plt.show()    
 else:
-    fig,ax = plot_for_paper(    imodel,
+    fig,ax,ref_simulation_sp = plot_for_paper(    imodel,
                                 reflect_data_total,
                                 sim_data_total,
                                 train_experiments,
@@ -464,6 +499,17 @@ else:
 
 fig.suptitle('Semi-Physical Model', fontsize=16, fontweight='bold', y=1.045)
 fig.savefig(sp_save_file+".pdf",bbox_inches='tight')
+
+# %% 
+
+df_sim_sp = smu.loss_table_from_sim(ref_simulation_sp,sim_data_total)
+df_sim_sp.to_csv(sp_save_file+'_simulation_sp.csv', index=False)
+df_sim_sp
+
+
+
+# df_plot_sp =smu.loss_table_from_sim(ref_simulation_sp,sim_data_total) # NEED TO BE FIXED
+
 
 # %% Performance of constant-mean model on total data
 imodel_constant.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
@@ -478,7 +524,7 @@ if HELIOSTATS==True:
                                     legend_shift=(0.04,0),
                                     yticks=(0.97,0.98,0.99,1.02))    
 else:
-    fig,ax = plot_for_paper(    imodel_constant,
+    fig,ax,ref_simulation_cm = plot_for_paper(    imodel_constant,
                                 reflect_data_total,
                                 sim_data_total,
                                 train_experiments,
@@ -489,6 +535,14 @@ else:
 
 fig.suptitle('Constant-Mean Model', fontsize=16, fontweight='bold', y=1.045)
 fig.savefig(cm_save_file+".pdf",bbox_inches='tight')
+
+# %%
+
+df_sim_cm = smu.loss_table_from_sim(ref_simulation_cm,sim_data_total)
+df_sim_cm.to_csv(cm_save_file+'_simulation_cm.csv', index=False)
+df_sim_cm
+
+# df_plot_cm =smu.loss_table_from_sim(ref_simulation_cm,sim_data_total) # NEED TO BE FIXED
 
 # %% High, Medium, Low daily loss distributions from total data
 pers = [5,50,95.0,100]

@@ -8,6 +8,7 @@ from copy import deepcopy
 from openpyxl import load_workbook
 import os
 import miepython
+from collections import defaultdict
 
 def _print_if(s,verbose):
     # Helper function to control level of output display.
@@ -316,6 +317,8 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
                 # ref_dat.rho0[f] = np.nanmax(ref_dat.average[f], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
             ref_dat.prediction_times[f].extend(time_grid.iloc[ref_dat.prediction_indices[f]].tolist())
             ref_dat.rho0[f] = np.nanmax(ref_dat.average[f], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
+            elapsed_time = (ref_dat.times[f][-1] - ref_dat.times[f][0]) / np.timedelta64(1, 'D')            # compute total time in days as a np.float64
+            ref_dat.soiling_rate[f] = (ref_dat.average[f][0]-ref_dat.average[f][-1])/elapsed_time*100       # compute soiling rates in p.p./day for each mirror
             
         sim_dat.time[f] = sim_dat.time[f].reset_index(drop=True) # reset indices to start at 0 to allow repeated iterations
             
@@ -346,6 +349,7 @@ def daily_average(ref_dat,time_grids,dt=None):
         ref_dat_new.average[f] = np.zeros((num_times,num_mirrors))
         ref_dat_new.sigma_of_the_mean[f] = np.zeros((num_times,num_mirrors))
         ref_dat_new.delta_ref[f] = np.zeros((num_times,num_mirrors))
+        ref_dat_new.soiling_rate[f] = np.zeros(ref_dat.rho0[f].shape)
         for ii in range(num_mirrors):
             df = pd.DataFrame( {"average":ref_dat.average[f][:,ii],
                                 "sigma": ref_dat.sigma[f][:,ii],
@@ -375,12 +379,11 @@ def daily_average(ref_dat,time_grids,dt=None):
                 ref_dat_new.prediction_indices[f].append(idx)        
             ref_dat_new.prediction_times[f].append(tg[ref_dat_new.prediction_indices[f]])
         ref_dat_new.delta_ref[f] = np.vstack((np.zeros((1, ref_dat_new.average[f].shape[1])), -np.diff(ref_dat_new.average[f], axis=0)))  # compute reflectance loss between subsequent measurements (0 given to first timestamp)
+        elapsed_time = (ref_dat_new.times[f][-1] - ref_dat_new.times[f][0]) / np.timedelta64(1, 'D')            # compute total time in days as a np.float64
+        ref_dat_new.soiling_rate[f] = (ref_dat_new.average[f][0]-ref_dat_new.average[f][-1])/elapsed_time*100   # compute soiling rates in p.p./day for each mirror
 
     return ref_dat_new
             
-
-    
-
 def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,\
                              sheet_name=None,output_file_format="sample_{0:d}.xlsx",\
                              dt=np.timedelta64(3600,'s'),verbose=True):
@@ -606,6 +609,124 @@ def wind_rose(simulation_data,exp_idx):
     wax.set_legend()
 
     return fig,wax
+
+def soiling_rates_summary(ref_data,sim_data,verbose=False):
+
+    soiling_rates = ref_data.soiling_rate
+    ave_data = ref_data.average
+
+    # Determine starting index based on file name
+    idx_start = 0
+    if any("augusta".lower() in value.lower() for value in sim_data.file_name.values()):
+        idx_start = 1  # For Port Augusta data
+    if any("mildura".lower() in value.lower() for value in sim_data.file_name.values()):
+        idx_start = 2  # For Mildura data
+
+    # Initialize a dictionary to store soiling rates by campaign
+    # soiling_rate_groups_by_campaign = {}
+    results = []  # List to store results for DataFrame
+
+    # Process each campaign
+    for campaign_id, rates in soiling_rates.items():
+        # Compute elapsed time
+        elapsed_time = (ref_data.times[campaign_id][-1]-ref_data.times[campaign_id][0]) / np.timedelta64(1, 'D')
+
+        # Extract campaign-specific tilts
+        tilts = np.squeeze(np.unique(ref_data.tilts[campaign_id], axis=1))
+
+        # Initialize a dictionary to store soiling rates for this campaign
+        soiling_rate_groups = defaultdict(list)
+        ave_groups = defaultdict(list)
+
+        # Collect rates grouped by tilt, and corresponding reflectance values
+        for tilt, rate, ave in zip(tilts[idx_start:], rates[idx_start:], ave_data[campaign_id].T[idx_start:]):
+            soiling_rate_groups[tilt].append(rate)
+            ave_groups[tilt].append(ave)
+
+        # Compute the average soiling rate for each tilt
+        campaign_averages_soiling = {
+            tilt: np.mean(rates) for tilt, rates in soiling_rate_groups.items()
+        }
+
+        # Compute the initial and final ave values for each tilt
+        for tilt, aves in ave_groups.items():
+            initial_ave = np.mean([array[0] for array in aves]) if aves else np.nan
+            final_ave = np.mean([array[-1] for array in aves]) if aves else np.nan
+            tot_loss = initial_ave - final_ave
+            avg_rate = campaign_averages_soiling.get(tilt, np.nan)
+            results.append([campaign_id, elapsed_time, tilt, initial_ave, final_ave, tot_loss, avg_rate])
+
+    # Create a DataFrame from the results
+    df_ref_data = pd.DataFrame(results, columns=["Campaign", "Elapsed Time (days)", "Tilt", "Initial Reflectance", "Final Reflectance", "Total Loss", "Soiling Rate"])
+
+# Display the results
+    if verbose:
+        print("\nAverage Soiling Rate and Initial/Final ave Values (By Campaign):")
+        for campaign_id in soiling_rates:
+            print(f"Campaign {campaign_id}:")
+            # Filter results for the current campaign
+            campaign_results = [res for res in results if res[0] == campaign_id]
+            
+            print("  Average Soiling Rates by Tilt:")
+            for res in campaign_results:
+                tilt = res[1]
+                avg_rate = res[2]
+                print(f"    Tilt {tilt}: {avg_rate:.2f}")
+            
+            print("  Initial and Final ave Values by Tilt:")
+            for res in campaign_results:
+                tilt = res[1]
+                initial_ave = res[3]
+                final_ave = res[4]
+                print(f"    Tilt {tilt}: Initial ave = {initial_ave*100:.1f}%, Final ave = {final_ave*100:.1f}%")
+
+    return df_ref_data
+
+def loss_table_from_sim(sim_res,sim_data):
+    table_data = []
+
+    # Iterate over campaigns and tilts in the simulation data
+    for (campaign_idx, tilt), y_data in sim_res.items():
+        # Extract time data for the current campaign
+        time_data = sim_data.time[campaign_idx]
+        
+        # # Ensure time_data and y_data lengths match
+        if len(time_data) != len(y_data):
+            raise ValueError(f"Time and Y data lengths do not match for campaign {campaign_idx}, tilt {tilt}.")
+        
+        # Calculate elapsed time in days
+        elapsed_time = (time_data[time_data.index[-1]] - time_data[0]) / np.timedelta64(1, 'D')
+        
+        # Calculate initial value, final value, total loss, and average daily loss
+        initial_value = y_data[0]
+        final_value = y_data[-1]
+        total_loss = initial_value - final_value
+        avg_daily_loss = total_loss / elapsed_time if elapsed_time > 0 else np.nan
+        
+        # Append the data to the table
+        table_data.append({
+            "Campaign": f"Campaign {campaign_idx + 1}",
+            "Elapsed Time (days)": elapsed_time,
+            "Tilt": tilt,
+            "Initial Value": initial_value,
+            "Final Value": final_value,
+            "Total Loss": total_loss,
+            "Average Daily Loss": avg_daily_loss
+        })
+
+    # Convert to DataFrame for easier handling and export
+    df_sim = pd.DataFrame(table_data)
+
+    # Save to CSV
+    # output_file = "loss_summary.csv"
+    # df_sim.to_csv(output_file, index=False)
+
+    # Display the DataFrame
+    # print(df_sim)
+
+    return df_sim
+
+
 
 class DustDistribution():
     """
@@ -850,3 +971,5 @@ class DustDistribution():
         
         wb.save(filename=file_name)
         wb.close()
+
+
