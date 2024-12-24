@@ -203,65 +203,46 @@ def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientatio
     if plot_rh:
         hum_max = max([max(sdat.relative_humidity[f]) for f in exps]) # max relative humidity for setting y-axes
 
-    # # Define color for each orientation 
-    # if any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
-    #     colors = {'NW':'blue','SE':'red'}
-    # else:
-    #     colors = {'N':'blue','S':'red','E':'green','W':'magenta','N/A':'blue'}
-    
+    ref_output = []
     for ii,e in enumerate(exps):
+        exp_output = {}
         for jj,t in enumerate(hels):
             tr = rdat.times[e]
-            tr = (tr-tr[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
-            # idx, = np.where(rdat.tilts[e][:,0] == t)
+            tr_day = (tr-tr[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
             
-            # if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
-            #     idx = idx[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
-            # idxs, = np.where(mod.helios.tilt[e][:,0] == t)
-            # if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
-            #     idxs = idxs[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
-                        
-            # if t==0 and any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
-            #     idx = idx[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
-            # idxs, = np.where(mod.helios.tilt[e][:,0] == t)
-            # if t==0 and any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
-            #     idxs = idxs[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
-            
-            # idxs = idxs[0] # take first since all predictions are the same
             ts = sdat.time[e].values[0:rdat.prediction_indices[e][-1]+1]
-            ts = (ts-ts[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
+            ts_day = (ts-ts[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
             
-            # the below for loop is not useful for the heliostats (one line each subplot)
-            # for kk in idx: # reflectance data
             m = rdat.average[e][:,jj].squeeze().copy()
             s = rdat.sigma_of_the_mean[e][:,jj].squeeze()
 
+            valid_idx = np.where(~np.isnan(m))[0]
             if np.isnan(m).any():
-                first_valid_idx = np.where(~np.isnan(m))[0][0]
-                m = m[first_valid_idx:]
-                s = s[first_valid_idx:]  
-                tr = tr[first_valid_idx:]
+                tr = tr[valid_idx]
+                m = m[valid_idx]
+                s = s[valid_idx]  
+                tr_day = tr_day[valid_idx]
+                ts_day = ts_day[(ts>=tr[0]) & (ts<=tr[-1])]
+                ts = ts[(ts>=tr[0]) & (ts<=tr[-1])]
+                
 
             m += (1-m[0]) # shift up so that all start at 1.0 for visual comparison
             error_two_sigma = 1.96*s
 
-            # color = colors[orientation[ii][kk]] # color to be fixed later
             if np.ndim(ax) == 1:
                 ax = np.vstack(ax)  # create a fictious 2D array with only one column
-            ax[jj,ii].errorbar(tr,m,yerr=error_two_sigma)#,label=f'Orientation {orientation[ii][kk]}',color=color)
+            ax[jj,ii].errorbar(tr_day,m,yerr=error_two_sigma)
 
-                # the below is commented since the training is done on the mirror rig 
-                # if (e in train_experiments) and \
-                #     (rdat.mirror_names[e][kk] in train_mirrors):
-                #     a = ax[jj,e]
-                #     a.axvline(x=tr[0],ls=':',color='red')
-                #     a.axvline(x=tr[-1],ls=':',color='red')
-                #     a.patch.set_facecolor(color='yellow')
-                #     a.patch.set_alpha(0.2)
+            ym = r0*mod.helios.soiling_factor[e][jj,rdat.prediction_indices[e][valid_idx[0]]:rdat.prediction_indices[e][-1]+1] # simulate reflectance losses between valid prediction indices
+            # THE BELOW SIMPLY RESETS TO 0 THE CONFIDENCE INTERVAL IF A MEASUREMENT IS PERFORMED LATER - CHECK IF IT WORKS AS INTENDED BY MIKE
+            var_predict = mod.helios.soiling_factor_prediction_variance[e][jj,rdat.prediction_indices[e][valid_idx[0]]:rdat.prediction_indices[e][-1]+1]-mod.helios.soiling_factor_prediction_variance[e][jj,rdat.prediction_indices[e][valid_idx[0]]]
+           
+            
+            exp_output[t] = {
+                'Reflectance': ym.copy(),
+                'Variance': var_predict.copy(),
+                'Time': ts.copy()}
 
-
-            ym = r0*mod.helios.soiling_factor[e][jj,0:rdat.prediction_indices[e][-1]+1] # ensure columns are time index
-            var_predict = mod.helios.soiling_factor_prediction_variance[e][jj,0:rdat.prediction_indices[e][-1]+1]
             if ym.ndim == 1:
                 ym += (1.0-ym[0])
             else:
@@ -270,14 +251,15 @@ def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientatio
             sigma_predict = r0*np.sqrt(var_predict)
             Lp = ym - 1.96*sigma_predict
             Up = ym + 1.96*sigma_predict
-            ax[jj,ii].plot(ts,ym,label='Prediction Mean',color='black')
-            ax[jj,ii].fill_between(ts,Lp,Up,color='black',alpha=0.1,label=r'Prediction Interval')
+            ax[jj,ii].plot(ts_day,ym,label='Prediction Mean',color='black')
+            ax[jj,ii].fill_between(ts_day,Lp,Up,color='black',alpha=0.1,label=r'Prediction Interval')
             ax[jj,ii].grid('on')
 
             if jj==0:
                 ax[jj,ii].set_title(f"Campaign {e+1}, Heliostat {t}")
             else:
                 ax[jj,ii].set_title(f"Heliostat {t}")
+        ref_output.append(exp_output)
             
     
         new_var = sdat.dust_concentration[e][0:rdat.prediction_indices[e][-1]+1]
@@ -289,12 +271,12 @@ def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientatio
         else:
             a2 = ax[-1,ii]
 
-        a2.plot(ts,dust_conc, color='black')
+        a2.plot(ts_day,dust_conc, color='black')
         a2.tick_params(axis ='y', labelcolor = 'black')
         a2.set_ylim((0,1.01*dust_max))
 
         a2a = a2.twinx()
-        p = a2a.plot(ts,ws,color='green')
+        p = a2a.plot(ts_day,ws,color='green')
         a2a.tick_params(axis ='y', labelcolor = 'green')
         a2a.set_ylim((0,1.01*ws_max))
         a2a.set_yticks((0,ws_max/2,ws_max))
@@ -304,7 +286,7 @@ def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientatio
             # THE LINE BELOW AVOID THE LAST ELEMENT (SO IT HAS THE SAME DIMENSION)
             rel_hum = sdat.relative_humidity[e][0:rdat.prediction_indices[e][-1]+1]
             a3 = ax[-1,ii]
-            a3.plot(ts,rel_hum, color='blue')
+            a3.plot(ts_day,rel_hum, color='blue')
             a3.tick_params(axis ='y', labelcolor = 'blue')
             a3.set_ylim((0,1.01*hum_max))
         
@@ -354,7 +336,7 @@ def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientatio
                bbox_to_anchor=(0.9025+legend_shift[0],1.025+legend_shift[1]),bbox_transform=fig.transFigure)
     fig.subplots_adjust(wspace=0.1, hspace=0.3)
     fig.tight_layout()
-    return fig,ax
+    return fig,ax,ref_output
 
 def soiling_rate(alphas: np.ndarray,
                  alphas2: np.ndarray,

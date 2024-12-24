@@ -726,6 +726,47 @@ def loss_table_from_sim(sim_res,sim_data):
 
     return df_sim
 
+def loss_hel_table_from_sim(sim_res_hel,sim_data):  # provide simulated reflectance losses for each heliostats
+    table_data = []
+
+    # Iterate over campaigns and tilts in the simulation data
+    for campaign_idx in range(len(sim_res_hel)):
+        
+        for hel, y_data in sim_res_hel[campaign_idx].items():
+           
+            # Calculate elapsed time in days
+            elapsed_time = (y_data['Time'][-1]-y_data['Time'][0]).astype('timedelta64[s]')
+            elapsed_time = pd.Timedelta(elapsed_time)/ np.timedelta64(1, 'D')
+            
+            # Calculate initial value, final value, total loss, and average daily loss
+            initial_value = y_data['Reflectance'][0]
+            final_value = y_data['Reflectance'][-1]
+            total_loss = initial_value - final_value
+            avg_daily_loss = total_loss / elapsed_time if elapsed_time > 0 else np.nan
+            
+            # Append the data to the table
+            table_data.append({
+                "Campaign": f"Campaign {campaign_idx + 1}",
+                "Elapsed Time (days)": elapsed_time,
+                "Heliostat": hel,
+                "Initial Value": initial_value,
+                "Final Value": final_value,
+                "Total Loss": total_loss,
+                "Average Daily Loss": avg_daily_loss
+            })
+
+    # Convert to DataFrame for easier handling and export
+    df_sim_hel = pd.DataFrame(table_data)
+
+    # Save to CSV
+    # output_file = "loss_summary.csv"
+    # df_sim.to_csv(output_file, index=False)
+
+    # Display the DataFrame
+    # print(df_sim)
+
+    return df_sim_hel
+
 # # EXTRACT VALUES FROM PLOT (NEED FIXING!)
 def loss_table_from_plot(ax):
     table_data = []

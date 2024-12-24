@@ -7,7 +7,7 @@ os.sys.path.append(main_directory)
 DAILY_AVERAGE = True
 
 # CHOOSE WHETHER TO WORK ON HELIOSTATS OR ON THE MIRROR RIG
-HELIOSTATS = False
+HELIOSTATS = True
 
 # %% modules
 import numpy as np
@@ -468,8 +468,9 @@ if DAILY_AVERAGE:
 
 # %% Compute average measured reflectance losses for each tilt (only for mirror rig experiments)
 
-ref_data_summary = smu.soiling_rates_summary(reflect_data_total,sim_data_total)
-ref_data_summary
+if not HELIOSTATS:
+    ref_data_summary = smu.soiling_rates_summary(reflect_data_total,sim_data_total)
+    ref_data_summary
 
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
@@ -477,16 +478,21 @@ file_inds = np.arange(len(reflect_data_total.file_name))
 imodel = smu.set_extinction_coefficients(imodel,ext_weights,file_inds)
 #%% Plot semi-physical model results
 if HELIOSTATS==True:
-    fig,ax = plot_for_heliostats(   imodel,
+    fig,ax,ref_hel_sp = plot_for_heliostats(   imodel,
                                     reflect_data_total,
                                     sim_data_total,
                                     train_experiments,
                                     train_mirrors,
                                     orientation,
                                     legend_shift=(0.04,0),
-                                    yticks=(0.98,0.99,1.01))#0.97,0.98,
+                                    yticks=(0.97,0.98,0.99,1.0))#0.97,0.98,
     fig.set_size_inches(10, 20) 
-    plt.show()    
+    plt.show()
+
+    df_hel_sp = smu.loss_hel_table_from_sim(ref_hel_sp,sim_data_total)
+    df_hel_sp.to_csv(sp_save_file+'_simulation_sp.csv', index=False)
+    df_hel_sp   
+
 else:
     fig,ax,ref_simulation_sp = plot_for_paper(    imodel,
                                 reflect_data_total,
@@ -496,25 +502,23 @@ else:
                                 orientation,
                                 legend_shift=(0.04,0),
                                 yticks=(0.95,0.96,0.97,0.98,0.99,1.0)) #
+    plt.show()
+    df_sim_sp = smu.loss_table_from_sim(ref_simulation_sp,sim_data_total)
+    df_sim_sp.to_csv(sp_save_file+'_simulation_sp.csv', index=False)
+    df_sim_sp
 
 fig.suptitle('Semi-Physical Model', fontsize=16, fontweight='bold', y=1.045)
 fig.savefig(sp_save_file+".pdf",bbox_inches='tight')
 
 # %% 
 
-df_sim_sp = smu.loss_table_from_sim(ref_simulation_sp,sim_data_total)
-df_sim_sp.to_csv(sp_save_file+'_simulation_sp.csv', index=False)
-df_sim_sp
-
-
-
-# df_plot_sp =smu.loss_table_from_sim(ref_simulation_sp,sim_data_total) # NEED TO BE FIXED
+# df_plot_sp =smu.loss_table_from_fig(ref_simulation_sp,sim_data_total) # NEED TO BE FIXED
 
 
 # %% Performance of constant-mean model on total data
 imodel_constant.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
 
-if HELIOSTATS==True:
+if HELIOSTATS:
     fig,ax = plot_for_heliostats(   imodel_constant,
                                     reflect_data_total,
                                     sim_data_total,
@@ -531,16 +535,17 @@ else:
                                 train_mirrors,
                                 orientation,
                                 legend_shift=(0.04,0),
-                                yticks=(0.95,0.96,0.97,0.98,0.99,1.0))
+                                yticks=(0.95,0.96,0.97,0.98,0.99,1.04))
 
 fig.suptitle('Constant-Mean Model', fontsize=16, fontweight='bold', y=1.045)
 fig.savefig(cm_save_file+".pdf",bbox_inches='tight')
 
 # %%
 
-df_sim_cm = smu.loss_table_from_sim(ref_simulation_cm,sim_data_total)
-df_sim_cm.to_csv(cm_save_file+'_simulation_cm.csv', index=False)
-df_sim_cm
+if not HELIOSTATS:
+    df_sim_cm = smu.loss_table_from_sim(ref_simulation_cm,sim_data_total)
+    df_sim_cm.to_csv(cm_save_file+'_simulation_cm.csv', index=False)
+    df_sim_cm
 
 # df_plot_cm =smu.loss_table_from_sim(ref_simulation_cm,sim_data_total) # NEED TO BE FIXED
 
