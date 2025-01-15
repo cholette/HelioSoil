@@ -58,7 +58,7 @@ For the fitting classes, if the `loss_model = 'mie'`, the *Source_Intensity* she
 
 ## External dependencies
 
-The details of the required python packages can be found in the environment.yml file. Aside from these requirements, the average optical efficiencies of each sector are computed using [CoPylot](https://www.nrel.gov/docs/fy21osti/78774.pdf). To use CoPylot, install [SolarPILOT]([url](https://www2.nrel.gov/csp/solarpilot)) following the instructions in Section 2.1 of [5] and place the files `copylot.py` and `solarpilot.dll` into the main directory.
+The details of the required python packages can be found in the environment.yml file. Aside from these requirements, the average optical efficiencies of each sector are computed using [CoPylot](https://www.nrel.gov/docs/fy21osti/78774.pdf). To use CoPylot, install [SolarPILOT](https://www2.nrel.gov/csp/solarpilot) following the instructions in Section 2.1 of [5] and place the files `copylot.py` and `solarpilot.dll` into the main directory.
 
 The data available from the [mirror_soiling_data](https://github.com/cholette/mirror_soiling_data) should be placed in the `data/` subfolder for the fitting scripts and notebooks to work.
 
