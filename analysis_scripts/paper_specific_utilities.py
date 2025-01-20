@@ -39,6 +39,8 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
     # Define color for each orientation 
     if any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
         colors = {'NW':'blue','SE':'red'}
+    elif any("yadnarie".lower() in value.lower() for value in sdat.file_name.values()):
+        colors = {'NE':'blue','SE':'red','SW':'green','NW':'magenta','N/A':'blue'}
     else:
         colors = {'N':'blue','S':'red','E':'green','W':'magenta','N/A':'blue'}
     
@@ -50,6 +52,10 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             
             idx, = np.where(rdat.tilts[e][:,0] == t)
             idxs, = np.where(mod.helios.tilt[e][:,0] == t)
+
+            if not any(rdat.tilts[e][:,0] == t):
+                print('Tilt Not Found')
+                continue
 
             if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
                 idx = idx[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
@@ -146,36 +152,83 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             fs = r"{0:s} $\frac{{\mu g}}{{m^3}}$"
             a2a.set_ylabel('Wind Speed (m/s)', color='green')
 
-    for ii,row in enumerate(ax):
-        for jj,a in enumerate(row):
+    # for ii,row in enumerate(ax):
+        # for jj,a in enumerate(row):
+        #     if ii < len(tilts):
+        #         if yticks is None:
+        #             a.set_ylim((0.85,1.01))
+        #             a.set_yticks((0.85,0.90,0.95,1.0))
+        #         else:
+        #             a.set_ylim((min(yticks),max(yticks)))
+        #             a.set_yticks(yticks)
+
+        #         if jj > 0:
+        #             a.set_yticklabels([])
+        #         if (ii in rows_with_legend) and (jj==0):
+        #             ang = rdat.reflectometer_incidence_angle[jj]
+        #             a.set_ylabel(r"Normalized reflectance $\rho(0)-\rho(t)$ at "+str(ang)+"$^{{\circ}}$")
+        #         if (ii in rows_with_legend) and (jj==0):
+        #             # a.legend(loc='center',ncol=2,bbox_to_anchor=(0.25,0.5))
+        #             h_legend,labels_legend = a.get_legend_handles_labels()
+        #     elif ii == len(tilts):
+        #         a.set_yticks((0,150,300))
+        #     else:
+        #         a.set_yticks((0,50,100))
+                
+            
+        #     if ii == ax.shape[0]-1:
+        #         a.set_xlabel('Days')
+        #     a.grid('on')
+
+    handles_leg = []
+    labels_leg = []
+
+    for ii, row in enumerate(ax):
+        for jj, a in enumerate(row):
             if ii < len(tilts):
                 if yticks is None:
-                    a.set_ylim((0.85,1.01))
-                    a.set_yticks((0.85,0.90,0.95,1.0))
+                    a.set_ylim((0.85, 1.01))
+                    a.set_yticks((0.85, 0.90, 0.95, 1.0))
                 else:
-                    a.set_ylim((min(yticks),max(yticks)))
+                    a.set_ylim((min(yticks), max(yticks)))
                     a.set_yticks(yticks)
 
                 if jj > 0:
                     a.set_yticklabels([])
-                if (ii in rows_with_legend) and (jj==0):
+
+                if ii in rows_with_legend and jj == 0:
                     ang = rdat.reflectometer_incidence_angle[jj]
-                    a.set_ylabel(r"Normalized reflectance $\rho(0)-\rho(t)$ at "+str(ang)+"$^{{\circ}}$")
-                if (ii in rows_with_legend) and (jj==0):
-                    # a.legend(loc='center',ncol=2,bbox_to_anchor=(0.25,0.5))
-                    h_legend,labels_legend = a.get_legend_handles_labels()
+                    a.set_ylabel(r"Normalized reflectance $\rho(0)-\rho(t)$ at " + str(ang) + "$^{{\circ}}$")
+
+                # Get legend handles and labels
+                hs, ls = a.get_legend_handles_labels()
+                handles_leg.extend(hs)
+                labels_leg.extend(ls)
+
+                # # Remove duplicates from the legend
+                # for handle, label in zip(h_legend, labels_legend):
+                #     if label not in seen_labels:
+                #         seen_labels.add(label)
+                #     else:
+                #         # Remove the duplicate handle from the list
+                #         h_legend.remove(handle)
+                #         labels_legend.remove(label)
+
             elif ii == len(tilts):
-                a.set_yticks((0,150,300))
+                a.set_yticks((0, 150, 300))
             else:
-                a.set_yticks((0,50,100))
-                
-            
-            if ii == ax.shape[0]-1:
-                a.set_xlabel('Days')
-            a.grid('on')
+                a.set_yticks((0, 50, 100))
+    
+    # Remove duplicates by filtering unique labels and keeping corresponding handles
+    unique_labels = []
+    unique_handles = []
 
+    for handle, label in zip(handles_leg, labels_leg):
+        if label not in unique_labels:  # Check if the label is already in the unique list
+            unique_labels.append(label)  # Add unique label
+            unique_handles.append(handle)  # Add corresponding handle
 
-    fig.legend(h_legend,labels_legend,ncol=num_legend_cols,
+    fig.legend(unique_handles,unique_labels,ncol=num_legend_cols,
                bbox_to_anchor=(0.9025+legend_shift[0],1.025+legend_shift[1]),bbox_transform=fig.transFigure)
     fig.subplots_adjust(wspace=0.1, hspace=0.3)
     fig.tight_layout()
