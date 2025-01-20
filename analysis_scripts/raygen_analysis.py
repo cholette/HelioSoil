@@ -519,7 +519,7 @@ fig.savefig(sp_save_file+".pdf",bbox_inches='tight')
 imodel_constant.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
 
 if HELIOSTATS:
-    fig,ax = plot_for_heliostats(   imodel_constant,
+    fig,ax,ref_hel_cm = plot_for_heliostats(   imodel_constant,
                                     reflect_data_total,
                                     sim_data_total,
                                     train_experiments,
