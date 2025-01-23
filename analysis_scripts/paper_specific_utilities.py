@@ -7,13 +7,13 @@ import soiling_model.base_models as smb
 import soiling_model.fitting as smf
 
 # %% Plot for the paper
-plt.rc('xtick', labelsize=16)
-plt.rc('ytick', labelsize=16)
-plt.rc('legend', fontsize=10)
-plt.rc('axes',labelsize=18)
+plt.rc('xtick', labelsize=12)
+plt.rc('ytick', labelsize=12)
+plt.rc('legend', fontsize=12)
+plt.rc('axes',labelsize=12)
 
 def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
-                   rows_with_legend=[3],num_legend_cols=6,legend_shift=(0,0),plot_rh=True,
+                   rows_with_legend=[0],num_legend_cols=6,legend_shift=(0,0),plot_rh=True,
                    yticks=None):
     
     if any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
@@ -23,12 +23,12 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
     r0 = mod.helios.nominal_reflectance
 
     exps = list(mod.helios.tilt.keys())
-    tilts = np.unique(mod.helios.tilt[0])
+    tilts = list(np.unique(mod.helios.tilt[ii]) for ii,e in enumerate(exps))
 
     if plot_rh:
-        fig,ax = plt.subplots(nrows=len(tilts)+2,ncols=len(exps),figsize=(12,15),sharex='col')
+        fig,ax = plt.subplots(nrows=len(tilts[0])+2,ncols=len(exps),figsize=(12,15),sharex='col')
     else:
-        fig,ax = plt.subplots(nrows=len(tilts)+1,ncols=len(exps),figsize=(12,15),sharex='col')
+        fig,ax = plt.subplots(nrows=len(tilts[0])+1,ncols=len(exps),figsize=(12,17),sharex='col')
         
     ws_max = max([max(sdat.wind_speed[f]) for f in exps]) # max wind speed for setting y-axes
     dust_max = max([max(sdat.dust_concentration[f]) for f in exps]) # max dust concentration for setting y-axes
@@ -40,26 +40,27 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
     if any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
         colors = {'NW':'blue','SE':'red'}
     else:
-        colors = {'N':'blue','S':'red','E':'green','W':'magenta','N/A':'blue'}
+        colors = {'NE':'blue','SE':'red','SW':'green','NW':'magenta','N/A':'blue'}
     
     for ii,e in enumerate(exps):
-        for jj,t in enumerate(tilts):
+        for jj,t in enumerate(tilts[ii]):
+           
             tr = rdat.times[e]
             tr = (tr-tr[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
-            idx, = np.where(rdat.tilts[e][:,0] == t)
+            idx, = np.where(rdat.tilts[e][:,-1] == t)
             
             if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
                 idx = idx[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
-            idxs, = np.where(mod.helios.tilt[e][:,0] == t)
+            idxs, = np.where(mod.helios.tilt[e][:,-1] == t)
             if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
                 idxs = idxs[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
                         
             if t==0 and any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
                 idx = idx[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
-            idxs, = np.where(mod.helios.tilt[e][:,0] == t)
+            idxs, = np.where(mod.helios.tilt[e][:,-1] == t)
             if t==0 and any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
                 idxs = idxs[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
-            
+    
             idxs = idxs[0] # take first since all predictions are the same
             ts = sdat.time[e].values[0:rdat.prediction_indices[e][-1]]
             ts = (ts-ts[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
@@ -73,8 +74,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                 color = colors[orientation[ii][kk]]
                 if np.ndim(ax) == 1:
                     ax = np.vstack(ax)  # create a fictious 2D array with only one column
-                ax[jj,ii].errorbar(tr,m,yerr=error_two_sigma,label=f'Orientation {orientation[ii][kk]}',color=color)
-
+                
                 if (e in train_experiments) and \
                     (rdat.mirror_names[e][kk] in train_mirrors):
                     a = ax[jj,e]
@@ -82,7 +82,8 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                     a.axvline(x=tr[-1],ls=':',color='red')
                     a.patch.set_facecolor(color='yellow')
                     a.patch.set_alpha(0.2)
-            
+                ax[jj,ii].errorbar(tr,m,yerr=error_two_sigma,label=f'{orientation[ii][kk]}',color=color)
+                
             
             ym = r0*mod.helios.soiling_factor[e][idxs,0:rdat.prediction_indices[e][-1]] # ensure columns are time index
             if ym.ndim == 1:
@@ -97,8 +98,9 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             ax[jj,ii].fill_between(ts,Lp,Up,color='black',alpha=0.1,label=r'Prediction Interval')
             ax[jj,ii].grid('on')
 
+
             if jj==0:
-                ax[jj,ii].set_title(f"Campaign {e+1}, Tilt: {t:.0f}"+r"$^{\circ}$")
+                ax[jj,ii].set_title(f"Data set {e+1}, Tilt: {t:.0f}"+r"$^{\circ}$")
             else:
                 ax[jj,ii].set_title(f"Tilt: {t:.0f}"+r"$^{\circ}$")
             
@@ -146,7 +148,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
 
     for ii,row in enumerate(ax):
         for jj,a in enumerate(row):
-            if ii < len(tilts):
+            if ii < len(tilts[0]):
                 if yticks is None:
                     a.set_ylim((0.85,1.01))
                     a.set_yticks((0.85,0.90,0.95,1.0))
@@ -158,12 +160,21 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                     a.set_yticklabels([])
                 if (ii in rows_with_legend) and (jj==0):
                     ang = rdat.reflectometer_incidence_angle[jj]
+                if jj == 0 and ii == 3:
+                    ang = rdat.reflectometer_incidence_angle[jj]
                     a.set_ylabel(r"Normalized reflectance $\rho(0)-\rho(t)$ at "+str(ang)+"$^{{\circ}}$")
                 if (ii in rows_with_legend) and (jj==0):
                     # a.legend(loc='center',ncol=2,bbox_to_anchor=(0.25,0.5))
                     h_legend,labels_legend = a.get_legend_handles_labels()
-            elif ii == len(tilts):
-                a.set_yticks((0,150,300))
+                if (ii in rows_with_legend) and (jj==1):
+                    h, l = a.get_legend_handles_labels()
+                    for ll in range(len(l)):
+                        if l[ll] not in labels_legend:
+                            h_legend.append(h[ll])
+                            labels_legend.append(l[ll])
+
+            elif ii == len(tilts[0]):
+                a.set_yticks((0,150,300,450,600))
             else:
                 a.set_yticks((0,50,100))
                 
@@ -171,7 +182,6 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             if ii == ax.shape[0]-1:
                 a.set_xlabel('Days')
             a.grid('on')
-
 
     fig.legend(h_legend,labels_legend,ncol=num_legend_cols,
                bbox_to_anchor=(0.9025+legend_shift[0],1.025+legend_shift[1]),bbox_transform=fig.transFigure)
