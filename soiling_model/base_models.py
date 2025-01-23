@@ -514,8 +514,10 @@ class simulation_inputs:
         self.end_datetime = {}                  # datetime64 for end
         self.air_temp = {}                      # [C] air temperature
         self.wind_speed = {}                    # [m/s] wind speed
+        self.wind_speed_mov_avg = {}            # [m/s] wind speed hourly moving average
         self.wind_direction = {}                # [degrees] wind direction
         self.dust_concentration = {}            # [µg/m3] PM10 or TSP concentration in air
+        self.dust_conc_mov_avg = {}             # [µg/m3] PM10 or TSP hourly moving average of dust concentration
         self.rain_intensity = {}                # [mm/hr] rain intensity
         self.dust_type = {}                     # Usually either "TSP" or "PM10", but coule be any PMX or PMX.X
         self.dni = {}                           # [W/m^2] Direct Normal Irradiance
@@ -618,6 +620,7 @@ class simulation_inputs:
                 if len(idx_too_low) > 0:
                     self.wind_speed[ii][idx_too_low] = smallest_windspeed
                     _print_if(f"Warning: some windspeeds were <= 0 and were set to {smallest_windspeed}", verbose)
+            self.wind_speed_mov_avg[ii] = pd.Series(self.wind_speed[ii]).rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1).mean().values
 
             self.dust_concentration[ii] = self.k_factors[ii] * np.array(weather.loc[:, dust_type[ii]]) # Set dust concentration to be used for soiling predictions
             if 'dust_concentration' not in self.weather_variables:
@@ -637,6 +640,8 @@ class simulation_inputs:
                         break
                 else:
                     _print_if(f"No {dust_key} data to import.", verbose)
+            
+            self.dust_conc_mov_avg[ii] = pd.Series(self.dust_concentration[ii]).rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1).mean().values
 
             if verbose:
                 T = (time.iloc[-1] - time.iloc[0]).days
@@ -1287,9 +1292,9 @@ class reflectance_measurements:
         reflectance_files = _ensure_list(reflectance_files)
         N_experiments = len(reflectance_files)
         if number_of_measurements == None:
-            number_of_measurements = [1.0]*N_experiments
+            self.number_of_measurements = [1.0]*N_experiments
         else:
-            number_of_measurements = _import_option_helper(reflectance_files,number_of_measurements)
+            self.number_of_measurements = _import_option_helper(reflectance_files,number_of_measurements)
 
         
         if reflectometer_incidence_angle == None:
@@ -1316,20 +1321,19 @@ class reflectance_measurements:
 
         if import_tilts:
             self.tilts = {}
-        self.import_reflectance_data(reflectance_files,time_grids,number_of_measurements,
-                                reflectometer_incidence_angle,reflectometer_acceptance_angle,
-                                import_tilts=import_tilts,column_names_to_import=column_names_to_import)
+            
+        self.import_reflectance_data(reflectance_files,time_grids,reflectometer_incidence_angle,
+                                     reflectometer_acceptance_angle,import_tilts=import_tilts,
+                                     column_names_to_import=column_names_to_import)
         
-    def import_reflectance_data(self,reflectance_files,time_grids,number_of_measurements,
-                                reflectometer_incidence_angle,reflectometer_acceptance_angle,
-                                import_tilts=False,column_names_to_import=None):
+    def import_reflectance_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
+                                reflectometer_acceptance_angle, import_tilts=False,column_names_to_import=None):
         """
         Imports reflectance data from Excel files and stores the data in the object's attributes.
 
         Args:
             reflectance_files (str or list): Path(s) to the Excel file(s) containing the reflectance data.
             time_grids (list): List of time grids corresponding to each reflectance file.
-            number_of_measurements (int or list, optional): Number of reflectance measurements for each file. If not provided, defaults to 1 for each file.
             reflectometer_incidence_angle (float or list, optional): Incidence angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
             reflectometer_acceptance_angle (float or list, optional): Acceptance angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
             import_tilts (bool, optional): Whether to import tilt information from the files. Defaults to False.
@@ -1364,11 +1368,46 @@ class reflectance_measurements:
 
             # idx = reflectance_files.index(f) 
             self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
-            self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(number_of_measurements[ii])
+            self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(self.number_of_measurements[ii])
             self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
 
             if import_tilts:
                 self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[self.mirror_names[ii]].values.transpose()
+                    
+    # def import_heliostats_ref_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
+    #                             reflectometer_acceptance_angle,import_tilts=False,
+    #                             column_names_to_import=None):
+
+    #     for ii in range(len(reflectance_files)):
+            
+    #         self.file_name[ii] = reflectance_files[ii]
+    #         reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Heliostats_Ref"),\
+    #             "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Heliostats_Sigma")}
+
+    #         self.times[ii] = reflectance_data['Average']['Time'].values
+    #         if column_names_to_import != None: # extract relevant column names of the pandas dataframe
+    #             self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.mirror_names[ii] = column_names_to_import
+    #         else:
+    #             self.average[ii] = reflectance_data['Average'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1::]
+
+    #         self.prediction_indices[ii] = []
+    #         self.prediction_times[ii] = []
+    #         for m in self.times[ii]:
+    #             self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))        
+    #         self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
+    #         self.rho0[ii] = self.average[ii][0,:]
+
+    #         # idx = reflectance_files.index(f) 
+    #         self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
+    #         self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(self.number_of_measurements[ii])
+    #         self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
+
+    #         if import_tilts:
+    #             self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[self.mirror_names[ii]].values.transpose()
                     
     def get_experiment_subset(self,idx):
         attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes

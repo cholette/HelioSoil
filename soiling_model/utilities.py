@@ -70,7 +70,7 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
                 cleans[0:idx0,jj] = 1
     return cleans
 
-def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12)):
+def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12),lgd_label=None,lgd_size = 15):
     """
     Plot the experiment data, including reflectance, dust concentration, rain intensity, wind speed, and relative humidity.
     
@@ -89,26 +89,29 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
 
     fig,ax = plt.subplots(nrows=5,sharex=True,figsize=figsize)
     # fmt = r"${0:s}^\circ$"
-    fmt = "${0:s}$"
+    # fmt = r'${0:s}$'
     ave = reflect_data.average[f]
     t = reflect_data.times[f]
     std = reflect_data.sigma[f]
-    names = ["M"+str(ii+1) for ii in range(ave.shape[1])]
+    if lgd_label == None:
+        names = ["M"+str(ii+1) for ii in range(ave.shape[1])]
+    else:
+        names = lgd_label
     for ii in range(ave.shape[1]):
-        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=fmt.format(names[ii]),marker='o',capsize=4.0)
+        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=(names[ii][0:5]),marker='o',capsize=4.0)
 
     ax[0].grid(True) 
     label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data.reflectometer_incidence_angle[f]) 
     ax[0].set_ylabel(label_str)
-    ax[0].legend()
+    ax[0].legend(fontsize=lgd_size,ncol=len(ave)//2)
 
-    ax[1].plot(sim_data.time[f],sim_data.dust_concentration[f],color='brown',label="measurements")
+    ax[1].plot(sim_data.time[f],sim_data.dust_conc_mov_avg[f],color='brown',label="measurements")
     ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = "Average")
     label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data.dust_type[0])
-    ax[1].set_ylabel(label_str,color='brown')
+    ax[1].set_ylabel(label_str,color='brown',fontsize=20)
     ax[1].tick_params(axis='y', labelcolor='brown')
     ax[1].grid(True)
-    ax[1].legend()
+    ax[1].legend(fontsize=lgd_size)
 
     # Rain intensity, if available
     if len(sim_data.rain_intensity)>0: # rain intensity is not an empty dict
@@ -130,7 +133,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
     ax[3].set_xlabel('Date')
     ax[3].tick_params(axis='y', labelcolor='green')
     ax[3].grid(True)
-    ax[3].legend()
+    ax[3].legend(fontsize=lgd_size)
 
     if len(sim_data.relative_humidity)>0: 
         ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='black',label="measurements")
@@ -144,7 +147,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
     ax[4].set_xlabel('Date')
     ax[4].tick_params(axis='y', labelcolor='black')
     ax[4].grid(True)
-    ax[4].legend()
+    ax[4].legend(fontsize=lgd_size)
     
     if len(sim_data.wind_direction)>0: 
         figwr,axwr = wind_rose(sim_data,f)
@@ -183,15 +186,15 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
     for f in files:
         if isinstance(trim_ranges,list):  
             assert isinstance(trim_ranges[f],list) or isinstance(trim_ranges[f],np.ndarray), "trim_ranges must be a list of lists or a list of 1D np.arrays"
-            lb = trim_ranges[f][0]
-            ub = trim_ranges[f][1]
+            lb = trim_ranges[f][0].astype('datetime64[m]') # astype ensure they are comparable
+            ub = trim_ranges[f][1].astype('datetime64[m]') # astype ensure they are comparable
         elif trim_ranges=="reflectance_data":
             assert ref_dat is not None, "Reflectance data must be supplied for trim_ranges==""reflectance_data"""
-            lb = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][0]
-            ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][-1]        
+            lb = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][0].astype('datetime64[m]') # astype ensure they are comparable
+            ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][-1].astype('datetime64[m]') # astype ensure they are comparable        
         elif trim_ranges == "simulation_inputs":
-            lb = sim_dat.time[f].iloc[0]
-            ub = sim_dat.time[f].iloc[-1]
+            lb = sim_dat.time[f].iloc[0].astype('datetime64[m]') # astype ensure they are comparable
+            ub = sim_dat.time[f].iloc[-1].astype('datetime64[m]') # astype ensure they are comparable
         else:
             raise ValueError("""Value of trim_ranges not recognized. Must be a list of lists/np.array [lb,ub], """+\
                 """ "reflectance_data" or "simulation_inputs" """)
@@ -204,10 +207,12 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
         for var in weather_variables:
             if hasattr(sim_dat, var) and len(getattr(sim_dat, var)) > 0:
                 setattr(sim_dat, var, {**getattr(sim_dat, var), f: getattr(sim_dat, var)[f][mask]})
-        
+        sim_dat.wind_speed_mov_avg[f] = sim_dat.wind_speed_mov_avg[f][mask]
+        sim_dat.dust_conc_mov_avg[f] = sim_dat.dust_conc_mov_avg[f][mask]
+
         if reflectance_data is not None:
             # trim reflectance data
-            if len(ref_dat.tilts)>0:
+            if hasattr(ref_dat,"tilts") and len(ref_dat.tilts)>0:
                 ref_dat.tilts[f] = ref_dat.tilts[f][:,mask]
             mask = (ref_dat.times[f]>=lb) & (ref_dat.times[f]<=ub)
             ref_dat.times[f] = ref_dat.times[f][mask] 
@@ -225,8 +230,64 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
     
     return sim_dat,ref_dat
 
-def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,sheet_name=None,\
-    output_file_format="sample_{0:d}.xlsx",dt=np.timedelta64(3600,'s'),verbose=True):
+def daily_average(ref_dat,time_grids,dt=None):
+
+    # prediction indices and times
+    # tilts
+
+    ref_dat_new = deepcopy(ref_dat)
+    num_files = len(ref_dat.file_name)
+    for f in range(num_files):
+        num_mirrors = ref_dat.average[f].shape[1]
+        df = pd.DataFrame({"times":ref_dat.times[f],
+                           "day":ref_dat.times[f].astype('datetime64[D]')})
+        times = df.groupby('day')['times'].mean().values
+        # ref_dat_new.tilts[f] = [] # the averaging for the tilts needs to be done seperately
+        if dt is None:
+            ref_dat_new.times[f] = times
+        else:
+            ref_dat_new.times[f] = times.astype(f'datetime64[{int(dt[f])}s]')
+
+        num_times = len(times)
+        ref_dat_new.sigma[f] = np.zeros((num_times,num_mirrors))
+        ref_dat_new.average[f] = np.zeros((num_times,num_mirrors))
+        ref_dat_new.sigma_of_the_mean[f] = np.zeros((num_times,num_mirrors))
+        for ii in range(num_mirrors):
+            df = pd.DataFrame( {"average":ref_dat.average[f][:,ii],
+                                "sigma": ref_dat.sigma[f][:,ii],
+                                "day":ref_dat.times[f].astype('datetime64[D]')
+                                })
+            
+            daily = df.groupby("day")
+            N = daily.count()['sigma'].values
+            sum_var = df.groupby('day')['sigma'].apply(lambda x: sum(x**2)).values
+            ref_dat_new.sigma[f][:,ii] = np.sqrt(sum_var/N) # pooled variance
+            # ref_dat_new.sigma[f] = np.insert(ref_dat_new.sigma[f],0,ref_dat.sigma[f][0])
+            
+            ref_dat_new.sigma_of_the_mean[f][:,ii] = (ref_dat_new.sigma[f][:,ii] / 
+                                np.sqrt(ref_dat_new.number_of_measurements[f]))
+            # ref_dat_new.sigma_of_the_mean[f] = np.insert(ref_dat_new.sigma_of_the_mean[f],0,ref_dat.sigma_of_the_mean[f][0])
+
+            ref_dat_new.average[f][:,ii] = daily.mean().average.values
+            ref_dat_new.prediction_indices[f] = []
+            ref_dat_new.prediction_times[f] = []
+            
+            # handle case when time_grids is a pandas something
+            if isinstance(time_grids[f],(pd.Series,pd.DataFrame)):
+                tg = time_grids[f].values
+            else:
+                tg = deepcopy(time_grids[f])
+
+            for m in ref_dat_new.times[f]:
+                idx = np.argmin(np.abs(m-tg))
+                ref_dat_new.prediction_indices[f].append(idx)        
+            ref_dat_new.prediction_times[f].append(tg[ref_dat_new.prediction_indices[f]])
+
+    return ref_dat_new
+
+def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,\
+                             sheet_name=None,output_file_format="sample_{0:d}.xlsx",\
+                             dt=np.timedelta64(3600,'s'),verbose=True):
 
     # load in historical data files into a single pandas dataframe
     df = pd.DataFrame()
@@ -389,7 +450,7 @@ def set_extinction_coefficients(destination_model,extinction_weights,file_inds):
                                 "those in destination_model.helios.tilt")
     return dm
 
-def get_training_data(d,file_start,time_to_remove_at_end=0):
+def get_training_data(d,file_start,time_to_remove_at_end=0,helios=False):
     """
     Get training data for a soiling model.
     
@@ -438,8 +499,13 @@ def get_training_data(d,file_start,time_to_remove_at_end=0):
 
     # get mirror names in each file
     mirror_names = [ [] for f in files]
-    for ii,f in enumerate(files):
-        mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Reflectance_Average").columns[1::])
+    if not helios:
+        for ii,f in enumerate(files):
+            mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Reflectance_Average").columns[1::])
+    else:
+        for ii,f in enumerate(files):
+            mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Heliostats_Ref").columns[1::])
+        
 
     # get mirror names that show up in all files
     common = []

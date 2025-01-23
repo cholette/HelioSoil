@@ -255,7 +255,7 @@ class common_fitting_methods:
     def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,
                             reflectance_data=None,figsize=None,reflectance_std='measurements',
                             save_path=None,fig_title=None,return_handles=False,
-                            repeat_y_labels=True,orientation_strings=None):
+                            repeat_y_labels=True,orientation_strings=None,names_mir_train=None):
         """
         Plots the soiling factor over time for a set of simulation inputs and reflectance data.
         
@@ -322,7 +322,10 @@ class common_fitting_methods:
                     tilt_str = r"tilt = ${0:.0f}^{{\circ}}$" # tilt only
                 
                 if orientation_strings is not None:
-                    tilt_str += ", Orientation: "+orientation_strings[ii][jj]
+                    # tilt_str += ", Orientation: "+orientation_strings[ii][jj]
+                    u_idx = names_mir_train[0].find('_')
+                    tilt_str += ", Orientation: " + names_mir_train[0][:u_idx].replace('O','')
+
 
                 # get the axis handles
                 if N_experiments == 1:
@@ -424,7 +427,7 @@ class common_fitting_methods:
             a2.tick_params(axis ='y', labelcolor = 'blue')
 
             a2a = a2.twinx()
-            p = a2a.plot(ts,ws,color='green',label="Wind Speed ({0:.2f} m/s)".format(ws.mean()))
+            p = a2a.plot(ts,ws,color='green',label="Wind Speed (mean = {0:.2f} m/s)".format(ws.mean()))
             ax_wind.append(a2a)
             a2a.tick_params(axis ='y', labelcolor = 'green')
             a2a.set_ylim((0,ws_max))
@@ -440,7 +443,7 @@ class common_fitting_methods:
             else:
                 a2a.set_yticklabels([]) 
             
-            a2.set_title(label_str.format(dust_conc.mean())+" \n, Wind Speed ({0:.2f} m/s)".format(ws.mean()),fontsize=10)
+            a2.set_title(label_str.format(dust_conc.mean())+", \n Wind Speed (mean = {0:.2f} m/s)".format(ws.mean()),fontsize=10)
         
         if N_experiments > 1:
 
