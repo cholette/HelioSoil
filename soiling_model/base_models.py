@@ -276,7 +276,10 @@ class physical_base(soiling_base):
                     for k in range(Ntimes):
                         mom_removal = np.sin(rad(helios.tilt[f][h,k]))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity at each tilt for each diameter
                         mom_adhesion =  (F_adhesion+F_gravity*np.cos(rad(helios.tilt[f][h,k])))*radius_sep             # [Nm] adhesion moment  
-                        helios.pdfqN[f][h,k::,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
+                        helios.pdfqN[f][h,k:,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
+                        # if any(mom_adhesion<mom_removal):
+                        #     _print_if("Some dust is removed",verbose)
+
                 
                 helios.pdfqN[f] = np.gradient(helios.pdfqN[f],dt[f],axis=1) # Take derivative so that pdfqN is the rate at wich dust is deposited at each diameter
 
@@ -671,6 +674,7 @@ class dust:
         self.youngs_modulus = {} # [Pa] young's modulus of dust
         self.PM10 = {}           # [µg/m^3] PM10 concentration computed with the given dust size distribution
         self.TSP = {}            # [µg/m^3] TSP concentration computed with the given dust size distribution
+        self.PMT = {}            # [µg/m^3] PMT concentration computed with the given dust size distribution        
         self.Nd = {}
         self.log10_mu = {}
         self.log10_sig = {}
@@ -720,6 +724,7 @@ class dust:
             self.pdfA[ii] = pdfNii*(np.pi/4*Dii**2)*1e-6 # pdfA (area) dA[m^2/m^3]/dLog10(D[µm]), 1e-6 factor from { D^2(µm^2->m^2) 1e-12 , V(cm^3->m^3) 1e6 }
             self.pdfM[ii] = pdfNii*(rhoii*np.pi/6*Dii**3)*1e-3 # pdfm (mass) dm[µg/m^3]/dLog10(D[µm]), 1e-3 factor from { D^3(µm^3->m^3) 1e-18 , m(kg->µg) 1e9 , V(cm^3->m^3) 1e6 }
             self.TSP[ii] = np.trapz(self.pdfM[ii],np.log10(Dii)) 
+            self.PMT[ii] = self.TSP[ii]
             self.PM10[ii] = np.trapz(self.pdfM[ii][Dii<=10],np.log10(Dii[Dii<=10]))  # PM10 = np.trapz(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
 
             self.hamaker[ii] = float(table.loc['hamaker_dust'].Value)
@@ -728,7 +733,7 @@ class dust:
 
         # add dust measurements if they are PMX
         for dt in dust_measurement_type:
-            if dt not in [None,"TSP"]: # another concentration is of interest (possibly because we have PMX measurements)
+            if dt not in [None,"TSP","PMT"]: # another concentration is of interest (possibly because we have PMX measurements)
                 X = dt[2::]
                 if len(X) in [1,2]: # integer, e.g. PM20
                     X = int(X)
@@ -1310,6 +1315,8 @@ class reflectance_measurements:
         self.file_name = {}
         self.times = {}
         self.average = {}
+        self.soiling_rate = {}
+        self.delta_ref = {}
         self.sigma = {}
         self.sigma_of_the_mean = {}
         self.prediction_indices = {}
@@ -1352,10 +1359,12 @@ class reflectance_measurements:
                 raise ValueError(f"No 'Time' or 'Timestamp' column found in file {reflectance_files[ii]}")            
             if column_names_to_import != None: # extract relevant column names of the pandas dataframe
                 self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])),  -np.diff(self.average[ii], axis=0)))  # compute reflectance loss between measurements
                 self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.mirror_names[ii] = column_names_to_import
             else:
                 self.average[ii] = reflectance_data['Average'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])),  -np.diff(self.average[ii], axis=0))) # compute reflectance loss between measurements
                 self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1::]
 
@@ -1364,7 +1373,8 @@ class reflectance_measurements:
             for m in self.times[ii]:
                 self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))        
             self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
-            self.rho0[ii] = self.average[ii][0,:]
+            for jj in range(self.average[ii].shape[1]):
+                self.rho0[ii] = np.nanmax(self.average[ii], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
 
             # idx = reflectance_files.index(f) 
             self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
