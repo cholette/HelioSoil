@@ -2,11 +2,14 @@
 .empty/
 tmp/
 *__pycache__*
+*.pyc
+*.pyo
 .ipynb_checkpoints/
-*results/*
+*results/
 copylot.py
 solarpilot.dll
 analysis_scripts/confidential/
 data/
 notes/
 SolTrace/
+dev/
