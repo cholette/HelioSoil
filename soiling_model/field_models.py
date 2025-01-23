@@ -18,7 +18,7 @@ from pysolar import solar, radiation
 import datetime
 import pytz
 from scipy.optimize import minimize_scalar
-from scipy.integrate import cumtrapz
+from scipy.integrate import cumulative_trapezoid as cumtrapz
 from scipy.spatial.distance import cdist
 import copy
 from copylot import CoPylot

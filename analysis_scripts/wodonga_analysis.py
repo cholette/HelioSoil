@@ -25,6 +25,7 @@ reflectometer_incidence_angle = 15 # angle of incidence of reflectometer
 reflectometer_acceptance_angle = 12.5e-3 # half acceptance angle of reflectance measurements
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
 d = f"{main_directory}/data/wodonga/"
+time_to_remove_at_end = [0,0,0,0,0,0]
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
 train_mirrors = ["OE_M1_T00"] # which mirrors within the experiments are used for 
 k_factor = None # None sets equal to 1.0, "import" imports from the file
@@ -38,7 +39,7 @@ parameter_file = d+"parameters_wodonga_experiments.xlsx"
 if use_fitted_dust_distributions:
     d+="fitted/"
 
-files,all_intervals,exp_mirrors,all_mirrors = smu.get_training_data(d,"experiment_")
+files,all_intervals,exp_mirrors,all_mirrors = smu.get_training_data(d,"experiment_",time_to_remove_at_end=time_to_remove_at_end)
 orientation = [ [s[1] for s in mirrors] for mirrors in exp_mirrors]
 
 # Feb 2022 (first experiment --- remove last three days after rain started)

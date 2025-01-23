@@ -259,9 +259,9 @@ class physical_base(soiling_base):
                     for k in range(Ntimes):
                         mom_removal = np.sin(rad(helios.tilt[f][h,k]))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity at each tilt for each diameter
                         mom_adhesion =  (F_adhesion+F_gravity*np.cos(rad(helios.tilt[f][h,k])))*radius_sep             # [Nm] adhesion moment  
-                        helios.pdfqN[f][h,k::,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
-                        if any(mom_adhesion<mom_removal):
-                            _print_if("Some dust is removed",verbose)
+                        helios.pdfqN[f][h,k:,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
+                        # if any(mom_adhesion<mom_removal):
+                        #     _print_if("Some dust is removed",verbose)
 
                 
                 helios.pdfqN[f] = np.gradient(helios.pdfqN[f],dt[f],axis=1) # Take derivative so that pdfqN is the rate at wich dust is deposited at each diameter
@@ -1201,6 +1201,8 @@ class reflectance_measurements:
         self.file_name = {}
         self.times = {}
         self.average = {}
+        self.soiling_rate = {}
+        self.delta_ref = {}
         self.sigma = {}
         self.sigma_of_the_mean = {}
         self.prediction_indices = {}
@@ -1230,10 +1232,12 @@ class reflectance_measurements:
             self.times[ii] = reflectance_data['Average']['Time'].values
             if column_names_to_import != None: # extract relevant column names of the pandas dataframe
                 self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])),  -np.diff(self.average[ii], axis=0)))  # compute reflectance loss between measurements
                 self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.mirror_names[ii] = column_names_to_import
             else:
                 self.average[ii] = reflectance_data['Average'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])),  -np.diff(self.average[ii], axis=0))) # compute reflectance loss between measurements
                 self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1::]
 
