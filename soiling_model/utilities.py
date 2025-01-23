@@ -104,11 +104,11 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,lgd
     ax[1].plot(sim_data.time[f],sim_data.dust_concentration[f],color='brown',label="measurements")
     # ax[1].plot(sim_data.hours[f],sim_data.hourly_dust_avg[f],color='black',ls='--',label="hourly")
     ax[1].plot(sim_data.days[f],sim_data.daily_dust_avg[f],color='black',ls='--',label="daily")
-    ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = r"Average = {0:.2f}".format(sim_data.dust_concentration[f].mean()))
+    ax[1].axhline(y=np.nanmean(sim_data.dust_concentration[f]),color='brown',ls='--',label = r"Average = {0:.2f}".format(np.nanmean(sim_data.dust_concentration[f])))
     label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data.dust_type[0])
     ax[1].set_ylabel(label_str,color='brown',fontsize=20)
     ax[1].tick_params(axis='y', labelcolor='brown')
-    YL_dust = 3*sim_data.dust_concentration[f].mean()
+    YL_dust = 3*np.nanmean(sim_data.dust_concentration[f])
     ax[1].set_ylim((0,YL_dust))
     ax[1].grid(True)
     ax[1].legend(fontsize=lgd_size)
@@ -127,7 +127,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,lgd
     ax[2].grid(True)
 
     ax[3].plot(sim_data.time[f],sim_data.wind_speed[f],color='green',label="measurements")
-    ax[3].axhline(y=sim_data.wind_speed[f].mean(),color='green',ls='--',label = r"Average = {0:.2f}".format(sim_data.wind_speed[f].mean()))
+    ax[3].axhline(y=np.nanmean(sim_data.wind_speed[f]),color='green',ls='--',label = r"Average = {0:.2f}".format(np.nanmean(sim_data.wind_speed[f])))
     label_str = r'Wind Speed [$m\,/\,s$]'
     ax[3].set_ylabel(label_str,color='green')
     ax[3].set_xlabel('Date')
@@ -137,7 +137,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,lgd
 
     if len(sim_data.relative_humidity)>0: 
         ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='black',label="measurements")
-        ax[4].axhline(y=sim_data.relative_humidity[f].mean(),color='black',ls='--',label = r"Average = {0:.2f}".format(sim_data.relative_humidity[f].mean()))
+        ax[4].axhline(y=np.nanmean(sim_data.relative_humidity[f]),color='black',ls='--',label = r"Average = {0:.2f}".format(np.nanmean(sim_data.relative_humidity[f])))
     else:
         rain_nan = np.nan*np.ones(sim_data.time[f].shape)
         ax[4].plot(sim_data.time[f],rain_nan)
@@ -286,7 +286,7 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
         
         # Calculate hourly and daily averages of dust_concentration
         dust_conc_temp = pd.Series(sim_dat.dust_concentration[f], index=pd.to_datetime(sim_dat.time[f]))
-        hourly_avg = dust_conc_temp.resample('H').mean()
+        hourly_avg = dust_conc_temp.resample('h').mean()
         daily_avg = dust_conc_temp.resample('D').mean()
 
         sim_dat.hourly_dust_avg[f] = hourly_avg

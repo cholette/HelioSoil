@@ -182,7 +182,7 @@ class common_fitting_methods:
         _print_if("  "+res.message,verbose)
         
         _print_if("Estimating parameter covariance using numerical approximation of Hessian ... ",verbose)
-        H_log = ndt.Hessian(nloglike)(y) # Hessian is in the log transformed space
+        H_log = 1e-6 + ndt.Hessian(nloglike)(y) # Hessian is in the log transformed space
 
         if transform_to_original_scale:
             
@@ -569,6 +569,10 @@ class semi_physical(smb.physical_base,common_fitting_methods):
         save_data['type'] = "semi-physical"
         with open(file_name,'wb') as f:
             pickle.dump(save_data,f)
+
+        # with open(file_name, 'w') as f:
+        #     f.write(str(save_data))
+
 
 class constant_mean_deposition(smb.constant_mean_base,common_fitting_methods):
     
