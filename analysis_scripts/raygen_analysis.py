@@ -18,11 +18,7 @@ import soiling_model.utilities as smu
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from paper_specific_utilities import plot_for_paper, plot_for_heliostats, daily_soiling_rate, \
-<<<<<<< HEAD
-                                     fit_quality_plots, summarize_fit_quality
-=======
                                      fit_quality_plots, summarize_fit_quality,plot_experiment_PA
->>>>>>> 4a8aaa99b9cc6c0878ecd32ae0f59e2d50a7fc31
 import scipy.stats as sps
 from collections import defaultdict
 
