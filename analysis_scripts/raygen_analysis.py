@@ -18,7 +18,11 @@ import soiling_model.utilities as smu
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from paper_specific_utilities import plot_for_paper, plot_for_heliostats, daily_soiling_rate, \
+<<<<<<< HEAD
                                      fit_quality_plots, summarize_fit_quality
+=======
+                                     fit_quality_plots, summarize_fit_quality,plot_experiment_PA
+>>>>>>> 4a8aaa99b9cc6c0878ecd32ae0f59e2d50a7fc31
 import scipy.stats as sps
 from collections import defaultdict
 
@@ -29,7 +33,7 @@ reflectometer_incidence_angle = 15 # [deg] angle of incidence of reflectometer
 reflectometer_acceptance_angle = 12.5e-3 # [rad] half acceptance angle of reflectance measurements
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
 d = f"{main_directory}/data/mildura/"
-time_to_remove_at_end = [0,0,0,0,0,0]
+time_to_remove_at_end = [0,0]  # time to be removed for each experiment, in hours
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
 train_mirrors = ["ON_M1_T00"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for training
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
@@ -84,13 +88,14 @@ sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                                 reflect_data_train,
                                                                 "reflectance_data" 
                                                             )
+
 # %% Plot training data
 
 for ii,experiment in enumerate(train_experiments):
     if any("augusta".lower() in value.lower() for value in sim_data_train.file_name.values()):
-        fig,ax = smu.plot_experiment_PA(sim_data_train,reflect_data_train,ii,figsize=(10,15))
+        fig,ax = plot_experiment_PA(sim_data_train,reflect_data_train,ii,figsize=(10,15))
     else:
-        fig,ax = smu.plot_experiment_data(sim_data_train,reflect_data_train,ii,train_mirrors,figsize=(10,15))
+        fig,ax = smu.plot_experiment_data(sim_data_train,reflect_data_train,ii,figsize=(10,15))
 
     # fig.suptitle(f"Training Data for file {files[experiment]}")
     # fig,ax = smu.wind_rose(sim_data_train,ii)
@@ -122,6 +127,12 @@ reflect_data_total = smb.reflectance_measurements(  files,
                                                     column_names_to_import=None
                                                     )
 
+# %% compute daily_averaged values of reflectance to avoid morning-afternoon (not understood) recoveries
+if DAILY_AVERAGE:
+    reflect_data_total = smu.daily_average(reflect_data_total,
+                                           sim_data_total.time,
+                                           dt=None)
+
 # %% Trim data and plot                                                           
 sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
                                                                 reflect_data_total,
@@ -130,7 +141,7 @@ sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
 
 for ii,experiment in enumerate(sim_data_total.dt.keys()):
     if any("augusta".lower() in value.lower() for value in sim_data_total.file_name.values()):
-            fig,ax = smu.plot_experiment_PA(sim_data_total,reflect_data_total,ii,figsize=(10,15))
+            fig,ax = plot_experiment_PA(sim_data_total,reflect_data_total,ii,figsize=(10,15))
     else:
         fig,ax = smu.plot_experiment_data(sim_data_total,reflect_data_total,ii,figsize=(10,15))
     # fig.suptitle(f"Testing Data for file {files[experiment]}")
@@ -157,7 +168,7 @@ if DAILY_AVERAGE:
 if DAILY_AVERAGE:
     for ii,experiment in enumerate(train_experiments):
         if any("augusta".lower() in value.lower() for value in sim_data_train.file_name.values()):
-            fig,ax = smu.plot_experiment_PA(sim_data_train,reflect_data_train,ii)
+            fig,ax = plot_experiment_PA(sim_data_train,reflect_data_train,ii)
         else:
             fig,ax = smu.plot_experiment_data(sim_data_train,reflect_data_train,ii)
 
@@ -169,7 +180,7 @@ if DAILY_AVERAGE:
 if DAILY_AVERAGE:
     for ii,experiment in enumerate(files):
         if any("augusta".lower() in value.lower() for value in sim_data_total.file_name.values()):
-            fig,ax = smu.plot_experiment_PA(sim_data_total,reflect_data_train,ii)
+            fig,ax = plot_experiment_PA(sim_data_total,reflect_data_total,ii)
         else:
             fig,ax = smu.plot_experiment_data(sim_data_total,reflect_data_total,ii)
 
@@ -378,7 +389,7 @@ for m,mir in enumerate(train_mirrors):
 
 # %% Set mirror angles and get extinction weights for fitting (using train data)
 imodel.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
-imodel.helios.compute_extinction_weights(sim_data_train,imodel.loss_model,verbose=True)
+imodel.helios.compute_extinction_weights(sim_data_train,imodel.loss_model,verbose=True,options={"grid_size_x":100,"grid_size_mu":10000})
 imodel.helios.plot_extinction_weights(sim_data_train,fig_kwargs={})
 ext_weights = imodel.helios.extinction_weighting[0].copy()
 

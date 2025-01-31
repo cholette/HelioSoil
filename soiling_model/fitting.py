@@ -153,8 +153,27 @@ class common_fitting_methods:
         return res.x, res.fun
 
     def fit_mle(self,simulation_inputs,reflectance_data,verbose=True,x0=None,
-                transform_to_original_scale=False,**optim_kwargs):
+                transform_to_original_scale=False,save_file=None,**optim_kwargs):
+        """
+        Fits the soiling model parameters using maximum likelihood estimation (MLE).
         
+        This function fits the soiling model parameters, `hrz0` and `sigma_dep`, using maximum likelihood estimation (MLE). 
+        It can initialize the optimization using least squares and 1D MLE, and provides the option to transform the parameter 
+        estimates back to the original scale.
+        
+        Args:
+            simulation_inputs (dict): A dictionary containing the simulation inputs.
+            reflectance_data (dict): A dictionary containing the reflectance data.
+            verbose (bool, optional): Whether to print progress messages. Defaults to True.
+            x0 (numpy.ndarray, optional): Initial guess for the model parameters. If not provided, the function will initialize using least squares and 1D MLE.
+            transform_to_original_scale (bool, optional): Whether to transform the parameter estimates back to the original scale. Defaults to False.
+            save_file (str, optional): Path to save the optimization results to a file.
+            **optim_kwargs: Additional keyword arguments to pass to the optimization function.
+        
+        Returns:
+            tuple: A tuple containing the estimated model parameters (`p_hat`) and their covariance matrix (`p_cov`).
+        """
+                
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
 
@@ -185,7 +204,6 @@ class common_fitting_methods:
         H_log = ndt.Hessian(nloglike)(y) # Hessian is in the log transformed space
 
         if transform_to_original_scale:
-            
             # Get standard errors using observed information
             x_hat,H = self.transform_scale(y,likelihood_hessian=H_log)
             x_cov = np.linalg.inv(H)
@@ -195,7 +213,24 @@ class common_fitting_methods:
 
         else:
             y_hat = y
-            y_cov = np.linalg.inv(H_log) # Parameter covariance in the log space
+            try:
+                y_cov = np.linalg.inv(H_log)  # Parameter covariance in the log space
+            except np.linalg.LinAlgError:
+                if np.linalg.det(H_log) == 0:
+                    y_cov = np.linalg.pinv(H_log)  # Use pseudoinverse if determinant is zero
+                else:
+                    raise  # Re-raise the exception if it's not due to zero determinant
+            
+            # print estimates
+            fmt = "log(log(hrz0)) = {0:.2e}, log(sigma_dep) = {1:.2e}"
+            _print_if("... done! \n"+fmt.format(y_hat[0],y_hat[1]),verbose)
+
+            # print confidence intervals
+            s = np.sqrt(np.diag(y_cov))
+            y_ci = y_hat + 1.96*s*np.array([[-1],[1]])
+            fmt = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
+            _print_if(fmt.format("log(log(hrz0))",y_ci[0,0],y_ci[1,0]),verbose)
+            _print_if(fmt.format("log(sigma_dep)",y_ci[0,1],y_ci[1,1]),verbose)
             p_hat = y_hat
             p_cov = y_cov
 
@@ -218,10 +253,28 @@ class common_fitting_methods:
             return save_data
 
     def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,
-                        reflectance_data=None,figsize=None,reflectance_std='measurements',
-                        save_path=None,fig_title=None,return_handles=False,
-                        repeat_y_labels=True,orientation_strings=None):
-    
+                            reflectance_data=None,figsize=None,reflectance_std='measurements',
+                            save_path=None,fig_title=None,return_handles=False,
+                            repeat_y_labels=True,orientation_strings=None,names_mir_train=None):
+        """
+        Plots the soiling factor over time for a set of simulation inputs and reflectance data.
+        
+        Parameters:
+            simulation_inputs (dict): A dictionary containing the simulation input data, including time, dust concentration, wind speed, and dust type for each experiment.
+            posterior_predictive_distribution_samples (dict, optional): A dictionary containing the posterior predictive distribution samples for each experiment.
+            reflectance_data (dict, optional): A dictionary containing the reflectance data for each experiment, including the average reflectance, reflectance standard deviation, and tilt angles.
+            figsize (tuple, optional): The size of the figure to be plotted.
+            reflectance_std (str, optional): Specifies whether to use the "measurements" or "mean" standard deviation for the reflectance data. Defaults to "measurements".
+            save_path (str, optional): The file path to save the plot.
+            fig_title (str, optional): The title of the figure.
+            return_handles (bool, optional): If True, returns the figure, axis, and prediction data. Otherwise, only returns the prediction data.
+            repeat_y_labels (bool, optional): If True, repeats the y-axis labels for each experiment.
+            orientation_strings (list, optional): A list of orientation strings for each mirror in each experiment.
+        
+        Returns:
+            tuple or dict: If return_handles is True, returns the figure, axis, and prediction data. Otherwise, returns only the prediction data.
+        """
+                
         if reflectance_data is not None:
             self.predict_soiling_factor(simulation_inputs,rho0=reflectance_data.rho0)
         else:
@@ -270,6 +323,9 @@ class common_fitting_methods:
                 
                 if orientation_strings is not None:
                     tilt_str += ", Orientation: "+orientation_strings[ii][jj]
+                    # u_idx = names_mir_train[0].find('_')
+                    # tilt_str += ", Orientation: " + names_mir_train[0][:u_idx].replace('O','')
+
 
                 # get the axis handles
                 if N_experiments == 1:
@@ -552,6 +608,13 @@ class semi_physical(smb.physical_base,common_fitting_methods):
             return z,H 
 
     def update_model_parameters(self,x):
+        """
+        Updates the model parameters `hrz0` and `sigma_dep` based on the input `x`.
+        
+        If `x` is a list or NumPy array, the first element is assigned to `hrz0` and the second element (if present) is assigned to `sigma_dep`.
+        
+        If `x` is a single value, it is assigned to `hrz0` and `sigma_dep` is set to `None`.
+        """
         if isinstance(x,list) or isinstance(x,np.ndarray) :
             self.hrz0 = x[0]
             if len(x)>1:
@@ -562,12 +625,32 @@ class semi_physical(smb.physical_base,common_fitting_methods):
     
     def save(self,file_name,log_p_hat=None,log_p_hat_cov=None,
              training_simulation_data=None,training_reflectance_data=None):
-        save_data = super().save_data(log_p_hat,log_p_hat_cov,
-                                      training_simulation_data,
-                                      training_reflectance_data)
+        """
+        Saves the model and associated data to a file using pickle.
         
-        save_data['type'] = "semi-physical"
+        Args:
+            file_name (str): The file path to save the model and data to.
+            log_p_hat (numpy.ndarray, optional): The transformed model parameters.
+            log_p_hat_cov (numpy.ndarray, optional): The covariance of the transformed model parameters.
+            training_simulation_data (dict, optional): The simulation data used for training the model.
+            training_reflectance_data (dict, optional): The reflectance data used for training the model.
+        
+        Returns:
+            None
+        """
         with open(file_name,'wb') as f:
+            
+            save_data = {'model':self,
+                         'type':'semi-physical'}
+            if log_p_hat is not None:
+                save_data['transformed_parameters'] = log_p_hat
+            if log_p_hat_cov is not None:
+                save_data['transformed_parameter_covariance'] = log_p_hat_cov
+            if training_simulation_data is not None:
+                save_data['simulation_data'] = training_simulation_data
+            if training_reflectance_data is not None:
+                save_data['reflectance_data'] = training_reflectance_data
+
             pickle.dump(save_data,f)
 
 class constant_mean_deposition(smb.constant_mean_base,common_fitting_methods):
@@ -757,11 +840,27 @@ class constant_mean_deposition(smb.constant_mean_base,common_fitting_methods):
 
     def save(self,file_name,log_p_hat=None,log_p_hat_cov=None,
              training_simulation_data=None,training_reflectance_data=None):
-        save_data = super().save_data(log_p_hat,log_p_hat_cov,
-                                      training_simulation_data,
-                                      training_reflectance_data)
+        """
+        Saves the soiling model and associated data to a file.
         
-        save_data['type'] = "constant mean"
+        Args:
+            file_name (str): The name of the file to save the data to.
+            log_p_hat (numpy.ndarray, optional): The transformed model parameters.
+            log_p_hat_cov (numpy.ndarray, optional): The covariance of the transformed model parameters.
+            training_simulation_data (object, optional): The simulation data used for training the model.
+            training_reflectance_data (object, optional): The reflectance data used for training the model.
+        """    
         with open(file_name,'wb') as f:
+            save_data = {'model':self,
+                         'type':'semi-physical'}
+            if log_p_hat is not None:
+                save_data['transformed_parameters'] = log_p_hat
+            if log_p_hat_cov is not None:
+                save_data['transformed_parameter_covariance'] = log_p_hat_cov
+            if training_simulation_data is not None:
+                save_data['simulation_data'] = training_simulation_data
+            if training_reflectance_data is not None:
+                save_data['reflectance_data'] = training_reflectance_data
+                
             pickle.dump(save_data,f)
                 

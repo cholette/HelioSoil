@@ -27,6 +27,7 @@ train_experiments = [0] # indices for training experiments from 0 to len(files)-
 train_mirrors = ["ON_M1_T00"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for 
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
 dust_type = "PM10"
+number_of_measurements = 6.0
 
 # %% Get file list and time intervals. Import training data.
 parameter_file = d+"parameters_mildura_experiments.xlsx"
@@ -82,7 +83,7 @@ plot_title = "Training: "+str(train_mirrors)+", Exp: "+str(t)
 
 # for ii,experiment in enumerate(train_experiments):
 #     if any("augusta".lower() in value.lower() for value in sim_data_train.file_name.values()):
-#         fig,ax = smu.plot_experiment_PA(sim_data_train,reflect_data_train,ii,figsize=(10,15))
+#         fig,ax = plot_experiment_PA(sim_data_train,reflect_data_train,ii,figsize=(10,15))
 #     else:
 #         fig,ax = smu.plot_experiment_data(sim_data_train,reflect_data_train,ii,train_mirrors,figsize=(10,15))
 
@@ -98,9 +99,9 @@ sim_data_total = smb.simulation_inputs( files,
 reflect_data_total = smb.reflectance_measurements(
                   files,
                   sim_data_total.time,
-                  number_of_measurements=6.0,
-                  reflectometer_incidence_angle=reflectometer_incidence_angle,
-                  reflectometer_acceptance_angle=reflectometer_acceptance_angle,
+                  number_of_measurements,
+                  reflectometer_incidence_angle,
+                  reflectometer_acceptance_angle,
                   import_tilts=False,
                   column_names_to_import=None
                   )
@@ -115,7 +116,6 @@ if DAILY_AVERAGE:
 sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
                                                                 reflect_data_total,
                                                                 "reflectance_data",
-                                                                tilt=False
                                                             )
 
 for ii,experiment in enumerate(sim_data_total.dt.keys()):

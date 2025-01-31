@@ -79,7 +79,7 @@ reflect_data_train = smb.reflectance_measurements(  files_train,
                                                     import_tilts=True,
                                                     column_names_to_import=train_mirrors
                                                     )
-
+#%%
 # Trim data and plot
 sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                                 reflect_data_train,
@@ -202,7 +202,7 @@ imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_sur
 file_inds = np.arange(len(files))
 imodel = smu.set_extinction_coefficients(imodel,ext_weights,file_inds)
 
-fig,ax = plot_for_paper(    imodel,reflect_data_total,
+fig,ax,ref_data = plot_for_paper(    imodel,reflect_data_total,
                             sim_data_total,
                             train_experiments,
                             train_mirrors,
@@ -234,7 +234,7 @@ imodel_constant.helios_angles(sim_data_total_constant,
                               reflect_data_total,
                               second_surface=second_surf)
 
-fig,ax = plot_for_paper(    imodel_constant,
+fig,ax,ref_output = plot_for_paper(    imodel_constant,
                             reflect_data_total,
                             sim_data_total_constant,
                             train_experiments,
@@ -514,3 +514,4 @@ fit_quality_plots(imodel_constant,
 ax.set_title("Loss change prediction quality assessment (constant mean)")
 ax.set_xlabel(r"Measured $\Delta$loss")
 ax.set_ylabel(r"Predicted $\Delta$loss")
+# %%

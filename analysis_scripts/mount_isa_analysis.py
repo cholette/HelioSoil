@@ -10,8 +10,9 @@ import soiling_model.fitting as smf
 import soiling_model.utilities as smu
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
-from paper_specific_utilities import plot_for_paper, daily_soiling_rate, \
-                                    fit_quality_plots, summarize_fit_quality
+from paper_specific_utilities import    plot_for_paper, daily_soiling_rate,\
+                                        fit_quality_plots, summarize_fit_quality,\
+                                        daily_soiling_tilt_all_data
 import scipy.stats as sps
 
 pad = 0.05
@@ -28,9 +29,9 @@ k_factor = "import" # None sets equal to 1.0, "import" imports from the file
 dust_type = "TSP"
 
 # %% Get file list and time intervals. Import training data.
-parameter_file = d+"parameters_mildura_experiments.xlsx"
+parameter_file = d+"parameters_mount_isa_experiments.xlsx"
 files,training_intervals,mirror_name_list,all_mirrors = \
-    smu.get_training_data(  d,"Mildura_Data_",
+    smu.get_training_data(  d,"MountIsa_Data_",
                             time_to_remove_at_end=time_to_remove_at_end)
 orientation = [ [s[1] for s in mirrors] for mirrors in mirror_name_list]
 
@@ -169,7 +170,7 @@ imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_sur
 file_inds = np.arange(len(files))
 imodel = smu.set_extinction_coefficients(imodel,ext_weights,file_inds)
 
-fig,ax = plot_for_paper(    imodel,reflect_data_total,
+fig,ax,ref_output = plot_for_paper(    imodel,reflect_data_total,
                             sim_data_total,
                             train_experiments,
                             train_mirrors,
@@ -182,7 +183,7 @@ fig.savefig(sp_save_file+".pdf",bbox_inches='tight')
 # %% Performance of constant-mean model on total data
 imodel_constant.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
 
-fig,ax = plot_for_paper(    imodel_constant,
+fig,ax,ref_output = plot_for_paper(    imodel_constant,
                             reflect_data_total,
                             sim_data_total,
                             train_experiments,
@@ -477,6 +478,57 @@ fit_quality_plots(imodel_constant,
 
 
 
-
 ax.set_xlabel(r"Measured $\Delta$loss",fontsize=16)
 ax.set_ylabel(r"Predicted $\Delta$loss",fontsize=16)
+
+# %% Plot losses as a function of (constatnt) tilt
+tilts = [0,10,30,45,60,75,90]
+M,file,dt = 1000,cm_save_file,"TSP"
+ave,low,high = [],[],[]
+for t in tilts:
+    sims,a,a2 = daily_soiling_tilt_all_data(sim_data_total,
+                                            file,
+                                            M = M,
+                                            dust_type=dt,
+                                            tilt=t)
+    
+    xl,xu = np.percentile(sims,[5,95],axis=None)
+    ave.append(sims.mean())
+    low.append(xl)
+    high.append(xu)
+
+low = np.array(low)
+high = np.array(high)
+ave = np.array(ave)
+
+# trimmed estimation
+trim_pct = [5,95]
+ave_t,low_t,high_t = [],[],[]
+for t in tilts:
+    sims,a,a2 = daily_soiling_tilt_all_data(sim_data_total,
+                                            file,
+                                            M = M,
+                                            dust_type=dt,
+                                            tilt=t,
+                                            trim_percents=trim_pct)   
+    
+    xl,xu = np.percentile(sims,trim_pct,axis=None)
+    ave_t.append(sims.mean())
+    low_t.append(xl)
+    high_t.append(xu)
+
+low_t = np.array(low_t)
+high_t = np.array(high_t)
+ave_t = np.array(ave_t)
+
+fig,ax = plt.subplots()
+ax.plot(tilts,ave,label='all data',color="blue")
+ax.fill_between(x=tilts,y1=low,y2=high,color="blue",alpha=0.2)
+ax.plot(tilts,ave_t,label='trimmed',color="red")
+ax.fill_between(x=tilts,y1=low_t,y2=high_t,color="red",alpha=0.2)
+ax.set_xlabel('Tilt (degrees)')
+ax.set_ylabel('Percentage points of loss \n (p.p./day)')
+ax.set_xlim((0,90))
+ax.legend()
+
+# %%

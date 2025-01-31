@@ -71,7 +71,19 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
                 cleans[0:idx0,jj] = 1
     return cleans
 
-def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,lgd_label=None,figsize=(7,12),lgd_size = 15):
+def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12),lgd_label=None,lgd_size = 15):
+    """
+    Plot the experiment data, including reflectance, dust concentration, rain intensity, wind speed, and relative humidity.
+    
+    Args:
+        simulation_inputs (SimulationInputs): The simulation input data.
+        reflectance_data (ReflectanceData): The reflectance data.
+        experiment_index (int): The index of the experiment to plot.
+        figsize (tuple): The size of the figure.
+    
+    Returns:
+        tuple: The figure and axes objects.
+    """
     sim_data = simulation_inputs
     reflect_data = reflectance_data
     f = experiment_index
@@ -159,85 +171,27 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,lgd
 
     return fig,ax
 
-def plot_experiment_PA(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12)):
-    sim_data = simulation_inputs
-    reflect_data = reflectance_data
-    f = experiment_index
-
-    fig,ax = plt.subplots(nrows=3,sharex=True,figsize=figsize)
-    # fmt = r"${0:s}^\circ$"
-    fmt = "${0:s}$"
-    ave = reflect_data.average[f]
-    t = reflect_data.times[f]
-    std = reflect_data.sigma[f]
-    # names = ["M"+str(ii+1) for ii in range(ave.shape[1])]
-    names = ["SE1",	"SE2",	"SE3",	"SE4",	"SE5",	"NW1",	"NW2",	"NW3",	"NW4",	"NW5"]
-
-    for ii in range(ave.shape[1]):
-        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=fmt.format(names[ii]),marker='o',capsize=4.0)
-
-    ax[0].grid(True) 
-    label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data.reflectometer_incidence_angle[f]) 
-    ax[0].set_ylabel(label_str)
-    ax[0].legend(loc='upper left', bbox_to_anchor=(1, 1))
-    # ax[0].set_ylim(0.86, 0.97)
-
-    ax[1].plot(sim_data.time[f],sim_data.dust_concentration[f],color='brown',label="Measurements")
-    ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = "Average")
-    label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data.dust_type[0])
-    ax[1].set_ylabel(label_str,color='brown')
-    ax[1].tick_params(axis='y', labelcolor='brown')
-    ax[1].grid(True)
-    ax[1].legend()
-    title_str = sim_data.dust_type[f] + r" (mean = {0:.2f} $\mu g$/$m^3$)" 
-    ax[1].set_title(title_str.format(sim_data.dust_concentration[f].mean()),fontsize=10)
-    # ax[1].set_ylim(0,70)
-
-    # # Rain intensity, if available
-    # if len(sim_data.rain_intensity)>0: # rain intensity is not an empty dict
-    #     ax[2].plot(sim_data.time[f],sim_data.rain_intensity[f])
-    # else:
-    #     rain_nan = np.nan*np.ones(sim_data.time[f].shape)
-    #     ax[2].plot(sim_data.time[f],rain_nan)
+def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
+    """
+    Trims the simulation input data and reflectance data based on the provided trim ranges.
     
-    # ax[2].set_ylabel(r'Rain [mm/hour]',color='blue')
-    # ax[2].tick_params(axis='y', labelcolor='blue')
-    # YL = ax[2].get_ylim()
-    # ax[2].set_ylim((0,YL[1]))
-    # ax[2].grid(True)
-
-    ax[2].plot(sim_data.time[f],sim_data.wind_speed[f],color='green',label="Measurements")
-    ax[2].axhline(y=sim_data.wind_speed[f].mean(),color='green',ls='--',label = "Average")
-    label_str = r'Wind Speed [$m\,/\,s$]'
-    ax[2].set_ylabel(label_str,color='green')
-    ax[2].set_xlabel('Date')
-    ax[2].tick_params(axis='y', labelcolor='green')
-    ax[2].grid(True)
-    ax[2].legend()
-    title_str = "Wind Speed (mean = {0:.2f} m/s)".format(sim_data.wind_speed[f].mean())
-    ax[2].set_title(title_str,fontsize=10)
-    # ax[2].set_ylim(0,8)
-
-    # if len(sim_data.relative_humidity)>0: 
-    #     ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='black',label="measurements")
-    #     ax[4].axhline(y=sim_data.relative_humidity[f].mean(),color='black',ls='--',label = "Average")
-    # else:
-    #     rain_nan = np.nan*np.ones(sim_data.time[f].shape)
-    #     ax[4].plot(sim_data.time[f],rain_nan)
+    Args:
+        simulation_inputs (SimulationInputs): The simulation input data to be trimmed.
+        reflectance_data (ReflectanceData): The reflectance data to be trimmed.
+        trim_ranges (list, str): The trim ranges to be applied. Can be a list of [lower_bound, upper_bound] for each file, "reflectance_data" to use the reflectance data time range, or "simulation_inputs" to use the simulation input time range.
     
-    # label_str = r'Relative Humidity [%]'
-    # ax[4].set_ylabel(label_str,color='black')
-    # ax[4].set_xlabel('Date')
-    # ax[4].tick_params(axis='y', labelcolor='black')
-    # ax[4].grid(True)
-    # ax[4].legend()
-    
-    fig.autofmt_xdate()
-    fig.tight_layout()
-
-    return fig,ax
-
-def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
+    Returns:
+        SimulationInputs, ReflectanceData: The trimmed simulation input and reflectance data.
+    """
+    if hasattr(simulation_inputs, 'weather_variables'):
+        weather_variables = simulation_inputs.weather_variables
+        if 'time' not in weather_variables:
+            weather_variables.append('time')
+        if 'time_diff' not in weather_variables:
+            weather_variables.append('time_diff')
+    else:
+        weather_variables = ['time', 'dt', 'time_diff', 'air_temp', 'wind_speed', 'wind_direction', 
+                             'dust_concentration', 'rain_intensity', 'dni', 'relative_humidity']
     sim_dat = deepcopy(simulation_inputs)
     ref_dat = deepcopy(reflectance_data)
     files = sim_dat.time.keys()
@@ -253,15 +207,15 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
     for f in files:
         if isinstance(trim_ranges,list):  
             assert isinstance(trim_ranges[f],list) or isinstance(trim_ranges[f],np.ndarray), "trim_ranges must be a list of lists or a list of 1D np.arrays"
-            lb = trim_ranges[f][0]
-            ub = trim_ranges[f][1]
+            lb = trim_ranges[f][0].astype('datetime64[m]') # astype ensure they are comparable
+            ub = trim_ranges[f][1].astype('datetime64[m]') # astype ensure they are comparable
         elif trim_ranges=="reflectance_data":
             assert ref_dat is not None, "Reflectance data must be supplied for trim_ranges==""reflectance_data"""
-            lb = ref_dat.times[f][0]
-            ub = ref_dat.times[f][-1]
+            lb = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][0].astype('datetime64[m]') # astype ensure they are comparable
+            ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][-1].astype('datetime64[m]') # astype ensure they are comparable        
         elif trim_ranges == "simulation_inputs":
-            lb = sim_dat.time[f].iloc[0]
-            ub = sim_dat.time[f].iloc[-1]
+            lb = sim_dat.time[f].values[0].astype('datetime64[m]') # astype ensure they are comparable
+            ub = sim_dat.time[f].values[-1].astype('datetime64[m]') # astype ensure they are comparable
         else:
             raise ValueError("""Value of trim_ranges not recognized. Must be a list of lists/np.array [lb,ub], """+\
                 """ "reflectance_data" or "simulation_inputs" """)
@@ -297,20 +251,17 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
 
         if reflectance_data is not None:
             # trim reflectance data
-            if len(ref_dat.tilts)>0:
-                mask_indices = mask.index[mask].to_numpy()  # Extract the indices where mask is True and  convert to NumPy array
-                ref_dat.tilts[f] = ref_dat.tilts[f][:, mask_indices]
-                # ref_dat.tilts[f] = ref_dat.tilts[f][:,mask]
-            mask_ref = (ref_dat.times[f]>=lb) & (ref_dat.times[f]<=ub)
-            ref_dat.times[f] = ref_dat.times[f][mask_ref] 
-            ref_dat.average[f] = ref_dat.average[f][mask_ref,:]
-            ref_dat.delta_ref[f] = ref_dat.delta_ref[f][mask_ref,:]
-            ref_dat.sigma[f] = ref_dat.sigma[f][mask_ref,:]
-            ref_dat.sigma_of_the_mean[f] = ref_dat.sigma_of_the_mean[f][mask_ref,:]
+            if hasattr(ref_dat,"tilts") and len(ref_dat.tilts)>0:
+                ref_dat.tilts[f] = ref_dat.tilts[f][:,mask]
+            mask = (ref_dat.times[f]>=lb) & (ref_dat.times[f]<=ub)
+            ref_dat.times[f] = ref_dat.times[f][mask] 
+            ref_dat.average[f] = ref_dat.average[f][mask,:]
+            ref_dat.sigma[f] = ref_dat.sigma[f][mask,:]
+            ref_dat.sigma_of_the_mean[f] = ref_dat.sigma_of_the_mean[f][mask,:]
 
             ref_dat.prediction_indices[f] = []
             ref_dat.prediction_times[f] = []
-            time_grid = sim_dat.time[f]
+            time_grid = sim_dat.time[f].reset_index(drop=True)
             for m in ref_dat.times[f]:
                 ref_dat.prediction_indices[f].append(np.argmin(np.abs(m.astype('datetime64[ns]')-time_grid)))        # .astype('datetime64[ns]') guarantees compatibility with Numpy datetime64
                 # ref_dat.prediction_times[f].append(time_grid.iloc[ref_dat.prediction_indices[f]])
@@ -328,7 +279,7 @@ def trim_experiment_data(simulation_inputs,reflectance_data,trim_ranges):
 
 def daily_average(ref_dat,time_grids,dt=None):
 
-    # prediction indeces and times
+    # prediction indices and times
     # tilts
 
     ref_dat_new = deepcopy(ref_dat)
@@ -360,9 +311,11 @@ def daily_average(ref_dat,time_grids,dt=None):
             N = daily.count()['sigma'].values
             sum_var = df.groupby('day')['sigma'].apply(lambda x: sum(x.dropna()**2)).values
             ref_dat_new.sigma[f][:,ii] = np.sqrt(sum_var/N) # pooled variance
+            # ref_dat_new.sigma[f] = np.insert(ref_dat_new.sigma[f],0,ref_dat.sigma[f][0])
             
             ref_dat_new.sigma_of_the_mean[f][:,ii] = (ref_dat_new.sigma[f][:,ii] / 
                                 np.sqrt(ref_dat_new.number_of_measurements[f]))
+            # ref_dat_new.sigma_of_the_mean[f] = np.insert(ref_dat_new.sigma_of_the_mean[f],0,ref_dat.sigma_of_the_mean[f][0])
 
             ref_dat_new.average[f][:,ii] = daily.mean().average.values
             ref_dat_new.prediction_indices[f] = []
@@ -383,7 +336,7 @@ def daily_average(ref_dat,time_grids,dt=None):
         ref_dat_new.soiling_rate[f] = (ref_dat_new.average[f][0]-ref_dat_new.average[f][-1])/elapsed_time*100   # compute soiling rates in p.p./day for each mirror
 
     return ref_dat_new
-            
+
 def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,\
                              sheet_name=None,output_file_format="sample_{0:d}.xlsx",\
                              dt=np.timedelta64(3600,'s'),verbose=True):
@@ -549,18 +502,44 @@ def set_extinction_coefficients(destination_model,extinction_weights,file_inds):
                                 "those in destination_model.helios.tilt")
     return dm
 
-def get_training_data(d,file_start,time_to_remove_at_end):
+def get_training_data(d,file_start,time_to_remove_at_end=0,helios=False):
+    """
+    Get training data for a soiling model.
+    
+    This function loads training data from a directory of files, where each file contains
+    start and end dates for a training interval, as well as the names of mirrors used
+    in the training data.
+    
+    Args:
+        d (str): The directory containing the training data files.
+        file_start (str): The prefix of the training data files to load.
+        time_to_remove_at_end (int or list[int], optional): The number of hours to remove from the
+            end of each training interval. If a list, the length must match the number of files.
+    
+    Returns:
+        tuple:
+            - files (list[str]): The full paths to the training data files.
+            - training_intervals (numpy.ndarray): A 2D array of start and end dates for each
+              training interval, in datetime64[m] format.
+            - mirror_names (list[list[str]]): A list of lists, where each inner list contains
+              the names of mirrors used in the corresponding training data file.
+            - common (list[str]): The names of mirrors that are common to all training data files.
+    """
     files = [f for f in os.listdir(d) if f.startswith(file_start)]
 
     # get training time intervals
     if np.isscalar(time_to_remove_at_end):
         time_to_remove_at_end = [time_to_remove_at_end]*len(files)
     training_intervals = []
-    parse_date = lambda x: np.datetime64(f"{x[0:4]}-{x[4:6]}-{x[6::]}T00:00:00")
+    def parse_date(x):
+        if '-' in x:
+            return np.datetime64(x + 'T00:00:00')
+        else:
+            return np.datetime64(f"{x[0:4]}-{x[4:6]}-{x[6::]}T00:00:00")
     for ii,f in enumerate(files):
         f = f.split(".")[0]
-        dates = [parse_date(s) for s in f.split("_") if s.isnumeric()]
-        assert len(dates)==2, "File name must contain start and end dates in YYYYMMDD format."
+        dates = [parse_date(s) for s in f.split("_") if s.replace('-', '').isnumeric()]
+        assert len(dates)==2, "File name must contain start and end dates in YYYYMMDD or YYYY-MM-DD format."
         s = min(dates)
         e = max(dates)
 
@@ -572,8 +551,13 @@ def get_training_data(d,file_start,time_to_remove_at_end):
 
     # get mirror names in each file
     mirror_names = [ [] for f in files]
-    for ii,f in enumerate(files):
-        mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Reflectance_Average").columns[1::])
+    if not helios:
+        for ii,f in enumerate(files):
+            mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Reflectance_Average").columns[1::])
+    else:
+        for ii,f in enumerate(files):
+            mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Heliostats_Ref").columns[1::])
+        
 
     # get mirror names that show up in all files
     common = []
@@ -599,7 +583,16 @@ def _parse_dust_str(dust_type):
     return attr
 
 def wind_rose(simulation_data,exp_idx):
+    """
+    Generate a wind rose plot from the provided simulation data.
     
+    Args:
+        simulation_data (pandas.DataFrame): A DataFrame containing the simulation data, including wind direction and wind speed.
+        exp_idx (int): The index of the experiment to plot.
+    
+    Returns:
+        matplotlib.figure.Figure, windrose.WindroseAxes: The figure and axes objects for the wind rose plot.
+    """ 
     from windrose import WindroseAxes
     fig = plt.figure()
     wd = simulation_data.wind_direction[exp_idx]

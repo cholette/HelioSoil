@@ -20,6 +20,23 @@ tol = np.finfo(float).eps # machine floating point precision
 
 class soiling_base:
     def __init__(self):
+        """
+        Initializes the base model class with parameters from a file.
+        
+        Args:
+            file_params (str): Path to the Excel file containing the model parameters.
+        
+        Attributes:
+            latitude (float): Latitude of the site in degrees.
+            longitude (float): Longitude of the site in degrees.
+            timezone_offset (float): Timezone offset from GMT in hours.
+            hrz0 (float): Site roughness height ratio.
+            loss_model (str): Either "geometry" or "mie" to specify the loss model.
+            constants (constants): An instance of the constants class.
+            helios (helios): An instance of the helios class.
+            sigma_dep (float): Standard deviation of the deposition velocity.
+            Ra (float): Aerodynamic resistance.
+        """
         self.latitude = None                  # latitude in degrees of site
         self.longitude = None                 # longitude in degrees of site
         self.timezone_offset = None           # [hrs from GMT] timezone of site
@@ -473,6 +490,22 @@ class constant_mean_base(soiling_base):
         self.helios = helios
 
 class simulation_inputs:
+    """
+    Defines a `simulation_inputs` class that manages the input data for a soiling model simulation.
+    
+    The class provides methods to import weather and dust data from Excel files, and stores the data in dictionaries
+    with the file number as the key. The class also includes a `dust` attribute that stores the dust properties
+    for each experiment.
+    
+    The `import_weather` method reads weather data such as air temperature, wind speed, dust concentration, etc.
+    from the Excel files and stores them in the corresponding dictionaries.
+    
+    The `import_source_intensity` method reads the source intensity data from the Excel files and stores it in
+    the `source_wavelength` and `source_normalized_intensity` dictionaries.
+    
+    The `get_experiment_subset` method creates a copy of the `simulation_inputs` object with only the specified
+    experiments included.
+    """
     def __init__(self,experiment_files=None,k_factors=None,dust_type=None,verbose=True):
 
         # the below will be dictionaries of 1D arrays with file numbers as keys 
@@ -484,8 +517,10 @@ class simulation_inputs:
         self.end_datetime = {}                  # datetime64 for end
         self.air_temp = {}                      # [C] air temperature
         self.wind_speed = {}                    # [m/s] wind speed
+        self.wind_speed_mov_avg = {}            # [m/s] wind speed hourly moving average
         self.wind_direction = {}                # [degrees] wind direction
         self.dust_concentration = {}            # [µg/m3] PM10 or TSP concentration in air
+        self.dust_conc_mov_avg = {}             # [µg/m3] PM10 or TSP hourly moving average of dust concentration
         self.rain_intensity = {}                # [mm/hr] rain intensity
         self.dust_type = {}                     # Usually either "TSP" or "PM10", but coule be any PMX or PMX.X
         self.dni = {}                           # [W/m^2] Direct Normal Irradiance
@@ -532,68 +567,89 @@ class simulation_inputs:
                 self.source_normalized_intensity[ii] = None
             xl.close()
 
-    def import_weather(self,files,dust_type,verbose=True,smallest_windspeed=1e-6):
-        
+
+    def import_weather(self, files, dust_type, verbose=True, smallest_windspeed=1e-6):
         files = _ensure_list(files)
-        dust_type = _import_option_helper(files,dust_type)
-        for ii in range(len(files)):
+        dust_type = _import_option_helper(files, dust_type)
+        
+        weather_variables = { # List of possible weather variable names and the combination of possibly names
+            'air_temp': ['AirTemp', 'Temperature', 'Temp'],
+            'wind_speed': ['WindSpeed', 'WS'],
+            'dni': ['DNI', 'DirectNormalIrradiance'],
+            'rain_intensity': ['RainIntensity', 'Precipitation'],
+            'relative_humidity': ['RH', 'RelativeHumidity'],
+            'wind_direction': ['WD', 'WindDirection']
+        }
+        
+        dust_names = { # List of possible dust concentration names and the combination of possibly names
+            'PM_tot': ['PM_tot', 'PM_TOT', 'PMTOT', 'PMT', 'PM20'],
+            'TSP': ['TSP'],
+            'PM10': ['PM10'],
+            'PM2p5': ['PM2_5', 'PM2p5'],
+            'PM1': ['PM1'],
+            'PM4': ['PM4']
+        }
 
-            self.file_name[ii] = files[ii]
-            weather = pd.read_excel(files[ii],sheet_name="Weather")
+        self.weather_variables = []
 
-            # Set time vector. Get from the weather file
-            time = pd.to_datetime(weather['Time']) #weather['Time'].to_numpy(dtype = 'datetime64[s]')
-            self.start_datetime[ii] = time.iloc[0] # pd.to_datetime(weather['Time'].iloc[0]).to_numpy()
-            self.end_datetime[ii] = time.iloc[-1] # pd.to_datetime(weather['Time'].iloc[-1]).to_numpy()
-            # time =  pd.date_range(self.start_datetime[ii],self.end_datetime[ii],freq='1H').to_numpy(dtype = 'datetime64[s]')  # allow for flexible frequency later
-                    
-            _print_if("Importing site data (weather,time). Using dust_type = "+dust_type[ii]+", test_length = "+\
-                str( (self.end_datetime[ii]-self.start_datetime[ii]).days )+" days",verbose)
+        for ii, file in enumerate(files): # Loop through each campaign and import weather files
+            self.file_name[ii] = file
+            weather = pd.read_excel(file, sheet_name="Weather")
+
+            time = pd.to_datetime(weather['Time'])
+            self.start_datetime[ii] = time.iloc[0]
+            self.end_datetime[ii] = time.iloc[-1]
+            
+            _print_if(f"Importing site data (weather,time). Using dust_type = {dust_type[ii]}, test_length = {(self.end_datetime[ii]-self.start_datetime[ii]).days} days", verbose)
             
             self.time[ii] = time
+            self.dt[ii] = (self.time[ii][1] - self.time[ii][0]).total_seconds()
+            self.time_diff[ii] = (self.time[ii].values - self.time[ii].values.astype('datetime64[D]')).astype('timedelta64[h]').astype('int')
 
-            if verbose:
-                T = ( (time.iloc[-1]-time.iloc[0]).days)
-                _print_if("Length of simulation for file "+files[ii]+": "+str(T)+" days",verbose)
+            for attr_name, column_names in weather_variables.items(): # Search for weather variables inside the weather file and save them to self
+                for column in column_names:
+                    if column in weather.columns:
+                        setattr(self, attr_name, {}) if not hasattr(self, attr_name) else None
+                        getattr(self, attr_name)[ii] = np.array(weather.loc[:, column])
+                        _print_if(f"Importing {column} data as {attr_name}...", verbose)
+                        if attr_name not in self.weather_variables:
+                            self.weather_variables.append(attr_name)
+                        break
+                else:
+                    _print_if(f"No {attr_name} data to import.", verbose)
 
-            self.dt[ii] = (self.time[ii][1]-self.time[ii][0]).total_seconds() #np.diff(self.time[ii])[0].astype(float) # [s] assumed constant. Make float for later computations
-            self.time_diff[ii] = (self.time[ii].values-self.time[ii].values.astype('datetime64[D]')).astype('timedelta64[h]').astype('int')  # time difference from midnight in integer hours
-            self.air_temp[ii] = np.array(weather.loc[:,'AirTemp'])
-            
-            # import windspeed and set a minimum value
-            self.wind_speed[ii] = np.array(weather.loc[:,'WindSpeed'])
-            idx_too_low, = np.where(self.wind_speed[ii]==0)
-            if len(idx_too_low) > 0:
-                self.wind_speed[ii][idx_too_low] = smallest_windspeed
-                _print_if(f"Warning: some windspeeds were <= 0 and were set to {smallest_windspeed}",verbose)
+            if hasattr(self, 'wind_speed') and ii in self.wind_speed:
+                idx_too_low = np.where(self.wind_speed[ii] == 0)[0]
+                if len(idx_too_low) > 0:
+                    self.wind_speed[ii][idx_too_low] = smallest_windspeed
+                    _print_if(f"Warning: some windspeeds were <= 0 and were set to {smallest_windspeed}", verbose)
+            self.wind_speed_mov_avg[ii] = pd.Series(self.wind_speed[ii]).rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1).mean().values
 
-            if 'DNI' in weather.columns: # only import DNI if it exists
-                self.dni[ii] = np.array(weather.loc[:,'DNI']) 
-            else:
-                _print_if("No DNI data to import. Skipping.",verbose)
-                
-            # import dust measurements
-            self.dust_concentration[ii] = self.k_factors[ii]*np.array(weather.loc[:,dust_type[ii]])
+            self.dust_concentration[ii] = self.k_factors[ii] * np.array(weather.loc[:, dust_type[ii]]) # Set dust concentration to be used for soiling predictions
+            if 'dust_concentration' not in self.weather_variables:
+                self.weather_variables.append('dust_concentration')
             self.dust_type[ii] = dust_type[ii]
 
-            if "RainIntensity" in weather:
-                _print_if("Importing rain intensity data...",verbose)
-                self.rain_intensity[ii] = np.array(weather.loc[:,'RainIntensity'])
-            else:
-                _print_if("No rain intensity data to import.",verbose)
+            for dust_key, dust_aliases in dust_names.items(): # Load all dust concentration data inside weather file
+                for alias in dust_aliases:
+                    if alias in weather.columns:
+                        dust_value = np.array(weather.loc[:, alias])
+                        if not hasattr(self, dust_key.lower()):
+                            setattr(self, dust_key.lower(), {})
+                        getattr(self, dust_key.lower())[ii] = dust_value
+                        _print_if(f"Importing {dust_key} data...", verbose)
+                        if dust_key.lower() not in self.weather_variables:
+                            self.weather_variables.append(dust_key.lower())
+                        break
+                else:
+                    _print_if(f"No {dust_key} data to import.", verbose)
+            
+            self.dust_conc_mov_avg[ii] = pd.Series(self.dust_concentration[ii]).rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1).mean().values
 
-            if "RH" in weather:
-                _print_if("Importing relative humidity data...",verbose)
-                self.relative_humidity[ii] = np.array(weather.loc[:,'RH'])
-            else:
-                _print_if("No relative humidity data to import.",verbose)
-
-            if "WD" in weather:
-                _print_if("Importing wind direction data ...",verbose)
-                self.wind_direction[ii] = np.array(weather.loc[:,'WD'])
-            else:
-                _print_if("No wind direction data to import.",verbose)
-
+            if verbose:
+                T = (time.iloc[-1] - time.iloc[0]).days
+                _print_if(f"Length of simulation for file {file}: {T} days", verbose)
+                
     def get_experiment_subset(self,idx):
         attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes
         self_out = copy.deepcopy(self)
@@ -967,6 +1023,24 @@ class helios:
         self.heliostats_in_sector = hel_sec
 
     def sectorize_corn(self,whole_field_file,n_hor,n_vert,verbose=True):
+        """
+        Sectorize the solar field by dividing it into a grid of horizontal and vertical sectors.
+        
+        This function reads the solar field coordinates from a CSV or XLSX file, generates a grid around 
+        the solar field, and assigns each heliostat to the closest grid point. The function then computes 
+        the representative heliostat for each sector and stores the sector information in the object's 
+        attributes.
+        
+        Parameters:
+            whole_field_file (str): The file path to the CSV or XLSX file containing the solar field coordinates.
+            n_hor (int): The number of horizontal sectors to divide the solar field into.
+            n_vert (int): The number of vertical sectors to divide the solar field into.
+            verbose (bool, optional): Whether to print progress messages. Defaults to True.
+        
+        Returns:
+            None
+        """
+                
             
         def read_solarfield(field_filepath): # Load CSV containing solarfield coordintes
             positions = []
@@ -1056,6 +1130,18 @@ class helios:
             plt.show()
 
     def compute_extinction_weights(self,simulation_data,loss_model=None,verbose=True,show_plots=False,options={}):
+        """
+        Computes the extinction weights for the heliostat field based on the specified loss model.
+        
+        Parameters:
+            simulation_data (object): An object containing simulation data, including dust properties and source information.
+            loss_model (str, optional): The loss model to use for computing the extinction weights. Can be either 'mie' or 'geometry'. Defaults to None.
+            verbose (bool, optional): Whether to print progress messages. Defaults to True.
+            options (dict, optional): Additional options to pass to the extinction function.
+        
+        Returns:
+            None
+        """
         sim_dat = simulation_data
         dust = sim_dat.dust
         files = list(sim_dat.file_name.keys())
@@ -1106,7 +1192,19 @@ class helios:
                 self.extinction_weighting[f] = np.ones((num_heliostats[f],num_diameters))
 
     def plot_extinction_weights(self,simulation_data,fig_kwargs={},plot_kwargs={}):
+        """
+        Plot the extinction weights for each heliostat and file in the simulation data.
         
+        Parameters:
+            simulation_data (object): The simulation data object containing the dust and other simulation parameters.
+            fig_kwargs (dict, optional): Additional keyword arguments to pass to the `plt.figure()` function.
+            plot_kwargs (dict, optional): Additional keyword arguments to pass to the `ax.semilogx()` function.
+        
+        Returns:
+            fig (matplotlib.figure.Figure): The figure object containing the plots.
+            ax (list of matplotlib.axes.Axes): The list of axes objects for each plot.
+        """
+                
         files = list(self.extinction_weighting.keys())
         Nhelios = [len(self.tilt[f]) for f in files]
         phia = [self.acceptance_angles[f] for f in files]
@@ -1176,6 +1274,22 @@ class constants:
         self.D0 = float(table.loc['D0'].Value)                          # [m] common value of separation distance (Ahmadi)
 
 class reflectance_measurements:
+    """
+    Represents a class for managing reflectance measurement data.
+    
+    The `reflectance_measurements` class is used to import and manage reflectance data from multiple experiments. It can handle multiple files, each containing 
+    average and standard deviation of reflectance measurements, as well as optional tilt information. The class provides methods to access the imported data and generate plots.
+    
+    Args:
+        reflectance_files (str or list): Path(s) to the Excel file(s) containing the reflectance data.
+        time_grids (list): List of time grids corresponding to each reflectance file.
+        number_of_measurements (int or list, optional): Number of reflectance measurements for each file. If not provided, defaults to 1 for each file.
+        reflectometer_incidence_angle (float or list, optional): Incidence angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
+        reflectometer_acceptance_angle (float or list, optional): Acceptance angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
+        import_tilts (bool, optional): Whether to import tilt information from the files. Defaults to False.
+        column_names_to_import (list, optional): List of column names to import from the data sheets. If not provided, all columns will be imported.
+        verbose (bool, optional): Whether to print progress messages. Defaults to True.
+    """
     def __init__(self,reflectance_files,time_grids,number_of_measurements=None, 
                     reflectometer_incidence_angle=None,reflectometer_acceptance_angle=None,
                     import_tilts=False,column_names_to_import=None,verbose=True):
@@ -1220,16 +1334,29 @@ class reflectance_measurements:
                                      column_names_to_import=column_names_to_import)
         
     def import_reflectance_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
-                                reflectometer_acceptance_angle,import_tilts=False,
-                                column_names_to_import=None):
+                                reflectometer_acceptance_angle, import_tilts=False,column_names_to_import=None):
+        """
+        Imports reflectance data from Excel files and stores the data in the object's attributes.
 
+        Args:
+            reflectance_files (str or list): Path(s) to the Excel file(s) containing the reflectance data.
+            time_grids (list): List of time grids corresponding to each reflectance file.
+            reflectometer_incidence_angle (float or list, optional): Incidence angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
+            reflectometer_acceptance_angle (float or list, optional): Acceptance angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
+            import_tilts (bool, optional): Whether to import tilt information from the files. Defaults to False.
+            column_names_to_import (list, optional): List of column names to import from the data sheets. If not provided, all columns will be imported.
+        """
         for ii in range(len(reflectance_files)):
             
             self.file_name[ii] = reflectance_files[ii]
             reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Average"),\
                 "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Sigma")}
 
-            self.times[ii] = reflectance_data['Average']['Time'].values
+            time_column = next((col for col in reflectance_data['Average'].columns if col.lower() in ['time', 'timestamp']), None)
+            if time_column is not None:
+                self.times[ii] = reflectance_data['Average'][time_column].values
+            else:
+                raise ValueError(f"No 'Time' or 'Timestamp' column found in file {reflectance_files[ii]}")            
             if column_names_to_import != None: # extract relevant column names of the pandas dataframe
                 self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])),  -np.diff(self.average[ii], axis=0)))  # compute reflectance loss between measurements
@@ -1256,6 +1383,41 @@ class reflectance_measurements:
 
             if import_tilts:
                 self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[self.mirror_names[ii]].values.transpose()
+                    
+    # def import_heliostats_ref_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
+    #                             reflectometer_acceptance_angle,import_tilts=False,
+    #                             column_names_to_import=None):
+
+    #     for ii in range(len(reflectance_files)):
+            
+    #         self.file_name[ii] = reflectance_files[ii]
+    #         reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Heliostats_Ref"),\
+    #             "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Heliostats_Sigma")}
+
+    #         self.times[ii] = reflectance_data['Average']['Time'].values
+    #         if column_names_to_import != None: # extract relevant column names of the pandas dataframe
+    #             self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.mirror_names[ii] = column_names_to_import
+    #         else:
+    #             self.average[ii] = reflectance_data['Average'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1::]
+
+    #         self.prediction_indices[ii] = []
+    #         self.prediction_times[ii] = []
+    #         for m in self.times[ii]:
+    #             self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))        
+    #         self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
+    #         self.rho0[ii] = self.average[ii][0,:]
+
+    #         # idx = reflectance_files.index(f) 
+    #         self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
+    #         self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(self.number_of_measurements[ii])
+    #         self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
+
+    #         if import_tilts:
+    #             self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[self.mirror_names[ii]].values.transpose()
                     
     def get_experiment_subset(self,idx):
         attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes
@@ -1306,3 +1468,260 @@ class reflectance_measurements:
             a.set_ylabel(r"Reflectance at ${0:.1f}^{{\circ}}$".format(self.reflectometer_incidence_angle[ii]))
         a.set_ylim((miny,1))
         a.set_xlabel("Date")
+
+class field_model(soiling_base):
+    def __init__(self,file_params,file_SF,num_sectors=None):
+        super().__init__(file_params)
+
+        self.sun = sun()
+        self.sun.import_sun(file_params)
+        
+        self.helios.import_helios(file_params,file_SF,num_sectors=num_sectors)
+        if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
+            self.helios.stow_tilt = None
+
+    def sun_angles(self,simulation_inputs,verbose=True):
+        sim_in = simulation_inputs
+        sun = self.sun
+        constants = self.constants
+        timezone = pytz.FixedOffset(int(self.timezone_offset*60))
+        
+        _print_if("Calculating sun apparent movement and angles for "+str(sim_in.N_simulations)+" simulations",verbose)
+        
+        files = list(sim_in.time.keys())
+        for f in list(files):
+            time_utc = sim_in.time[f].dt.tz_localize(timezone) # Apply UTC to timeseries
+            time_utc = time_utc.tolist() # Convert to list
+            
+            # Loop through all times and calculate azimuth and altitude/elevation
+            solar_angles = np.array([solar.get_position(self.latitude,self.longitude,time.to_pydatetime()) for time in time_utc]) 
+            sun.azimuth[f] = solar_angles[:,0] # solar_angles(:,[azimuth,elevation])
+            sun.elevation[f] = solar_angles[:,1]
+            sun.DNI[f] = np.array([radiation.get_radiation_direct(time.to_pydatetime(),elevation) for time, elevation in zip(time_utc,solar_angles[:,1])])
+            
+        self.sun = sun # update sun in the main model 
+    
+    def helios_angles(self,plant,verbose=True,second_surface=True):
+        """
+        Calculates the heliostat movement and angles for a given solar field and simulation inputs.
+        
+        Parameters:
+            plant (object): The solar plant object containing information about the plant configuration.
+            verbose (bool, optional): Whether to print progress messages. Defaults to True.
+            second_surface (bool, optional): Whether to use the second surface model for the incidence reflection factor. Defaults to True.
+        
+        Returns:
+            None
+        """
+        sun = self.sun  
+        helios = self.helios
+
+        files = list(sun.elevation.keys())
+        N_sims = len(files)
+        _print_if("Calculating heliostat movement and angles for "+str(N_sims)+" simulations",verbose)
+
+        for f in files:
+            stowangle = sun.stow_angle
+            h_tower = plant.receiver['tower_height']
+            helios.dist = np.sqrt(helios.x**2+helios.y**2)                                  # horizontal distance between mirror and tower
+            helios.elevation_angle_to_tower = np.degrees(np.arctan((h_tower/helios.dist)))  # elevation angle from heliostats to tower
+            
+            T_m = np.array([-helios.y,-helios.x,np.ones((len(helios.x)))*h_tower])          # relative position of tower from mirror (left-handed ref.sys.)
+            L_m = np.sqrt(np.sum(T_m**2,axis=0))                                            # distance mirror-tower [m]
+            t_m = T_m/L_m                                                                   # unit vector in the direction of the tower (from mirror, left-handed ref.sys.)
+            s_m = np.array(\
+                        [np.cos(rad(sun.elevation[f]))*np.cos(rad(sun.azimuth[f])), \
+                            np.cos(rad(sun.elevation[f]))*np.sin(rad(sun.azimuth[f])), \
+                            np.sin(rad(sun.elevation[f]))])                                # unit vector of direction of the sun from mirror (left-handed)
+            s_m = np.transpose(s_m)
+            THETA_m = 0.5*np.arccos(s_m.dot(t_m))
+            THETA_m = np.transpose(THETA_m)                                                 # incident angle (the angle a ray of sun makes with the normal to the surface of the mirrors) in radians
+            helios.incidence_angle[f] = np.degrees(THETA_m)                                 # incident angle in degrees
+            helios.incidence_angle[f][:,sun.elevation[f]<=stowangle] = np.nan               # heliostats are stored vertically at night facing north
+            
+            # apply the formula (Guo et al.) to obtain the components of the normal for each mirror
+            A_norm = np.zeros((len(helios.x),max(s_m.shape),min(s_m.shape)))
+            B_norm = np.sin(THETA_m)/np.sin(2*THETA_m)
+            for ii in range(len(helios.x)):
+                A_norm[ii,:,:] = s_m+t_m[:,ii]
+            
+            N = A_norm[:,:,0]*B_norm                                # north vector
+            E = A_norm[:,:,1]*B_norm                                # east vector
+            H = A_norm[:,:,2]*B_norm                                # height vector
+            N[:,sun.elevation[f]<=stowangle] = 1                    # heliostats are stored at night facing north
+            E[:,sun.elevation[f]<=stowangle] = 0                    # heliostats are stored at night facing north
+            H[:,sun.elevation[f]<=stowangle] = 0                    # heliostats are stored at night facing north
+            # Nd = np.degrees(np.arctan2(E,N))                      
+            # Ed = np.degrees(np.arctan2(N,E))
+            # Hd = np.degrees(np.arctan2(H,np.sqrt(E**2+N**2)))   
+            
+            helios.elevation[f] = np.degrees(np.arctan(H/(np.sqrt(N**2+E**2))))         # [deg] elevation angle of the heliostats
+            helios.elevation[f][:,sun.elevation[f]<=stowangle] = 90 - helios.stow_tilt  # heliostats are stored at stow_tilt at night facing north
+            helios.tilt[f] = 90-helios.elevation[f]                                     # [deg] tilt angle of the heliostats
+            helios.azimuth[f] = np.degrees(np.arctan2(E,N))                             # [deg] azimuth angle of the heliostat
+
+            if second_surface==False:
+                helios.inc_ref_factor[f] = (1+np.sin(rad(helios.incidence_angle[f])))/np.cos(rad(helios.incidence_angle[f])) # first surface
+                _print_if("First surface model",verbose)
+            elif second_surface==True:
+                helios.inc_ref_factor[f] = 2/np.cos(rad(helios.incidence_angle[f]))  # second surface model
+                _print_if("Second surface model",verbose)
+            else:
+                _print_if("Choose either first or second surface model",verbose)
+   
+        self.helios = helios
+
+    def reflectance_loss(self,simulation_inputs,cleans,verbose=True):
+        
+        sim_in = simulation_inputs
+        N_sims = sim_in.N_simulations
+        _print_if("Calculating reflectance losses with cleaning for "+str(N_sims)+" simulations",verbose)
+
+        helios = self.helios
+        n_helios = helios.x.shape[0]
+        
+        files = list(sim_in.time.keys())
+        for fi in range(len(files)):
+            f = files[fi]
+            T_days = (sim_in.time[f].iloc[-1]-sim_in.time[f].iloc[0]).days # needs to be more than one day
+            n_hours = int(helios.delta_soiled_area[f].shape[1] )
+            
+            # accumulate soiling between cleans
+            temp_soil = np.zeros((n_helios,n_hours))
+            temp_soil2 =  np.zeros((n_helios,n_hours))
+            for hh in range(n_helios):
+                sra = copy.deepcopy(helios.delta_soiled_area[f][hh,:])     # use copy.deepcopy otherwise when modifying sra to compute temp_soil2, also helios.delta_soiled_area is modified
+                clean_idx = np.where(cleans[fi][hh,:])[0]
+                clean_at_0 = True                                       # kept true if sector hh-th is cleaned on day 0
+                if len(clean_idx)>0 and clean_idx[0]!=0:
+                    clean_idx = np.insert(clean_idx,0,0)                # insert clean_idx = 0 to compute soiling since the beginning
+                    clean_at_0 = False                                  # true only when sector hh-th is cleaned on day 0
+                if len(clean_idx)==0 or clean_idx[-1]!=(sra.shape[0]):                      
+                    clean_idx = np.append(clean_idx,sra.shape[0])       # append clean_idx = 8760 to compute soiling until the end
+                
+                clean_idx_n = np.arange(len(clean_idx))
+                for cc in clean_idx_n[:-1]:  
+                    temp_soil[hh,clean_idx[cc]:clean_idx[cc+1]] = \
+                        np.cumsum(sra[clean_idx[cc]:clean_idx[cc+1]])  # Note: clean_idx = 8760 would be outside sra, but Python interprets it as "till the end"
+                  
+                # Run again with initial condition equal to final soiling to obtain an approximation of "steady-state" soiling
+                # if clean_at_0:
+                #     temp_soil2[hh,:] = temp_soil[hh,:]
+                # else:
+                sra[0] = temp_soil[hh,-1]
+                for cc in clean_idx_n[:-1]:                  
+                    temp_soil2[hh,clean_idx[cc]:clean_idx[cc+1]] = \
+                        np.cumsum(sra[clean_idx[cc]:clean_idx[cc+1]])
+                                
+            helios.soiling_factor[f] = 1-temp_soil2*helios.inc_ref_factor[f]  # hourly soiling factor for each sector of the solar field
+        
+        self.helios = helios
+
+    def optical_efficiency(self,plant,simulation_inputs,climate_file,verbose=True,n_az=10,n_el=10):
+        helios = self.helios
+        sim_in = simulation_inputs
+        sun = self.sun
+
+        # check that lat/lon and timezone correspond to the same location
+        if climate_file.split('.')[-1] == "epw":
+            with open(climate_file) as f:
+                line = f.readline()
+                line = line.split(',')
+                lat = line[6]
+                lon = line[7]
+                tz = line[-2]
+        else:
+            raise ValueError("Climate file type must be .epw")
+
+        # check that parameter file and climate file have same location and timezone
+        if self.latitude != float(lat) or self.longitude != float(lon):
+            raise ValueError("Location of field_model and climate file do not match")
+        if self.timezone_offset != float(tz):
+            raise ValueError("Timezone offset of field_model and climate file do not match")
+        
+        cp = CoPylot()
+        r = cp.data_create()
+        assert cp.data_set_string(
+            r,
+            "ambient.0.weather_file",
+            climate_file,
+        )
+        
+        # layout setup
+        assert cp.data_set_number(r,"heliostat.0.height",helios.height)
+        assert cp.data_set_number(r,"heliostat.0.width",helios.width)
+        assert cp.data_set_number(r,"heliostat.0.soiling",1) # Sets cleanliness to 100%
+        assert cp.data_set_number(r,"heliostat.0.reflectivity",1)
+        try:
+            assert cp.data_set_string(r,"receiver.0.rec_type",plant.receiver['receiver_type'])
+        except:
+            assert cp.data_set_string(r,"receiver.0.rec_type",'External cylindrical')
+        if plant.receiver['receiver_type'] == 'External cylindrical':
+            assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['width_diameter'])
+        elif plant.receiver['receiver_type'] == 'Flat plate':
+            assert cp.data_set_number(r,"receiver.0.rec_width",plant.receiver['width_diameter'])
+            try:    
+                assert cp.data_set_number(r,"receiver.0.rec_elevation",plant.receiver['orientation_elevation'])
+            except:
+                assert cp.data_set_number(r,"receiver.0.rec_elevation",-35)
+        assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['width_diameter']) 
+        assert cp.data_set_number(r,"receiver.0.rec_height",plant.receiver['panel_height'])
+        assert cp.data_set_number(r,"receiver.0.optical_height",plant.receiver['tower_height'])
+
+        # field setup
+        ff = helios.full_field
+        N_helios = ff['id'].shape[0]
+        zz = [0 for ii in range(N_helios)]
+        layout = [[ff['id'][ii],ff['x'][ii],ff['y'][ii],zz[ii]] for ii in range(N_helios)] #[list(id),list(ff['x']),list(ff['y']),list(zz)]
+        assert cp.assign_layout(r,layout)
+        field = cp.get_layout_info(r)
+        
+        # simulation parameters
+        assert cp.data_set_number(r,"fluxsim.0.flux_time_type",0) # 1 for time simulation, 0 for solar angles
+        assert cp.data_set_number(r,"fluxsim.0.flux_dni",1000.0)  # set the simulation DNI to 1000 W/m2. Only used to display indicative receiver power.
+        assert cp.data_set_string(r,"fluxsim.0.aim_method",plant.aim_point_strategy)
+
+        files = list(sim_in.time.keys())
+        Ns = len(helios.x)
+        helios.optical_efficiency = {f: [] for f in files}
+        az_grid = np.linspace(0,360,num=n_az) 
+        el_grid = np.linspace(sun.stow_angle,90,num=n_el)
+        eff_grid = np.zeros((Ns,n_az,n_el))
+        rec_power_grid = np.zeros((n_az,n_el))
+        sec_ids = ff['sector_id'][field['id'].values.astype(int)] # CoPylot re-orders sectors
+        fmt = "Getting efficiencies for az={0:.3f}, el={1:.3f}"
+        
+        # buliding the lookup table for grid of solar angles
+        fmt_pwr = "Power absorbed by receiver at DNI=1000 W/m2: {0:.2e} kW"
+        for ii in range(len(az_grid)):
+            for jj in range(len(el_grid)):
+                assert cp.data_set_number(r,"fluxsim.0.flux_solar_az_in",az_grid[ii])
+                assert cp.data_set_number(r,"fluxsim.0.flux_solar_el_in",el_grid[jj])
+                assert cp.simulate(r)
+                dat = cp.detail_results(r)
+                dat_summary = cp.summary_results(r)
+
+                effs = dat['efficiency']
+                _print_if(fmt.format(az_grid[ii],el_grid[jj]),verbose)
+                if dat_summary['Power absorbed by the receiver'] == ' -nan(ind)':
+                    raise ValueError("SolarPILOT unable to simulate with current parameter configuration")
+                else:
+                    _print_if(fmt_pwr.format(dat_summary['Power absorbed by the receiver']),verbose)
+                    
+                for kk in range(Ns):
+                    idx = np.where(sec_ids==kk)[0]
+                    eff_grid[kk,ii,jj] = effs[idx].mean()
+        
+        # Apply lookup table to simulation
+        for f in files:
+            T = len(sim_in.time[f])
+            # Use above lookup to compute helios.optical_efficiency[f]
+            _print_if("Computing optical efficiency time series for file "+str(f),verbose)
+            helios.optical_efficiency[f] = np.zeros((Ns,T))
+            for ll in range(Ns):
+                opt_fun = interp2d(el_grid,az_grid,eff_grid[ll,:,:],fill_value=np.nan)
+                helios.optical_efficiency[f][ll,:] = np.array( [opt_fun(sun.elevation[f][tt],sun.azimuth[f][tt])[0] \
+                    for tt in range(T)] )
+            _print_if("Done!",verbose)
+        self.helios = helios
+
