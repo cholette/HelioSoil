@@ -15,4 +15,4 @@ SolTrace/
 .venv/
 dev/
 .soilenv/
-soilenv
+.copylenv/
