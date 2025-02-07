@@ -90,7 +90,7 @@ for ii,experiment in enumerate(train_experiments):
     if any("augusta".lower() in value.lower() for value in sim_data_train.file_name.values()):
         fig,ax = smu.plot_experiment_PA(sim_data_train,reflect_data_train,ii,figsize=(10,15))
     else:
-        fig,ax = smu.plot_experiment_data(sim_data_train,reflect_data_train,ii,train_mirrors,figsize=(10,15))
+        fig,ax = smu.plot_experiment_data(sim_data_train,reflect_data_train,ii,figsize=(10,15))
 
     # fig.suptitle(f"Training Data for file {files[experiment]}")
     # fig,ax = smu.wind_rose(sim_data_train,ii)

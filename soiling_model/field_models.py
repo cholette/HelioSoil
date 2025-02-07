@@ -8,7 +8,7 @@ import matplotlib.dates as mdates
 from matplotlib.cm import get_cmap, turbo
 from warnings import warn
 import copy
-from scipy.interpolate import interp2d
+from scipy.interpolate import RectBivariateSpline
 from soiling_model.utilities import _print_if,_ensure_list,\
                                     _extinction_function,_same_ext_coeff,\
                                     _import_option_helper,_parse_dust_str,\
@@ -284,8 +284,8 @@ class field_common_methods:
             _print_if("Computing optical efficiency time series for file "+str(f),verbose)
             helios.optical_efficiency[f] = np.zeros((Ns,T))
             for ll in range(Ns):
-                opt_fun = interp2d(el_grid,az_grid,eff_grid[ll,:,:],fill_value=np.nan)
-                helios.optical_efficiency[f][ll,:] = np.array( [opt_fun(sun.elevation[f][tt],sun.azimuth[f][tt])[0] \
+                opt_fun = RectBivariateSpline(el_grid,az_grid,eff_grid[ll,:,:].T,kx = 1, ky = 1)
+                helios.optical_efficiency[f][ll,:] = np.array( [opt_fun(sun.elevation[f][tt],sun.azimuth[f][tt])[0,0] \
                     for tt in range(T)] )
             _print_if("Done!",verbose)
         self.helios = helios
