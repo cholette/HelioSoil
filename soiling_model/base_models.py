@@ -1325,6 +1325,7 @@ class reflectance_measurements:
         self.reflectometer_incidence_angle = {}
         self.reflectometer_acceptance_angle = {}
         self.mirror_names = {}
+        self.tot_ref_loss = {}
 
         if import_tilts:
             self.tilts = {}
@@ -1368,6 +1369,7 @@ class reflectance_measurements:
                 self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1::]
 
+            self.tot_ref_loss[ii] = self.average[ii][0]-self.average[ii][-1]
             self.prediction_indices[ii] = []
             self.prediction_times[ii] = []
             for m in self.times[ii]:
