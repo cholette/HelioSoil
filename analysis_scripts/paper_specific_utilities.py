@@ -48,7 +48,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
     r0 = mod.helios.nominal_reflectance
 
     exps = list(mod.helios.tilt.keys())
-    tilts = np.unique(mod.helios.tilt[0])
+    tilts = list(np.unique(mod.helios.tilt[ii]) for ii,e in enumerate(exps))
 
     if plot_rh:
         fig,ax = plt.subplots(nrows=len(tilts)+2,ncols=len(exps),figsize=figsize,sharex='col')
@@ -67,11 +67,12 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
     elif any("yadnarie".lower() in value.lower() for value in sdat.file_name.values()):
         colors = {'NE':'blue','SE':'red','SW':'green','NW':'magenta','N/A':'blue'}
     else:
-        colors = {'N':'blue','S':'red','E':'green','W':'magenta','N/A':'blue'}
+        colors = {'NE':'blue','SE':'red','SW':'green','NW':'magenta','N/A':'blue'}
     
     ref_output = {}
     for ii,e in enumerate(exps):
-        for jj,t in enumerate(tilts):
+        for jj,t in enumerate(tilts[ii]):
+           
             tr = rdat.times[e]
             tr = (tr-tr[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
             
@@ -91,7 +92,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                 idx = idx[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
             if t==0 and any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
                 idxs = idxs[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
-            
+    
             idxs = idxs[0] # take first since all predictions are the same
             ts = sdat.time[e].values[0:rdat.prediction_indices[e][-1]+1]
             ts = (ts-ts[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
@@ -105,8 +106,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                 color = colors[orientation[ii][kk]]
                 if np.ndim(ax) == 1:
                     ax = np.vstack(ax)  # create a fictious 2D array with only one column
-                ax[jj,ii].errorbar(tr,m,yerr=error_two_sigma,label=f'Orientation {orientation[ii][kk]}',color=color)
-
+                
                 if (e in train_experiments) and \
                     (rdat.mirror_names[e][kk] in train_mirrors):
                     a = ax[jj,e]
@@ -130,8 +130,9 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             ax[jj,ii].fill_between(ts,Lp,Up,color='black',alpha=0.1,label=r'Prediction Interval')
             ax[jj,ii].grid('on')
 
+
             if jj==0:
-                ax[jj,ii].set_title(f"Campaign {e+1}, Tilt: {t:.0f}"+r"$^{\circ}$")
+                ax[jj,ii].set_title(f"Data set {e+1}, Tilt: {t:.0f}"+r"$^{\circ}$")
             else:
                 ax[jj,ii].set_title(f"Tilt: {t:.0f}"+r"$^{\circ}$")
             
