@@ -13,7 +13,7 @@ plt.rc('legend', fontsize=14)
 plt.rc('axes',labelsize=18)
 
 def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
-                   rows_with_legend=[3],num_legend_cols=6,legend_shift=(0,0),plot_rh=True,
+                   rows_with_legend=[2],num_legend_cols=6,legend_shift=(0,0),plot_rh=True,
                    yticks=None,figsize=(12,15),lgd_size=10):
     """
     Plot reflectance data and model predictions for a set of experiments and mirror tilts.
@@ -34,6 +34,8 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
         legend_shift (tuple, optional): A tuple specifying the x and y shift of the legend.
         plot_rh (bool, optional): Whether to plot the relative humidity.
         yticks (list, optional): The y-axis tick values for the reflectance plots.
+        figsize (tuple, optional): A tuple specifying the x and y dimension of the image.
+        lgd_size (int, optional): The size of the font for the legend.
     
     Returns:
         tuple: The figure and axis objects for the generated plot.
@@ -145,14 +147,17 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
 
         a2.plot(ts,dust_conc, color='brown')
         a2.tick_params(axis ='y', labelcolor = 'brown')
-        a2.set_ylim((0,1.01*dust_max))
+        a2.set_ylim((0,dust_max))
+        a2.set_yticks((0,dust_max/2,dust_max))
+        a2.grid('on')
 
         a2a = a2.twinx()
         p = a2a.plot(ts,ws,color='green')
         a2a.tick_params(axis ='y', labelcolor = 'green')
-        #a2a.set_ylim((0,1.01*ws_max))
-        a2a.set_ylim((0,30))
-        #a2a.set_yticks((0,ws_max/2,ws_max))
+        a2a.set_ylim((0,ws_max))
+        # a2a.set_ylim((0,30))
+        a2a.set_yticks((0,ws_max/2,ws_max))
+        a2a.grid('on')
         a2a.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
 
         if plot_rh:
@@ -161,7 +166,8 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             a3 = ax[-1,ii]
             a3.plot(ts,rel_hum, color='blue')
             a3.tick_params(axis ='y', labelcolor = 'blue')
-            a3.set_ylim((0,1.01*hum_max))
+            a3.set_ylim((0,hum_max))
+            a3.grid('on')
         
         if ii==0:
             fs = r"{0:s} $\frac{{\mu g}}{{m^3}}$"
@@ -238,10 +244,10 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                 #         h_legend.remove(handle)
                 #         labels_legend.remove(label)
 
-            elif ii == len(tilts):
-                a.set_yticks((0, 150, 300))
-            else:
-                a.set_yticks((0, 50, 100))
+            # elif ii == len(tilts):
+            #     a.set_yticks((0, 150, 300))
+            # else:
+            #     a.set_yticks((0, 50, 100))
     
     # Remove duplicates by filtering unique labels and keeping corresponding handles
     unique_labels = []
@@ -464,7 +470,7 @@ def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientatio
 
 def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                    rows_with_legend=[3],num_legend_cols=6,legend_shift=(0,0),plot_rh=True,
-                   yticks=None,figsize=None):
+                   yticks=None,figsize=None,lgd_size=10):
     
     mod.predict_soiling_factor(sdat,rho0=rdat.rho0) # ensure predictions are fresh
     r0 = mod.helios.nominal_reflectance
