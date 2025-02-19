@@ -5,9 +5,10 @@ os.sys.path.append(main_directory)
 
 # CHOOSE WHETHER TO USE DAILY AVERAGE OF REFLECTANCE VALUES OR NOT
 DAILY_AVERAGE = True
-
-# CHOOSE WHETHER TO WORK ON HELIOSTATS OR ON THE MIRROR RIG
-HELIOSTATS = True
+# CHOOSE WHETHER TO WORK ON HELIOSTATS OR ON THE MIRROR RIG0
+HELIOSTATS = False
+# CHOOSE PM FRACTION TO USE FOR FITTING
+dust_type = "PM2.5" # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
 
 # %% modules
 import numpy as np
@@ -30,10 +31,10 @@ reflectometer_acceptance_angle = 12.5e-3 # [rad] half acceptance angle of reflec
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
 d = f"{main_directory}/data/mildura/"
 time_to_remove_at_end = [0,0]  # time to be removed for each experiment, in hours
-train_experiments = [0] # indices for training experiments from 0 to len(files)-1
+train_experiments = [1] # indices for training experiments from 0 to len(files)-1
 train_mirrors = ["ON_M1_T00"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for training
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
-dust_type = "PM10" # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
+
 
 # %% Get file list and time intervals. Import training data.
 parameter_file = d+"parameters_mildura_experiments.xlsx"
@@ -82,7 +83,7 @@ sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                             
 sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                                 reflect_data_train,
-                                                                "reflectance_data" 
+                                                                training_intervals 
                                                             )
 
 # %% Plot training data
@@ -132,7 +133,7 @@ if DAILY_AVERAGE:
 # %% Trim data and plot                                                           
 sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
                                                                 reflect_data_total,
-                                                                "reflectance_data" 
+                                                                all_intervals 
                                                             )
 
 for ii,experiment in enumerate(sim_data_total.dt.keys()):
@@ -225,7 +226,7 @@ ax[2].grid(True)
 ax[2].legend(fontsize=lgd_size)
 
 ax[3].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")
-ax[3].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.3f}".format(sim_data_total.relative_humidity[f].mean()))
+ax[3].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.1f}".format(sim_data_total.relative_humidity[f].mean()))
 label_str = r'Relative Humidity [%]'
 ax[3].set_ylabel(label_str,color='blue')
 ax[3].tick_params(axis='y', labelcolor='blue')
@@ -242,11 +243,11 @@ if HELIOSTATS!=True:  # Heliostats data are currently only available for January
     t = reflect_data_total.times[f]
     std = reflect_data_total.sigma[f]
     lgd_label = [lg[:5].replace("O","").replace("_M","") for lg in all_mirrors]      
-    # for ii in range(ave.shape[1]):
-    #     if lgd_label[ii]=='W2':
-    #         ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
-    #     else:
-    #         ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],marker='o',capsize=4.0)
+    for ii in range(ave.shape[1]):
+        if lgd_label[ii]=='W2':
+            ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
+        else:
+            ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],marker='o',capsize=4.0)
     for ii in [2,-1]:
         if lgd_label[ii]=='W2':
             ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
@@ -261,39 +262,39 @@ if HELIOSTATS!=True:  # Heliostats data are currently only available for January
         title_Jun += ' - Daily Average'
     plt.suptitle(title_Jun,fontsize = 20,x=0.5,y=0.92)
 
-    # ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")
-    # # label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
-    # ax[1].axhline(y=sim_data_total.dust_concentration[f].mean(),color='brown',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.dust_concentration[f].mean()))
-    # label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data_total.dust_type[0])
-    # ax[1].set_ylabel(label_str,color='brown',fontsize=20)
-    # ax[1].tick_params(axis='y', labelcolor='brown')
-    # ax[1].grid(True)
-    # ax[1].legend(fontsize=lgd_size)
-    # ax[1].set_ylim(0,100)
-
-    # ax[2].plot(sim_data_total.time[f],sim_data_total.wind_speed[f],color='green',label="Measurements")
-    # ax[2].axhline(y=sim_data_total.wind_speed[f].mean(),color='green',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean()))
-    # label_str = r'Wind Speed [$m\,/\,s$]'
-    # ax[2].set_ylabel(label_str,color='green')
-    # ax[2].tick_params(axis='y', labelcolor='green')
-    # ax[2].grid(True)
-    # ax[2].legend(fontsize=lgd_size)
-
-    # ax[3].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")
-    # ax[3].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.3f}".format(sim_data_total.relative_humidity[f].mean()))
-    # label_str = r'Relative Humidity [%]'
-    # ax[3].set_ylabel(label_str,color='blue')
-    # ax[3].tick_params(axis='y', labelcolor='blue')
-    # ax[3].grid(True)
-    # ax[3].legend(fontsize=lgd_size)
-
-    ax[1].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")
-    ax[1].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.3f}".format(sim_data_total.relative_humidity[f].mean()))
-    label_str = r'Relative Humidity [%]'
-    ax[1].set_ylabel(label_str,color='blue')
-    ax[1].tick_params(axis='y', labelcolor='blue')
+    ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")
+    # label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
+    ax[1].axhline(y=sim_data_total.dust_concentration[f].mean(),color='brown',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.dust_concentration[f].mean()))
+    label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data_total.dust_type[0])
+    ax[1].set_ylabel(label_str,color='brown',fontsize=20)
+    ax[1].tick_params(axis='y', labelcolor='brown')
     ax[1].grid(True)
     ax[1].legend(fontsize=lgd_size)
+    ax[1].set_ylim(0,40)
+
+    ax[2].plot(sim_data_total.time[f],sim_data_total.wind_speed[f],color='green',label="Measurements")
+    ax[2].axhline(y=sim_data_total.wind_speed[f].mean(),color='green',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean()))
+    label_str = r'Wind Speed [$m\,/\,s$]'
+    ax[2].set_ylabel(label_str,color='green')
+    ax[2].tick_params(axis='y', labelcolor='green')
+    ax[2].grid(True)
+    ax[2].legend(fontsize=lgd_size)
+
+    ax[3].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")
+    ax[3].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.1f}".format(sim_data_total.relative_humidity[f].mean()))
+    label_str = r'Relative Humidity [%]'
+    ax[3].set_ylabel(label_str,color='blue')
+    ax[3].tick_params(axis='y', labelcolor='blue')
+    ax[3].grid(True)
+    ax[3].legend(fontsize=lgd_size)
+
+    # ax[1].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")
+    # ax[1].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.3f}".format(sim_data_total.relative_humidity[f].mean()))
+    # label_str = r'Relative Humidity [%]'
+    # ax[1].set_ylabel(label_str,color='blue')
+    # ax[1].tick_params(axis='y', labelcolor='blue')
+    # ax[1].grid(True)
+    # ax[1].legend(fontsize=lgd_size)
     plt.show()
 
 # %% PLOT average REFLECTANCE LOSSES, RELATIVE HUMIDITY, and PM10 between measurements
@@ -494,11 +495,9 @@ if HELIOSTATS==True:
                                     legend_shift=(0.04,0),
                                     yticks=(0.97,0.98,0.99,1.0))#0.97,0.98,
     fig.set_size_inches(10, 20) 
-    plt.show()
-
+    
     df_hel_sp = smu.loss_hel_table_from_sim(ref_hel_sp,sim_data_total)
-    df_hel_sp.to_csv(sp_save_file+'_simulation_sp.csv', index=False)
-    df_hel_sp   
+    df_hel_sp.to_csv(f"{sp_save_file}_HEL_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
 
 else:
     fig,ax,ref_simulation_sp = plot_for_paper(    imodel,
@@ -507,16 +506,18 @@ else:
                                 train_experiments,
                                 train_mirrors,
                                 orientation,
-                                legend_shift=(0.04,0),
-                                yticks=(0.95,0.96,0.97,0.98,0.99,1.0)) #
-    plt.show()
+                                legend_shift=(0.075,0),
+                                yticks=(0.95,0.96,0.97,0.98,0.99,1.0)) # 
+
     df_sim_sp = smu.loss_table_from_sim(ref_simulation_sp,sim_data_total)
-    df_sim_sp.to_csv(sp_save_file+'_simulation_sp.csv', index=False)
-    df_sim_sp
+    df_sim_sp.to_csv(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
 
 fig.suptitle('Semi-Physical Model', fontsize=16, fontweight='bold', y=1.045)
-fig.savefig(sp_save_file+".pdf",bbox_inches='tight')
-
+fig.savefig(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}\
+{'_daily' if DAILY_AVERAGE else ''}.pdf", bbox_inches='tight')
+fig.savefig(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}\
+{'_daily' if DAILY_AVERAGE else ''}.png", bbox_inches='tight')
+plt.show()
 # %% 
 
 # df_plot_sp =smu.loss_table_from_fig(ref_simulation_sp,sim_data_total) # NEED TO BE FIXED
@@ -533,7 +534,10 @@ if HELIOSTATS:
                                     train_mirrors,
                                     orientation,
                                     legend_shift=(0.04,0),
-                                    yticks=(0.97,0.98,0.99,1.02))    
+                                    yticks=(0.97,0.98,0.99,1.02))   
+    df_hel_cm = smu.loss_hel_table_from_sim(ref_hel_cm,sim_data_total)
+    df_hel_cm.to_csv(f"{cm_save_file}_HEL_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
+
 else:
     fig,ax,ref_simulation_cm = plot_for_paper(    imodel_constant,
                                 reflect_data_total,
@@ -541,11 +545,18 @@ else:
                                 train_experiments,
                                 train_mirrors,
                                 orientation,
-                                legend_shift=(0.04,0),
-                                yticks=(0.95,0.96,0.97,0.98,0.99,1.04))
+                                legend_shift=(0.075,0),
+                                yticks=(0.95,0.96,0.97,0.98,0.99,1.00))
+    
+    df_sim_cm = smu.loss_table_from_sim(ref_simulation_cm,sim_data_total)
+    df_sim_cm.to_csv(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
 
 fig.suptitle('Constant-Mean Model', fontsize=16, fontweight='bold', y=1.045)
-fig.savefig(cm_save_file+".pdf",bbox_inches='tight')
+fig.savefig(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}\
+{'_daily' if DAILY_AVERAGE else ''}.pdf", bbox_inches='tight')
+fig.savefig(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}\
+{'_daily' if DAILY_AVERAGE else ''}.png", bbox_inches='tight')
+plt.show()
 
 # %%
 
@@ -556,297 +567,297 @@ if not HELIOSTATS:
 
 # df_plot_cm =smu.loss_table_from_sim(ref_simulation_cm,sim_data_total) # NEED TO BE FIXED
 
-# %% High, Medium, Low daily loss distributions from total data
-pers = [5,50,95.0,100]
-labels = ['Low','Medium','High','Maximum']
-colors = ['blue','green','purple','black']
-fsz=16
+# # %% High, Medium, Low daily loss distributions from total data
+# pers = [5,50,95.0,100]
+# labels = ['Low','Medium','High','Maximum']
+# colors = ['blue','green','purple','black']
+# fsz=16
 
-sims,a,a2 = daily_soiling_rate(  sim_data_total,
-                                cm_save_file,
-                                M = 100000,
-                                percents=pers,
-                                dust_type = dust_type)
-# xL,xU = np.percentile(sims,[0.1,99.9])
-xL,xU = -0.25,3.0
-lg = np.linspace(xL,xU,1000)
-inc_factor = imodel.helios.inc_ref_factor[0]
+# sims,a,a2 = daily_soiling_rate(  sim_data_total,
+#                                 cm_save_file,
+#                                 M = 100000,
+#                                 percents=pers,
+#                                 dust_type = dust_type)
+# # xL,xU = np.percentile(sims,[0.1,99.9])
+# xL,xU = -0.25,3.0
+# lg = np.linspace(xL,xU,1000)
+# inc_factor = imodel.helios.inc_ref_factor[0]
 
-fig,ax = plt.subplots()
-for ii in range(sims.shape[1]):
-    ax.hist(sims[:,ii],250,density=True,
-            alpha=0.5,color=colors[ii],
-            label=labels[ii])
+# fig,ax = plt.subplots()
+# for ii in range(sims.shape[1]):
+#     ax.hist(sims[:,ii],250,density=True,
+#             alpha=0.5,color=colors[ii],
+#             label=labels[ii])
 
-    loc = inc_factor*mu_tilde*a[ii]
-    s2 = (inc_factor*sigma_dep_con)**2 * a2[ii]
-    dist = sps.norm(loc=loc*100,scale=np.sqrt(s2)*100)
-    ax.plot(lg,dist.pdf(lg),color=colors[ii])
-    print(f"Loss for {labels[ii]} scenario: {loc*100:.2f} +/- {1.96*100*np.sqrt(s2):.2f}")
+#     loc = inc_factor*mu_tilde*a[ii]
+#     s2 = (inc_factor*sigma_dep_con)**2 * a2[ii]
+#     dist = sps.norm(loc=loc*100,scale=np.sqrt(s2)*100)
+#     ax.plot(lg,dist.pdf(lg),color=colors[ii])
+#     print(f"Loss for {labels[ii]} scenario: {loc*100:.2f} +/- {1.96*100*np.sqrt(s2):.2f}")
 
-ax.set_xlim((xL,xU))
-ax.set_ylabel('Probability Density',fontsize=fsz+2)
-ax.set_xlabel('Loss (percentage points)',fontsize=fsz+2)
-ax.legend(fontsize=fsz)
-
-fig.set_size_inches(5,4)
-fig.savefig(f"{main_directory}/results/losses_mildura.pdf",dpi=300,bbox_inches='tight',pad_inches=0)
-
-# %% Highest only
-
-xL,xU = np.percentile(sims,[0.1,99.99])
-lg = np.linspace(xL,xU,1000)
-
-fig,ax = plt.subplots()
-ii = sims.shape[1]-1
-ax.hist(sims[:,ii],250,density=True,
-        alpha=0.5,color=colors[ii],
-        label=labels[ii])
-
-loc = inc_factor*mu_tilde*a[ii]
-s2 = (inc_factor*sigma_dep_con)**2 * a2[ii]
-dist = sps.norm(loc=loc*100,scale=np.sqrt(s2)*100)
-ax.plot(lg,dist.pdf(lg),color=colors[ii])
-
-ax.set_xlim((xL,xU))
-ax.set_ylabel('Probability Density',fontsize=fsz+2)
-ax.set_xlabel('Loss (percentage points)',fontsize=fsz+2)
+# ax.set_xlim((xL,xU))
+# ax.set_ylabel('Probability Density',fontsize=fsz+2)
+# ax.set_xlabel('Loss (percentage points)',fontsize=fsz+2)
 # ax.legend(fontsize=fsz)
 
-fig.set_size_inches(5,4)
-fig.savefig(f"{main_directory}/results/highest_losses_mildura.pdf",dpi=300,bbox_inches='tight',pad_inches=0)
+# fig.set_size_inches(5,4)
+# fig.savefig(f"{main_directory}/results/losses_mildura.pdf",dpi=300,bbox_inches='tight',pad_inches=0)
 
-# %% Fit quality plots (semi-physical)
-mirror_idxs = list(range(len(all_mirrors)))
-test_experiments = [f for f in list(range(len(files))) if f not in train_experiments]
-train_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] in train_mirrors]
-test_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] not in train_mirrors]
+# # %% Highest only
 
-fig,ax = summarize_fit_quality( imodel,
-                                reflect_data_total,
-                                train_experiments,
-                                train_mirror_idx,
-                                test_mirror_idx,test_experiments,
-                                min_loss=-0.2,
-                                max_loss=3.25,
-                                save_file=sp_save_file,
-                                figsize=(10,10)
-                                )
-for a in ax:
-    a.set_xticks([0,1,2,3])
-    a.set_yticks([0,1,2,3])
+# xL,xU = np.percentile(sims,[0.1,99.99])
+# lg = np.linspace(xL,xU,1000)
 
+# fig,ax = plt.subplots()
+# ii = sims.shape[1]-1
+# ax.hist(sims[:,ii],250,density=True,
+#         alpha=0.5,color=colors[ii],
+#         label=labels[ii])
 
-fig,ax = plt.subplots(figsize=(6,6))
-fit_quality_plots(imodel,
-                  reflect_data_total,
-                  test_experiments,
-                  test_mirror_idx+train_mirror_idx,
-                  ax=ax,
-                  min_loss= -1.0,
-                  max_loss=10.0,
-                  include_fits=False,
-                  data_ls='k*',
-                  data_label="Testing data",
-                  replot=True,
-                  vertical_adjust=-0.1,
-                  cumulative=True)
+# loc = inc_factor*mu_tilde*a[ii]
+# s2 = (inc_factor*sigma_dep_con)**2 * a2[ii]
+# dist = sps.norm(loc=loc*100,scale=np.sqrt(s2)*100)
+# ax.plot(lg,dist.pdf(lg),color=colors[ii])
 
-fit_quality_plots(imodel,
-                  reflect_data_total,
-                  train_experiments,
-                  test_mirror_idx,
-                  ax=ax,
-                  min_loss= -1.0,
-                  max_loss=10.0,
-                  include_fits=False,
-                  data_ls='g.',
-                  data_label="Training (different tilts)",
-                  replot=False,
-                  vertical_adjust=-0.05,
-                  cumulative=True)
+# ax.set_xlim((xL,xU))
+# ax.set_ylabel('Probability Density',fontsize=fsz+2)
+# ax.set_xlabel('Loss (percentage points)',fontsize=fsz+2)
+# # ax.legend(fontsize=fsz)
 
-fit_quality_plots(imodel,
-                  reflect_data_total,
-                  train_experiments,
-                  train_mirror_idx,
-                  ax=ax,
-                  min_loss= -1.0,
-                  max_loss=10.0,
-                  include_fits=False,
-                  data_ls='m.',
-                  replot=False,
-                  data_label="Training",
-                  cumulative=True)
+# fig.set_size_inches(5,4)
+# fig.savefig(f"{main_directory}/results/highest_losses_mildura.pdf",dpi=300,bbox_inches='tight',pad_inches=0)
 
-ax.set_xlabel("Measured cumulative loss",fontsize=16)
-ax.set_ylabel("Predicted cumulative loss",fontsize=16)
-ax.legend(loc='lower right')
-fig.savefig(sp_save_file+"_cumulative_fit_quality.pdf",bbox_inches='tight')
+# # # %% Fit quality plots (semi-physical)
+# # mirror_idxs = list(range(len(all_mirrors)))
+# # test_experiments = [f for f in list(range(len(files))) if f not in train_experiments]
+# # train_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] in train_mirrors]
+# # test_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] not in train_mirrors]
 
-fig,ax = plt.subplots(figsize=(6,6))
-fit_quality_plots(imodel,
-                  reflect_data_total,
-                  test_experiments,
-                  test_mirror_idx+train_mirror_idx,
-                  ax=ax,
-                  min_loss= -0.1,
-                  max_loss=10.0,
-                  include_fits=False,
-                  data_ls='k*',
-                  data_label="Testing data",
-                  replot=True,
-                  vertical_adjust=-0.1,
-                  cumulative=False)
-
-fit_quality_plots(imodel,
-                  reflect_data_total,
-                  train_experiments,
-                  test_mirror_idx,
-                  ax=ax,
-                  min_loss= -0.1,
-                  max_loss=10.0,
-                  include_fits=False,
-                  data_ls='g.',
-                  data_label="Training (different tilts)",
-                  replot=False,
-                  vertical_adjust=-0.05,
-                  cumulative=False)
-
-fit_quality_plots(imodel,
-                  reflect_data_total,
-                  train_experiments,
-                  train_mirror_idx,
-                  ax=ax,
-                  min_loss= -0.1,
-                  max_loss=10.0,
-                  include_fits=False,
-                  data_ls='m.',
-                  replot=False,
-                  data_label="Training",
-                  cumulative=False)
+# # fig,ax = summarize_fit_quality( imodel,
+# #                                 reflect_data_total,
+# #                                 train_experiments,
+# #                                 train_mirror_idx,
+# #                                 test_mirror_idx,test_experiments,
+# #                                 min_loss=-0.2,
+# #                                 max_loss=3.25,
+# #                                 save_file=sp_save_file,
+# #                                 figsize=(10,10)
+# #                                 )
+# # for a in ax:
+# #     a.set_xticks([0,1,2,3])
+# #     a.set_yticks([0,1,2,3])
 
 
-ax.set_xlabel(r"Measured $\Delta$ loss",fontsize=16)
-ax.set_ylabel(r"Predicted $\Delta$ loss",fontsize=16)
-ax.legend(loc='lower right')
-ax.set_title("Loss change prediction quality assessment (semi-physical)")
+# # fig,ax = plt.subplots(figsize=(6,6))
+# # fit_quality_plots(imodel,
+# #                   reflect_data_total,
+# #                   test_experiments,
+# #                   test_mirror_idx+train_mirror_idx,
+# #                   ax=ax,
+# #                   min_loss= -1.0,
+# #                   max_loss=10.0,
+# #                   include_fits=False,
+# #                   data_ls='k*',
+# #                   data_label="Testing data",
+# #                   replot=True,
+# #                   vertical_adjust=-0.1,
+# #                   cumulative=True)
 
-# %% Fit Quality plots (constant-mean)
+# # fit_quality_plots(imodel,
+# #                   reflect_data_total,
+# #                   train_experiments,
+# #                   test_mirror_idx,
+# #                   ax=ax,
+# #                   min_loss= -1.0,
+# #                   max_loss=10.0,
+# #                   include_fits=False,
+# #                   data_ls='g.',
+# #                   data_label="Training (different tilts)",
+# #                   replot=False,
+# #                   vertical_adjust=-0.05,
+# #                   cumulative=True)
 
-mirror_idxs = list(range(len(all_mirrors)))
-test_experiments = [f for f in list(range(len(files))) if f not in train_experiments]
-train_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] in train_mirrors]
-test_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] not in train_mirrors]
+# # fit_quality_plots(imodel,
+# #                   reflect_data_total,
+# #                   train_experiments,
+# #                   train_mirror_idx,
+# #                   ax=ax,
+# #                   min_loss= -1.0,
+# #                   max_loss=10.0,
+# #                   include_fits=False,
+# #                   data_ls='m.',
+# #                   replot=False,
+# #                   data_label="Training",
+# #                   cumulative=True)
 
-fig,ax = summarize_fit_quality( imodel_constant,
-                                reflect_data_total,
-                                train_experiments,
-                                train_mirror_idx,
-                                test_mirror_idx,test_experiments,
-                                min_loss=-0.2,
-                                max_loss=3.25,
-                                save_file=sp_save_file,
-                                figsize=(10,10)
-                                )
-for a in ax:
-    a.set_xticks([0,1,2,3])
-    a.set_yticks([0,1,2,3])
+# # ax.set_xlabel("Measured cumulative loss",fontsize=16)
+# # ax.set_ylabel("Predicted cumulative loss",fontsize=16)
+# # ax.legend(loc='lower right')
+# # fig.savefig(sp_save_file+"_cumulative_fit_quality.pdf",bbox_inches='tight')
 
+# # fig,ax = plt.subplots(figsize=(6,6))
+# # fit_quality_plots(imodel,
+# #                   reflect_data_total,
+# #                   test_experiments,
+# #                   test_mirror_idx+train_mirror_idx,
+# #                   ax=ax,
+# #                   min_loss= -0.1,
+# #                   max_loss=10.0,
+# #                   include_fits=False,
+# #                   data_ls='k*',
+# #                   data_label="Testing data",
+# #                   replot=True,
+# #                   vertical_adjust=-0.1,
+# #                   cumulative=False)
 
-fig,ax = plt.subplots(figsize=(6,6))
+# # fit_quality_plots(imodel,
+# #                   reflect_data_total,
+# #                   train_experiments,
+# #                   test_mirror_idx,
+# #                   ax=ax,
+# #                   min_loss= -0.1,
+# #                   max_loss=10.0,
+# #                   include_fits=False,
+# #                   data_ls='g.',
+# #                   data_label="Training (different tilts)",
+# #                   replot=False,
+# #                   vertical_adjust=-0.05,
+# #                   cumulative=False)
 
-fit_quality_plots(imodel_constant,
-                  reflect_data_total,
-                  test_experiments,
-                  test_mirror_idx+train_mirror_idx,
-                  ax=ax,
-                  min_loss= -0.1,
-                  max_loss=8.0,
-                  include_fits=False,
-                  data_ls='k*',
-                  data_label="Testing data",
-                  replot=True,
-                  vertical_adjust=-0.1,
-                  cumulative=True)
-
-fit_quality_plots(imodel_constant,
-                  reflect_data_total,
-                  train_experiments,
-                  test_mirror_idx,
-                  ax=ax,
-                  min_loss= -0.1,
-                  max_loss=8.0,
-                  include_fits=False,
-                  data_ls='g.',
-                  data_label="Training (different tilts)",
-                  replot=False,
-                  vertical_adjust=-0.05,
-                  cumulative=True)
-
-fit_quality_plots(imodel_constant,
-                  reflect_data_total,
-                  train_experiments,
-                  train_mirror_idx,
-                  ax=ax,
-                  min_loss= -0.1,
-                  max_loss=8.0,
-                  include_fits=False,
-                  data_ls='m.',
-                  replot=False,
-                  data_label="Training",
-                  cumulative=True)
-
-ax.set_xlabel("Measured cumulative loss",fontsize=16)
-ax.set_ylabel("Predicted cumulative loss",fontsize=16)
-ax.legend(loc='lower right')
-fig.savefig(cm_save_file+"_cumulative_fit_quality.pdf",bbox_inches='tight')
-
-fig,ax = plt.subplots(figsize=(6,6))
-fit_quality_plots(imodel_constant,
-                  reflect_data_total,
-                  test_experiments,
-                  test_mirror_idx+train_mirror_idx,
-                  ax=ax,
-                  min_loss= -0.1,
-                  max_loss=3.5,
-                  include_fits=False,
-                  data_ls='k*',
-                  data_label="Testing data",
-                  replot=True,
-                  vertical_adjust=-0.1,
-                  cumulative=False)
-
-fit_quality_plots(imodel_constant,
-                  reflect_data_total,
-                  train_experiments,
-                  test_mirror_idx,
-                  ax=ax,
-                  min_loss= -0.1,
-                  max_loss=3.5,
-                  include_fits=False,
-                  data_ls='g.',
-                  data_label="Training (different tilts)",
-                  replot=False,
-                  vertical_adjust=-0.05,
-                  cumulative=False)
-
-fit_quality_plots(imodel_constant,
-                  reflect_data_total,
-                  train_experiments,
-                  train_mirror_idx,
-                  ax=ax,
-                  min_loss= -0.1,
-                  max_loss=3.5,
-                  include_fits=False,
-                  data_ls='m.',
-                  replot=False,
-                  data_label="Training",
-                  cumulative=False)
+# # fit_quality_plots(imodel,
+# #                   reflect_data_total,
+# #                   train_experiments,
+# #                   train_mirror_idx,
+# #                   ax=ax,
+# #                   min_loss= -0.1,
+# #                   max_loss=10.0,
+# #                   include_fits=False,
+# #                   data_ls='m.',
+# #                   replot=False,
+# #                   data_label="Training",
+# #                   cumulative=False)
 
 
+# # ax.set_xlabel(r"Measured $\Delta$ loss",fontsize=16)
+# # ax.set_ylabel(r"Predicted $\Delta$ loss",fontsize=16)
+# # ax.legend(loc='lower right')
+# # ax.set_title("Loss change prediction quality assessment (semi-physical)")
+
+# # # %% Fit Quality plots (constant-mean)
+
+# # mirror_idxs = list(range(len(all_mirrors)))
+# # test_experiments = [f for f in list(range(len(files))) if f not in train_experiments]
+# # train_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] in train_mirrors]
+# # test_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] not in train_mirrors]
+
+# # fig,ax = summarize_fit_quality( imodel_constant,
+# #                                 reflect_data_total,
+# #                                 train_experiments,
+# #                                 train_mirror_idx,
+# #                                 test_mirror_idx,test_experiments,
+# #                                 min_loss=-0.2,
+# #                                 max_loss=3.25,
+# #                                 save_file=sp_save_file,
+# #                                 figsize=(10,10)
+# #                                 )
+# # for a in ax:
+# #     a.set_xticks([0,1,2,3])
+# #     a.set_yticks([0,1,2,3])
 
 
-ax.set_xlabel(r"Measured $\Delta$loss",fontsize=16)
-ax.set_ylabel(r"Predicted $\Delta$loss",fontsize=16)
-# %%
+# # fig,ax = plt.subplots(figsize=(6,6))
+
+# # fit_quality_plots(imodel_constant,
+# #                   reflect_data_total,
+# #                   test_experiments,
+# #                   test_mirror_idx+train_mirror_idx,
+# #                   ax=ax,
+# #                   min_loss= -0.1,
+# #                   max_loss=8.0,
+# #                   include_fits=False,
+# #                   data_ls='k*',
+# #                   data_label="Testing data",
+# #                   replot=True,
+# #                   vertical_adjust=-0.1,
+# #                   cumulative=True)
+
+# # fit_quality_plots(imodel_constant,
+# #                   reflect_data_total,
+# #                   train_experiments,
+# #                   test_mirror_idx,
+# #                   ax=ax,
+# #                   min_loss= -0.1,
+# #                   max_loss=8.0,
+# #                   include_fits=False,
+# #                   data_ls='g.',
+# #                   data_label="Training (different tilts)",
+# #                   replot=False,
+# #                   vertical_adjust=-0.05,
+# #                   cumulative=True)
+
+# # fit_quality_plots(imodel_constant,
+# #                   reflect_data_total,
+# #                   train_experiments,
+# #                   train_mirror_idx,
+# #                   ax=ax,
+# #                   min_loss= -0.1,
+# #                   max_loss=8.0,
+# #                   include_fits=False,
+# #                   data_ls='m.',
+# #                   replot=False,
+# #                   data_label="Training",
+# #                   cumulative=True)
+
+# # ax.set_xlabel("Measured cumulative loss",fontsize=16)
+# # ax.set_ylabel("Predicted cumulative loss",fontsize=16)
+# # ax.legend(loc='lower right')
+# # fig.savefig(cm_save_file+"_cumulative_fit_quality.pdf",bbox_inches='tight')
+
+# # fig,ax = plt.subplots(figsize=(6,6))
+# # fit_quality_plots(imodel_constant,
+# #                   reflect_data_total,
+# #                   test_experiments,
+# #                   test_mirror_idx+train_mirror_idx,
+# #                   ax=ax,
+# #                   min_loss= -0.1,
+# #                   max_loss=3.5,
+# #                   include_fits=False,
+# #                   data_ls='k*',
+# #                   data_label="Testing data",
+# #                   replot=True,
+# #                   vertical_adjust=-0.1,
+# #                   cumulative=False)
+
+# # fit_quality_plots(imodel_constant,
+# #                   reflect_data_total,
+# #                   train_experiments,
+# #                   test_mirror_idx,
+# #                   ax=ax,
+# #                   min_loss= -0.1,
+# #                   max_loss=3.5,
+# #                   include_fits=False,
+# #                   data_ls='g.',
+# #                   data_label="Training (different tilts)",
+# #                   replot=False,
+# #                   vertical_adjust=-0.05,
+# #                   cumulative=False)
+
+# # fit_quality_plots(imodel_constant,
+# #                   reflect_data_total,
+# #                   train_experiments,
+# #                   train_mirror_idx,
+# #                   ax=ax,
+# #                   min_loss= -0.1,
+# #                   max_loss=3.5,
+# #                   include_fits=False,
+# #                   data_ls='m.',
+# #                   replot=False,
+# #                   data_label="Training",
+# #                   cumulative=False)
+
+
+
+
+# # ax.set_xlabel(r"Measured $\Delta$loss",fontsize=16)
+# # ax.set_ylabel(r"Predicted $\Delta$loss",fontsize=16)
+# # # %%
