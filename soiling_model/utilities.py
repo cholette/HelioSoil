@@ -205,14 +205,16 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
         sim_dat.days = {}
 
     for f in files:
-        if isinstance(trim_ranges,list):  
+        if isinstance(trim_ranges,list) or isinstance(trim_ranges,np.ndarray):  
             assert isinstance(trim_ranges[f],list) or isinstance(trim_ranges[f],np.ndarray), "trim_ranges must be a list of lists or a list of 1D np.arrays"
             lb = trim_ranges[f][0].astype('datetime64[m]') # astype ensure they are comparable
             ub = trim_ranges[f][1].astype('datetime64[m]') # astype ensure they are comparable
         elif trim_ranges=="reflectance_data":
             assert ref_dat is not None, "Reflectance data must be supplied for trim_ranges==""reflectance_data"""
-            lb = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][0].astype('datetime64[m]') # astype ensure they are comparable
-            ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][-1].astype('datetime64[m]') # astype ensure they are comparable        
+            lb = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, -1])][0].astype('datetime64[m]') # astype ensure they are comparable # modified to last since W1 is missing
+            ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, -1])][-1].astype('datetime64[m]') # astype ensure they are comparable # modified to last since W1 is missing  
+            # lb = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][0].astype('datetime64[m]') # astype ensure they are comparable # 
+            # ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][-1].astype('datetime64[m]') # astype ensure they are comparable #     
         elif trim_ranges == "simulation_inputs":
             lb = sim_dat.time[f].values[0].astype('datetime64[m]') # astype ensure they are comparable
             ub = sim_dat.time[f].values[-1].astype('datetime64[m]') # astype ensure they are comparable
@@ -301,6 +303,7 @@ def daily_average(ref_dat,time_grids,dt=None):
         ref_dat_new.sigma_of_the_mean[f] = np.zeros((num_times,num_mirrors))
         ref_dat_new.delta_ref[f] = np.zeros((num_times,num_mirrors))
         ref_dat_new.soiling_rate[f] = np.zeros(ref_dat.rho0[f].shape)
+        ref_dat_new.tot_ref_loss[f] = np.zeros(ref_dat.rho0[f].shape)
         for ii in range(num_mirrors):
             df = pd.DataFrame( {"average":ref_dat.average[f][:,ii],
                                 "sigma": ref_dat.sigma[f][:,ii],
@@ -332,8 +335,9 @@ def daily_average(ref_dat,time_grids,dt=None):
                 ref_dat_new.prediction_indices[f].append(idx)        
             ref_dat_new.prediction_times[f].append(tg[ref_dat_new.prediction_indices[f]])
         ref_dat_new.delta_ref[f] = np.vstack((np.zeros((1, ref_dat_new.average[f].shape[1])), -np.diff(ref_dat_new.average[f], axis=0)))  # compute reflectance loss between subsequent measurements (0 given to first timestamp)
+        ref_dat_new.tot_ref_loss[f] = ref_dat_new.average[f][0]-ref_dat_new.average[f][-1]
         elapsed_time = (ref_dat_new.times[f][-1] - ref_dat_new.times[f][0]) / np.timedelta64(1, 'D')            # compute total time in days as a np.float64
-        ref_dat_new.soiling_rate[f] = (ref_dat_new.average[f][0]-ref_dat_new.average[f][-1])/elapsed_time*100   # compute soiling rates in p.p./day for each mirror
+        ref_dat_new.soiling_rate[f] = ref_dat_new.tot_ref_loss[f]/elapsed_time*100   # compute soiling rates in p.p./day for each mirror
 
     return ref_dat_new
 
