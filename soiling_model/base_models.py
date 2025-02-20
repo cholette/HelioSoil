@@ -15,6 +15,7 @@ from scipy.integrate import cumulative_trapezoid
 from scipy.spatial.distance import cdist
 import copy
 from tqdm import tqdm
+import pytz
 
 tol = np.finfo(float).eps # machine floating point precision
 
@@ -470,7 +471,7 @@ class constant_mean_base(soiling_base):
         
         files = list(sim_in.time.keys())
         for f in files:
-            helios.delta_soiled_area[f] = np.empty((helios.tilt[f].shape[0],helios.tilt[f].shape[1]))
+            helios.delta_soiled_area[f] = np.empty((helios.tilt[f].shape))
 
             # compute alpha
             try:
@@ -606,9 +607,27 @@ class simulation_inputs:
 
         for ii, file in enumerate(files): # Loop through each campaign and import weather files
             self.file_name[ii] = file
-            weather = pd.read_excel(file, sheet_name="Weather")
-
-            time = pd.to_datetime(weather['Time'])
+            weather = pd.read_excel(file, 
+                                    sheet_name="Weather", 
+                                    parse_dates=True, 
+                                    date_parser=lambda x: pd.to_datetime(x, format='%Y-%m-%d %H:%M:%S')
+                                    )
+            # Find time column
+            time_cols = ['Time', 'time', 'tmsmp', 'Timestamp', 'timestamp']
+            
+            time_col = next((col for col in time_cols if col in weather.columns), None)
+            if time_col is None:
+                raise ValueError(f"No time column found in Weather. Expected one of: {time_cols}")
+            
+            # Standardize column name to 'Time' and set as index
+            weather = weather.rename(columns={time_col: 'Time'})
+            weather['Time'] = pd.to_datetime(weather['Time']).dt.round('min')
+            # Remove duplicates (keep first occurrence)
+            weather = weather.drop_duplicates(subset='Time', keep='first')
+            
+            # Sort by time and set as index
+            weather = weather.sort_values('Time')
+            time = pd.to_datetime(weather['Time'].dt.round('min'))
             self.start_datetime[ii] = time.iloc[0]
             self.end_datetime[ii] = time.iloc[-1]
             
@@ -1359,8 +1378,14 @@ class reflectance_measurements:
         for ii in range(len(reflectance_files)):
             
             self.file_name[ii] = reflectance_files[ii]
-            reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Average"),\
-                "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Sigma")}
+            reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],
+                                                         sheet_name="Reflectance_Average", 
+                                                         parse_dates=True, 
+                                                         date_parser=lambda x: pd.to_datetime(x, format='%Y-%m-%d %H:%M:%S')),\
+                "Sigma": pd.read_excel(reflectance_files[ii],
+                                       sheet_name="Reflectance_Sigma", 
+                                       parse_dates=True, 
+                                       date_parser=lambda x: pd.to_datetime(x, format='%Y-%m-%d %H:%M:%S'))}
 
             time_column = next((col for col in reflectance_data['Average'].columns if col.lower() in ['time', 'timestamp']), None)
             if time_column is not None:
@@ -1368,28 +1393,36 @@ class reflectance_measurements:
             else:
                 raise ValueError(f"No 'Time' or 'Timestamp' column found in file {reflectance_files[ii]}")            
             if column_names_to_import != None: # extract relevant column names of the pandas dataframe
-                self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
-                self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.average[ii] = reflectance_data['Average'][column_names_to_import].dropna().values.reshape(-1,1)/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].dropna().values.reshape(-1,1)/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.mirror_names[ii] = column_names_to_import
+                self.rho0[ii] = self.average[ii][0,:].reshape(1,-1)
+                self.times[ii] = self.times[0][reflectance_data['Average'][column_names_to_import].dropna().index]
             else:
                 self.average[ii] = reflectance_data['Average'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1::]
+                self.rho0[ii] = self.average[ii][0,:]
 
             self.prediction_indices[ii] = []
             self.prediction_times[ii] = []
             for m in self.times[ii]:
                 self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))        
             self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
-            self.rho0[ii] = self.average[ii][0,:]
+            
 
             # idx = reflectance_files.index(f) 
             self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
             self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(number_of_measurements[ii])
             self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
 
-            if import_tilts:
-                self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[self.mirror_names[ii]].values.transpose()
+            if import_tilts: # TODO: Implement a size safety check against the number of measurements
+                self.tilts[ii] = pd.read_excel(reflectance_files[ii],
+                                               sheet_name="Tilts", 
+                                               parse_dates=True, 
+                                               date_parser=lambda x: pd.to_datetime(x, format='%Y-%m-%d %H:%M:%S'))[self.mirror_names[ii]].values.transpose()
+                if len(self.tilts[ii].shape) == 1:
+                    self.tilts[ii] = self.tilts[ii].reshape(1,-1)
                     
     def get_experiment_subset(self,idx):
         attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes

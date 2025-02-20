@@ -187,8 +187,8 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
             ub = trim_ranges[f][1]
         elif trim_ranges=="reflectance_data":
             assert ref_dat is not None, "Reflectance data must be supplied for trim_ranges==""reflectance_data"""
-            lb = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][0]
-            ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][-1]        
+            lb = np.min([ref_dat.times[f][0] for i in range(ref_dat.average[f].shape[1])])
+            ub = np.max([ref_dat.times[f][-1] for i in range(ref_dat.average[f].shape[1])])
         elif trim_ranges == "simulation_inputs":
             lb = sim_dat.time[f].iloc[0]
             ub = sim_dat.time[f].iloc[-1]
@@ -571,7 +571,6 @@ class DustDistribution():
         lower_bound_sig = [0+tol]*N
         lb = lower_bound_w + lower_bound_mu + lower_bound_sig # join lists
         ub = [np.inf]*len(lb)
-
         bnds = spo.Bounds(lb=lb,ub=ub,keep_feasible=True)
         res = spo.minimize(fun,params0,bounds=bnds,tol=1e-8)
 

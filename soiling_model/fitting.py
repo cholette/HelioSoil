@@ -24,7 +24,7 @@ class common_fitting_methods:
                 N_helios = helios.tilt[f].shape[0]
                 cumulative_soil0 = np.zeros(N_helios)  # start from clean
             else:
-                inc_factor = self.helios.inc_ref_factor[f]
+                inc_factor = self.helios.inc_ref_factor[f].squeeze()
                 cumulative_soil0 = (1 - rho0[f]/self.helios.nominal_reflectance)/inc_factor # back-calculated soiled area from measurement
 
             cumulative_soil = np.c_[cumulative_soil0, helios.delta_soiled_area[f]]
@@ -34,7 +34,15 @@ class common_fitting_methods:
         self.helios = helios
 
     def _compute_variance_of_measurements(self,sigma_dep,simulation_inputs,reflectance_data=None):
+        """"
+        Computes the total variance of the reflectance measurements, including both the measurement error and the variance due to the soiling model parameters.
         
+        The function takes in the standard deviation of the model parameters (`sigma_dep`), the simulation inputs (`simulation_inputs`), and optionally 
+        the reflectance data (`reflectance_data`). It first checks that the keys in the simulation inputs and reflectance data match. Then, it computes 
+        the total variance for each file, taking into account the measurement error and the variance due to the soiling model parameters.
+        
+        The function returns a dictionary `s2total` that contains the total variance for each file.
+        """
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
 
@@ -79,7 +87,8 @@ class common_fitting_methods:
 
         pi = reflectance_data.prediction_indices
         meas = reflectance_data.average
-        r0 = self.helios.nominal_reflectance # nominal clean reflectance
+        # r0 = self.helios.nominal_reflectance # nominal clean reflectance # Commented since r0 is not always 0.95
+        
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs,reflectance_data)
@@ -90,6 +99,7 @@ class common_fitting_methods:
         sf = self.helios.soiling_factor
         files = list(sf.keys())
         for f in files:
+            r0 = reflectance_data.rho0[f] # Added here since initial cleanliness can change for each mirror
             rho_prediction = r0*sf[f][:,pi[f]].transpose()
             sse += np.sum( (rho_prediction -meas[f] )**2 )
         return sse  
