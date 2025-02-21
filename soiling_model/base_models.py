@@ -422,7 +422,7 @@ class physical_base(soiling_base):
         else:
             ax1 = ax
 
-        title = f''' 
+        title = rf''' 
                         Area loss rate for given dust distribution at acceptance angle {acceptance_angle*1e3:.2f} mrad,
                         wind_speed= {wind_speed:.1f} m/s, air_temperature={air_temp:.1f} C
                         (total area loss is {dummy_model.helios.delta_soiled_area[0][0,0]:.2e} $m^2$/($s\cdot m^2$))
@@ -610,7 +610,7 @@ class simulation_inputs:
             weather = pd.read_excel(file, 
                                     sheet_name="Weather", 
                                     parse_dates=True, 
-                                    date_parser=lambda x: pd.to_datetime(x, format='%Y-%m-%d %H:%M:%S')
+                                    date_format='%Y-%m-%d %H:%M:%S'
                                     )
             # Find time column
             time_cols = ['Time', 'time', 'tmsmp', 'Timestamp', 'timestamp']
@@ -786,7 +786,7 @@ class dust:
             pdfM = self.pdfM[ff]
 
             color = 'tab:red'
-            ax1[ff,0].set_xlabel("D [$\mu$m]")
+            ax1[ff,0].set_xlabel(r"D [$\mu$m]")
             ax1[ff,0].set_ylabel(r'$\frac{dN [cm^{{-3}} ] }{dLog(D \;[\mu m])}$', color=color,size=20)
             ax1[ff,0].plot(D_dust,pdfN, color=color)
             ax1[ff,0].tick_params(axis='y', labelcolor=color)
@@ -815,7 +815,7 @@ class dust:
             pdfA = self.pdfA[ii]
 
             color = 'black'
-            ax1[ii,0].set_xlabel("D [$\mu$m]")
+            ax1[ii,0].set_xlabel(r"D [$\mu$m]")
             ax1[ii,0].set_ylabel(r'$\frac{dA [m^2/m^3] }{dLog(D \;[\mu m])}$', color=color,size=20)
             ax1[ii,0].plot(D_dust,pdfA, color=color)
             ax1[ii,0].tick_params(axis='y', labelcolor=color)
@@ -1381,11 +1381,11 @@ class reflectance_measurements:
             reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],
                                                          sheet_name="Reflectance_Average", 
                                                          parse_dates=True, 
-                                                         date_parser=lambda x: pd.to_datetime(x, format='%Y-%m-%d %H:%M:%S')),\
+                                                         date_format='%Y-%m-%d %H:%M:%S'),\
                 "Sigma": pd.read_excel(reflectance_files[ii],
                                        sheet_name="Reflectance_Sigma", 
                                        parse_dates=True, 
-                                       date_parser=lambda x: pd.to_datetime(x, format='%Y-%m-%d %H:%M:%S'))}
+                                       date_format='%Y-%m-%d %H:%M:%S')}
 
             time_column = next((col for col in reflectance_data['Average'].columns if col.lower() in ['time', 'timestamp']), None)
             if time_column is not None:
