@@ -51,9 +51,9 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
     tilts = list(np.unique(mod.helios.tilt[ii]) for ii,e in enumerate(exps))
 
     if plot_rh:
-        fig,ax = plt.subplots(nrows=len(tilts)+2,ncols=len(exps),figsize=figsize,sharex='col')
+        fig,ax = plt.subplots(nrows=max(len(item) for item in tilts)+2,ncols=len(exps),figsize=figsize,sharex='col')
     else:
-        fig,ax = plt.subplots(nrows=len(tilts)+1,ncols=len(exps),figsize=figsize,sharex='col')
+        fig,ax = plt.subplots(nrows=max(len(item) for item in tilts)+1,ncols=len(exps),figsize=figsize,sharex='col')
         
     ws_max = max([max(sdat.wind_speed[f]) for f in exps]) # max wind speed for setting y-axes
     dust_max = max([max(sdat.dust_concentration[f]) for f in exps]) # max dust concentration for setting y-axes
@@ -67,7 +67,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
     elif any("yadnarie".lower() in value.lower() for value in sdat.file_name.values()):
         colors = {'NE':'blue','SE':'red','SW':'green','NW':'magenta','N/A':'blue'}
     else:
-        colors = {'NE':'blue','SE':'red','SW':'green','NW':'magenta','N/A':'blue'}
+        colors = {'N':'blue','E':'red','S':'green','W':'magenta','N/A':'blue'}
     
     ref_output = {}
     for ii,e in enumerate(exps):
@@ -76,10 +76,10 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             tr = rdat.times[e]
             tr = (tr-tr[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
             
-            idx, = np.where(rdat.tilts[e][:,0] == t)
-            idxs, = np.where(mod.helios.tilt[e][:,0] == t)
+            idx, = np.where(rdat.tilts[e][:,-1] == t)           # take the last element since in one dataset a mirror is initially "virtually" placed vertically to avoid soiling (data collection started later)
+            idxs, = np.where(mod.helios.tilt[e][:,-1] == t)     # take the last element since in one dataset a mirror is initially "virtually" placed vertically to avoid soiling (data collection started later)
 
-            if not any(rdat.tilts[e][:,0] == t):
+            if not any(rdat.tilts[e][:,-1] == t):               # take the last element since in one dataset a mirror is initially "virtually" placed vertically to avoid soiling (data collection started later)
                 print('Tilt Not Found')
                 continue
 
@@ -102,10 +102,11 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                 s = rdat.sigma_of_the_mean[e][:,kk].squeeze()
                 m += (1-m[0]) # shift up so that all start at 1.0 for visual comparison
                 error_two_sigma = 1.96*s
-
+                
                 color = colors[orientation[ii][kk]]
                 if np.ndim(ax) == 1:
                     ax = np.vstack(ax)  # create a fictious 2D array with only one column
+                ax[jj,ii].errorbar(tr,m,yerr=error_two_sigma,label=f'Orientation {orientation[ii][kk]}',color=color)
                 
                 if (e in train_experiments) and \
                     (rdat.mirror_names[e][kk] in train_mirrors):
@@ -216,7 +217,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
 
     for ii, row in enumerate(ax):
         for jj, a in enumerate(row):
-            if ii < len(tilts):
+            if ii < max(len(item) for item in tilts):
                 if yticks is None:
                     a.set_ylim((0.85, 1.01))
                     a.set_yticks((0.85, 0.90, 0.95, 1.0))
@@ -259,7 +260,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             unique_labels.append(label)  # Add unique label
             unique_handles.append(handle)  # Add corresponding handle
 
-    fig.legend(unique_handles,unique_labels,ncol=num_legend_cols,
+    fig.legend(unique_handles,unique_labels,ncol=num_legend_cols,fontsize=lgd_size,
                bbox_to_anchor=(0.9025+legend_shift[0],1.025+legend_shift[1]),bbox_transform=fig.transFigure)
     fig.subplots_adjust(wspace=0.1, hspace=0.3)
     fig.tight_layout()
