@@ -265,7 +265,7 @@ class common_fitting_methods:
     def plot_soiling_factor(self,simulation_inputs,posterior_predictive_distribution_samples=None,
                             reflectance_data=None,figsize=None,reflectance_std='measurements',
                             save_path=None,fig_title=None,return_handles=False,
-                            repeat_y_labels=True,orientation_strings=None):
+                            repeat_y_labels=True,orientation_strings=None,names_mir_train=None):
         """
         Plots the soiling factor over time for a set of simulation inputs and reflectance data.
         
@@ -333,6 +333,9 @@ class common_fitting_methods:
                 
                 if orientation_strings is not None:
                     tilt_str += ", Orientation: "+orientation_strings[ii][jj]
+                    # u_idx = names_mir_train[0].find('_')
+                    # tilt_str += ", Orientation: " + names_mir_train[0][:u_idx].replace('O','')
+
 
                 # get the axis handles
                 if N_experiments == 1:
@@ -370,9 +373,9 @@ class common_fitting_methods:
 
                     tilt = reflectance_data.tilts[f][jj]
                     if all(tilt==tilt[0]):
-                        a.set_title(tilt_str.format(tilt[0]))
+                        a.set_title(tilt_str.format(tilt[0]),fontsize=20)
                     else:
-                        a.set_title(tilt_str.format(tilt.mean())+" (average)")
+                        a.set_title(tilt_str.format(tilt.mean())+" (average)",fontsize=20)
                 else: # predictions are from clean
                     r0 = self.helios.nominal_reflectance
                     if samples == None: 
@@ -385,9 +388,9 @@ class common_fitting_methods:
                     
                     tilt = self.helios.tilt[f][jj,:]
                     if all(tilt==tilt[0]):
-                        a.set_title(tilt_str.format(tilt[0]))            
+                        a.set_title(tilt_str.format(tilt[0]),fontsize=20)            
                     else:
-                        a.set_title(tilt_str.format(tilt.mean())+" (average)")
+                        a.set_title(tilt_str.format(tilt.mean())+" (average)",fontsize=20)
 
                 if samples==None and len(self.helios.soiling_factor_prediction_variance)>0: # add +/- 2 sigma limits to the predictions, if sigma_dep is set
                     # var_predict = self.helios.delta_soiled_area_variance[f][jj,:]
@@ -425,7 +428,7 @@ class common_fitting_methods:
                 except:
                     mean_predictions[f][jj,:] = ym
             
-            am.legend()
+            am.legend(fontsize = 16)
             label_str = dust_type + r" (mean = {0:.2f} $\mu g$/$m^3$)" 
             a2.plot(ts,dust_conc,label=label_str.format(dust_conc.mean()), color='blue')
             a2.xaxis.set_major_locator(mdates.DayLocator(interval=1)) # sets x ticks to day interval
@@ -434,7 +437,7 @@ class common_fitting_methods:
             a2.tick_params(axis ='y', labelcolor = 'blue')
 
             a2a = a2.twinx()
-            p = a2a.plot(ts,ws,color='green',label="Wind Speed ({0:.2f} m/s)".format(ws.mean()))
+            p = a2a.plot(ts,ws,color='green',label="Wind Speed (mean = {0:.2f} m/s)".format(ws.mean()))
             ax_wind.append(a2a)
             a2a.tick_params(axis ='y', labelcolor = 'green')
             a2a.set_ylim((0,ws_max))
@@ -450,7 +453,7 @@ class common_fitting_methods:
             else:
                 a2a.set_yticklabels([]) 
             
-            a2.set_title(label_str.format(dust_conc.mean())+" \n, Wind Speed ({0:.2f} m/s)".format(ws.mean()),fontsize=10)
+            a2.set_title(label_str.format(dust_conc.mean())+", \n Wind Speed (mean = {0:.2f} m/s)".format(ws.mean()),fontsize=20)
         
         if N_experiments > 1:
 
@@ -509,14 +512,17 @@ class semi_physical(smb.physical_base,common_fitting_methods):
         _print_if("Setting tilts for "+str(N_experiments)+" experiments",verbose)
         helios = self.helios
         helios.tilt = {f: None for f in files} # clear the existing tilts
-        helios.acceptance_angles = {f: None for f in files} # clear the existing tilts
+        helios.acceptance_angles = {f: None for f in files} # clear the existing acceptance angles
         for ii in range(N_experiments):
             f = files[ii]
-            tilts = ref_dat.tilts[f]
+            # start_idx = ref_dat.prediction_indices[f][0]        # Define the start index
+            # end_idx = ref_dat.prediction_indices[f][-1]         # Define the start last index
+            # tilts = ref_dat.tilts[f][:, start_idx:end_idx + 1]  # Extract the subset of tilts (end_idx + 1 include the last index)
+            tilts = ref_dat.tilts[f] # THIS CANNOT MANAGE THE TRANSFORMATION OF SIM_IN WITH DAILY AVERAGE WHEN CHANGING START TIME (IF APPLIED AT THE BEGINNING)
             N_times = len(sim_in.time[f])
             N_helios = tilts.shape[0]
             self.helios.acceptance_angles[f] = [ref_dat.reflectometer_acceptance_angle[ii]]*N_helios
-            self.helios.extinction_weighting[f] = [] # reset extinction weighting since heliostats are "new"
+            self.helios.extinction_weighting[f] = [] # reset extinction weighting since heliostats are "new" - WHY?? THIS DEPENDS ONLY ON DUST! NOT?
             
             helios.tilt[f] = np.zeros((0,N_times))
             for jj in range(N_helios):
@@ -681,7 +687,10 @@ class constant_mean_deposition(smb.constant_mean_base,common_fitting_methods):
         helios.acceptance_angles = {f: None for f in files} # clear the existing tilts
         for ii in range(N_experiments):
             f = files[ii]
-            tilts = ref_dat.tilts[f]
+            # start_idx = ref_dat.prediction_indices[f][0]        # Define the start index
+            # end_idx = ref_dat.prediction_indices[f][-1]         # Define the start last index
+            # tilts = ref_dat.tilts[f][:, start_idx:end_idx + 1]  # Extract the subset of tilts (end_idx + 1 include the last index)
+            tilts = ref_dat.tilts[f] # THIS COULD NOT MANAGE THE TRANSFORMATION OF SIM_IN WITH DAILY AVERAGE WHEN CHANGING START TIME
             N_times = len(sim_in.time[f])
             N_helios = tilts.shape[0]
             self.helios.acceptance_angles[f] = [ref_dat.reflectometer_acceptance_angle[ii]]*N_helios

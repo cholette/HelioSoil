@@ -8,6 +8,7 @@ from copy import deepcopy
 from openpyxl import load_workbook
 import os
 import miepython
+from collections import defaultdict
 
 def _print_if(s,verbose):
     # Helper function to control level of output display.
@@ -40,7 +41,7 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
     if clean_interval < min_clean_interval:
         clean_interval = min_clean_interval
         n_cleans = int(np.floor(T_days/clean_interval))
-        print("Warning: Cannot clean that many times with "+str(n_trucks)+" crews. Setting number of cleans = "+str(n_cleans))
+        print("Warning: Cannot clean that many times. Setting number of cleans = "+str(n_cleans))
 
     # evenly space cleaning ends
     clean_ends = np.linspace(0,n_hours-1,num=n_cleans+1,dtype=int)
@@ -70,7 +71,7 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
                 cleans[0:idx0,jj] = 1
     return cleans
 
-def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12)):
+def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12),lgd_label=None,lgd_size = 15):
     """
     Plot the experiment data, including reflectance, dust concentration, rain intensity, wind speed, and relative humidity.
     
@@ -89,26 +90,41 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
 
     fig,ax = plt.subplots(nrows=5,sharex=True,figsize=figsize)
     # fmt = r"${0:s}^\circ$"
-    fmt = "${0:s}$"
+    # fmt = r'${0:s}$'
     ave = reflect_data.average[f]
     t = reflect_data.times[f]
     std = reflect_data.sigma[f]
-    names = ["M"+str(ii+1) for ii in range(ave.shape[1])]
+    if lgd_label == None:
+        names = ["M"+str(ii+1) for ii in range(ave.shape[1])]
+    else:
+        names = lgd_label
+    # for ii in range(ave.shape[1]):
+    #     # remove NaNs
+    #     ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=(names[ii][0:5]),marker='o',capsize=4.0)
     for ii in range(ave.shape[1]):
-        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=fmt.format(names[ii]),marker='o',capsize=4.0)
+        # remove NaNs for irregular data measurements
+        valid_indices = ~np.isnan(ave[:,ii])
+        t_valid = t[valid_indices].squeeze()
+        ave_valid = ave[valid_indices,ii].squeeze()
+        std_valid = std[valid_indices,ii].squeeze()
+        ax[0].errorbar(t_valid,ave_valid,yerr=1.96*std_valid,label=(names[ii][0:5]),marker='o',capsize=4.0)
 
     ax[0].grid(True) 
     label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data.reflectometer_incidence_angle[f]) 
     ax[0].set_ylabel(label_str)
-    ax[0].legend()
+    ax[0].legend(fontsize=lgd_size,ncol=len(ave)//2)
 
     ax[1].plot(sim_data.time[f],sim_data.dust_concentration[f],color='brown',label="measurements")
-    ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = "Average")
+    # ax[1].plot(sim_data.hours[f],sim_data.hourly_dust_avg[f],color='black',ls='--',label="hourly")
+    ax[1].plot(sim_data.days[f],sim_data.daily_dust_avg[f],color='black',ls='--',label="daily")
+    ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = r"Average = {0:.2f}".format(sim_data.dust_concentration[f].mean()))
     label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data.dust_type[0])
-    ax[1].set_ylabel(label_str,color='brown')
+    ax[1].set_ylabel(label_str,color='brown',fontsize=20)
     ax[1].tick_params(axis='y', labelcolor='brown')
+    YL_dust = 3*sim_data.dust_concentration[f].mean()
+    ax[1].set_ylim((0,YL_dust))
     ax[1].grid(True)
-    ax[1].legend()
+    ax[1].legend(fontsize=lgd_size)
 
     # Rain intensity, if available
     if len(sim_data.rain_intensity)>0: # rain intensity is not an empty dict
@@ -124,17 +140,17 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
     ax[2].grid(True)
 
     ax[3].plot(sim_data.time[f],sim_data.wind_speed[f],color='green',label="measurements")
-    ax[3].axhline(y=sim_data.wind_speed[f].mean(),color='green',ls='--',label = "Average")
+    ax[3].axhline(y=sim_data.wind_speed[f].mean(),color='green',ls='--',label = r"Average = {0:.2f}".format(sim_data.wind_speed[f].mean()))
     label_str = r'Wind Speed [$m\,/\,s$]'
     ax[3].set_ylabel(label_str,color='green')
     ax[3].set_xlabel('Date')
     ax[3].tick_params(axis='y', labelcolor='green')
     ax[3].grid(True)
-    ax[3].legend()
+    ax[3].legend(fontsize=lgd_size)
 
     if len(sim_data.relative_humidity)>0: 
         ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='black',label="measurements")
-        ax[4].axhline(y=sim_data.relative_humidity[f].mean(),color='black',ls='--',label = "Average")
+        ax[4].axhline(y=sim_data.relative_humidity[f].mean(),color='black',ls='--',label = r"Average = {0:.2f}".format(sim_data.relative_humidity[f].mean()))
     else:
         rain_nan = np.nan*np.ones(sim_data.time[f].shape)
         ax[4].plot(sim_data.time[f],rain_nan)
@@ -144,7 +160,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
     ax[4].set_xlabel('Date')
     ax[4].tick_params(axis='y', labelcolor='black')
     ax[4].grid(True)
-    ax[4].legend()
+    ax[4].legend(fontsize=lgd_size)
     
     if len(sim_data.wind_direction)>0: 
         figwr,axwr = wind_rose(sim_data,f)
@@ -180,34 +196,54 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
     ref_dat = deepcopy(reflectance_data)
     files = sim_dat.time.keys()
 
+    # Ensure sim_dat has hourly_dust_avg and daily_dust_avg attributes
+    if not hasattr(sim_dat, 'hourly_dust_avg'):
+        sim_dat.hourly_dust_avg = {}
+        sim_dat.hours = {}
+    if not hasattr(sim_dat, 'daily_dust_avg'):
+        sim_dat.daily_dust_avg = {}
+        sim_dat.days = {}
+
     for f in files:
         if isinstance(trim_ranges,list):  
             assert isinstance(trim_ranges[f],list) or isinstance(trim_ranges[f],np.ndarray), "trim_ranges must be a list of lists or a list of 1D np.arrays"
-            lb = trim_ranges[f][0]
-            ub = trim_ranges[f][1]
+            lb = trim_ranges[f][0].astype('datetime64[m]') # astype ensure they are comparable
+            ub = trim_ranges[f][1].astype('datetime64[m]') # astype ensure they are comparable
         elif trim_ranges=="reflectance_data":
             assert ref_dat is not None, "Reflectance data must be supplied for trim_ranges==""reflectance_data"""
-            lb = np.min([ref_dat.times[f][0] for i in range(ref_dat.average[f].shape[1])])
-            ub = np.max([ref_dat.times[f][-1] for i in range(ref_dat.average[f].shape[1])])
+            lb = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][0].astype('datetime64[m]') # astype ensure they are comparable
+            ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][-1].astype('datetime64[m]') # astype ensure they are comparable        
         elif trim_ranges == "simulation_inputs":
-            lb = sim_dat.time[f].iloc[0]
-            ub = sim_dat.time[f].iloc[-1]
+            lb = sim_dat.time[f].values[0].astype('datetime64[m]') # astype ensure they are comparable
+            ub = sim_dat.time[f].values[-1].astype('datetime64[m]') # astype ensure they are comparable
         else:
             raise ValueError("""Value of trim_ranges not recognized. Must be a list of lists/np.array [lb,ub], """+\
                 """ "reflectance_data" or "simulation_inputs" """)
 
         # trim simulation data
-        mask = (sim_dat.time[f]>=lb) & (sim_dat.time[f]<=ub)
+        mask = (sim_dat.time[f]>=lb.astype('datetime64[ns]')) & (sim_dat.time[f]<=ub.astype('datetime64[ns]'))   # .astype('datetime64[ns]') guarantees compatibility with Pandas Timestamp
         if all(mask==0):
             raise ValueError(f"Provided date range of {lb} to {ub} for file {sim_dat.file_name[f]} excludes all data.")
             
         for var in weather_variables:
             if hasattr(sim_dat, var) and len(getattr(sim_dat, var)) > 0:
                 setattr(sim_dat, var, {**getattr(sim_dat, var), f: getattr(sim_dat, var)[f][mask]})
+        sim_dat.wind_speed_mov_avg[f] = sim_dat.wind_speed_mov_avg[f][mask]
+        sim_dat.dust_conc_mov_avg[f] = sim_dat.dust_conc_mov_avg[f][mask]
         
+        # Calculate hourly and daily averages of dust_concentration
+        dust_conc_temp = pd.Series(sim_dat.dust_concentration[f], index=pd.to_datetime(sim_dat.time[f]))
+        hourly_avg = dust_conc_temp.resample('h').mean()
+        daily_avg = dust_conc_temp.resample('D').mean()
+
+        sim_dat.hourly_dust_avg[f] = hourly_avg
+        sim_dat.daily_dust_avg[f] = daily_avg            
+        sim_dat.hours[f] = hourly_avg.index  # Store hourly timestamps
+        sim_dat.days[f] = daily_avg.index    # Store daily timestamps
+
         if reflectance_data is not None:
             # trim reflectance data
-            if len(ref_dat.tilts)>0:
+            if hasattr(ref_dat,"tilts") and len(ref_dat.tilts)>0:
                 ref_dat.tilts[f] = ref_dat.tilts[f][:,mask]
             mask = (ref_dat.times[f]>=lb) & (ref_dat.times[f]<=ub)
             ref_dat.times[f] = ref_dat.times[f][mask] 
@@ -219,14 +255,83 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
             ref_dat.prediction_times[f] = []
             time_grid = sim_dat.time[f].reset_index(drop=True)
             for m in ref_dat.times[f]:
-                ref_dat.prediction_indices[f].append(np.argmin(np.abs(m-time_grid)))        
-                ref_dat.prediction_times[f].append(time_grid.iloc[ref_dat.prediction_indices[f]])
-                ref_dat.rho0[f] = ref_dat.average[f][0,:]
+                ref_dat.prediction_indices[f].append(np.argmin(np.abs(m.astype('datetime64[ns]')-time_grid)))        # .astype('datetime64[ns]') guarantees compatibility with Numpy datetime64
+                # ref_dat.prediction_times[f].append(time_grid.iloc[ref_dat.prediction_indices[f]])
+                # ref_dat.rho0[f] = np.nanmax(ref_dat.average[f], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
+            ref_dat.prediction_times[f].extend(time_grid.iloc[ref_dat.prediction_indices[f]].tolist())
+            ref_dat.rho0[f] = np.nanmax(ref_dat.average[f], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
+            elapsed_time = (ref_dat.times[f][-1] - ref_dat.times[f][0]) / np.timedelta64(1, 'D')            # compute total time in days as a np.float64
+            ref_dat.soiling_rate[f] = (ref_dat.average[f][0]-ref_dat.average[f][-1])/elapsed_time*100       # compute soiling rates in p.p./day for each mirror
+            
+        sim_dat.time[f] = sim_dat.time[f].reset_index(drop=True) # reset indices to start at 0 to allow repeated iterations
+            
+                 
     
     return sim_dat,ref_dat
 
-def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,sheet_name=None,\
-    output_file_format="sample_{0:d}.xlsx",dt=np.timedelta64(3600,'s'),verbose=True):
+def daily_average(ref_dat,time_grids,dt=None):
+
+    # prediction indices and times
+    # tilts
+
+    ref_dat_new = deepcopy(ref_dat)
+    num_files = len(ref_dat.file_name)
+    for f in range(num_files):
+        num_mirrors = ref_dat.average[f].shape[1]
+        df = pd.DataFrame({"times":ref_dat.times[f],
+                           "day":ref_dat.times[f].astype('datetime64[D]')})
+        times = df.groupby('day')['times'].mean().values
+        # ref_dat_new.tilts[f] = [] # the averaging for the tilts needs to be done seperately
+        if dt is None:
+            ref_dat_new.times[f] = times
+        else:
+            ref_dat_new.times[f] = times.astype(f'datetime64[{int(dt[f])}s]')
+
+        num_times = len(times)
+        ref_dat_new.sigma[f] = np.zeros((num_times,num_mirrors))
+        ref_dat_new.average[f] = np.zeros((num_times,num_mirrors))
+        ref_dat_new.sigma_of_the_mean[f] = np.zeros((num_times,num_mirrors))
+        ref_dat_new.delta_ref[f] = np.zeros((num_times,num_mirrors))
+        ref_dat_new.soiling_rate[f] = np.zeros(ref_dat.rho0[f].shape)
+        for ii in range(num_mirrors):
+            df = pd.DataFrame( {"average":ref_dat.average[f][:,ii],
+                                "sigma": ref_dat.sigma[f][:,ii],
+                                "day":ref_dat.times[f].astype('datetime64[D]')
+                                })
+            
+            daily = df.groupby("day")
+            N = daily.count()['sigma'].values
+            sum_var = df.groupby('day')['sigma'].apply(lambda x: sum(x.dropna()**2)).values
+            ref_dat_new.sigma[f][:,ii] = np.sqrt(sum_var/N) # pooled variance
+            # ref_dat_new.sigma[f] = np.insert(ref_dat_new.sigma[f],0,ref_dat.sigma[f][0])
+            
+            ref_dat_new.sigma_of_the_mean[f][:,ii] = (ref_dat_new.sigma[f][:,ii] / 
+                                np.sqrt(ref_dat_new.number_of_measurements[f]))
+            # ref_dat_new.sigma_of_the_mean[f] = np.insert(ref_dat_new.sigma_of_the_mean[f],0,ref_dat.sigma_of_the_mean[f][0])
+
+            ref_dat_new.average[f][:,ii] = daily.mean().average.values
+            ref_dat_new.prediction_indices[f] = []
+            ref_dat_new.prediction_times[f] = []
+            
+            # handle case when time_grids is a pandas something
+            if isinstance(time_grids[f],(pd.Series,pd.DataFrame)):
+                tg = time_grids[f].values
+            else:
+                tg = deepcopy(time_grids[f])
+
+            for m in ref_dat_new.times[f]:
+                idx = np.argmin(np.abs(m-tg))
+                ref_dat_new.prediction_indices[f].append(idx)        
+            ref_dat_new.prediction_times[f].append(tg[ref_dat_new.prediction_indices[f]])
+        ref_dat_new.delta_ref[f] = np.vstack((np.zeros((1, ref_dat_new.average[f].shape[1])), -np.diff(ref_dat_new.average[f], axis=0)))  # compute reflectance loss between subsequent measurements (0 given to first timestamp)
+        elapsed_time = (ref_dat_new.times[f][-1] - ref_dat_new.times[f][0]) / np.timedelta64(1, 'D')            # compute total time in days as a np.float64
+        ref_dat_new.soiling_rate[f] = (ref_dat_new.average[f][0]-ref_dat_new.average[f][-1])/elapsed_time*100   # compute soiling rates in p.p./day for each mirror
+
+    return ref_dat_new
+
+def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sample_years=10,\
+                             sheet_name=None,output_file_format="sample_{0:d}.xlsx",\
+                             dt=np.timedelta64(3600,'s'),verbose=True):
 
     # load in historical data files into a single pandas dataframe
     df = pd.DataFrame()
@@ -389,7 +494,7 @@ def set_extinction_coefficients(destination_model,extinction_weights,file_inds):
                                 "those in destination_model.helios.tilt")
     return dm
 
-def get_training_data(d,file_start,time_to_remove_at_end=0):
+def get_training_data(d,file_start,time_to_remove_at_end=0,helios=False):
     """
     Get training data for a soiling model.
     
@@ -431,15 +536,20 @@ def get_training_data(d,file_start,time_to_remove_at_end=0):
         e = max(dates)
 
         e += np.timedelta64(1,'D') # since I'm appending midnight, need to use next day to get all data
-        e -= np.timedelta64(time_to_remove_at_end[ii],'h') # leave specified testing time at the end (in minutes)
+        e -= np.timedelta64(time_to_remove_at_end[ii],'h') # leave specified testing time at the end (in hours)
         training_intervals.append(np.array([s,e]))
 
     training_intervals = np.stack(training_intervals).astype('datetime64[m]')
 
     # get mirror names in each file
     mirror_names = [ [] for f in files]
-    for ii,f in enumerate(files):
-        mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Reflectance_Average").columns[1::])
+    if not helios:
+        for ii,f in enumerate(files):
+            mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Reflectance_Average").columns[1::])
+    else:
+        for ii,f in enumerate(files):
+            mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Heliostats_Ref").columns[1::])
+        
 
     # get mirror names that show up in all files
     common = []
@@ -453,15 +563,6 @@ def get_training_data(d,file_start,time_to_remove_at_end=0):
     return files,training_intervals,mirror_names,common
 
 def _parse_dust_str(dust_type):
-    """
-    Parse a dust type string into a standardized attribute name.
-    
-    Args:
-        dust_type (str): The dust type string, which must start with "TSP" or "PM".
-    
-    Returns:
-        str: The standardized attribute name for the dust type.
-    """
     assert dust_type.startswith(("TSP","PM")), "dust_type must be PMX, PMX.X or TSP"
     if dust_type.startswith("TSP"):
         attr = "TSP"
@@ -493,6 +594,213 @@ def wind_rose(simulation_data,exp_idx):
     wax.set_legend()
 
     return fig,wax
+
+def soiling_rates_summary(ref_data,sim_data,verbose=False):
+
+    soiling_rates = ref_data.soiling_rate
+    ave_data = ref_data.average
+
+    # Determine starting index based on file name
+    idx_start = 0
+    if any("augusta".lower() in value.lower() for value in sim_data.file_name.values()):
+        idx_start = 1  # For Port Augusta data
+    if any("mildura".lower() in value.lower() for value in sim_data.file_name.values()):
+        idx_start = 2  # For Mildura data
+
+    # Initialize a dictionary to store soiling rates by campaign
+    # soiling_rate_groups_by_campaign = {}
+    results = []  # List to store results for DataFrame
+
+    # Process each campaign
+    for campaign_id, rates in soiling_rates.items():
+        # Compute elapsed time
+        elapsed_time = (ref_data.times[campaign_id][-1]-ref_data.times[campaign_id][0]) / np.timedelta64(1, 'D')
+
+        # Extract campaign-specific tilts
+        tilts = np.squeeze(np.unique(ref_data.tilts[campaign_id], axis=1))
+
+        # Initialize a dictionary to store soiling rates for this campaign
+        soiling_rate_groups = defaultdict(list)
+        ave_groups = defaultdict(list)
+
+        # Collect rates grouped by tilt, and corresponding reflectance values
+        for tilt, rate, ave in zip(tilts[idx_start:], rates[idx_start:], ave_data[campaign_id].T[idx_start:]):
+            soiling_rate_groups[tilt].append(rate)
+            ave_groups[tilt].append(ave)
+
+        # Compute the average soiling rate for each tilt
+        campaign_averages_soiling = {
+            tilt: np.mean(rates) for tilt, rates in soiling_rate_groups.items()
+        }
+
+        # Compute the initial and final ave values for each tilt
+        for tilt, aves in ave_groups.items():
+            initial_ave = np.mean([array[0] for array in aves]) if aves else np.nan
+            final_ave = np.mean([array[-1] for array in aves]) if aves else np.nan
+            tot_loss = initial_ave - final_ave
+            avg_rate = campaign_averages_soiling.get(tilt, np.nan)
+            results.append([campaign_id, elapsed_time, tilt, initial_ave, final_ave, tot_loss, avg_rate])
+
+    # Create a DataFrame from the results
+    df_ref_data = pd.DataFrame(results, columns=["Campaign", "Elapsed Time (days)", "Tilt", "Initial Reflectance", "Final Reflectance", "Total Loss", "Soiling Rate"])
+
+# Display the results
+    if verbose:
+        print("\nAverage Soiling Rate and Initial/Final ave Values (By Campaign):")
+        for campaign_id in soiling_rates:
+            print(f"Campaign {campaign_id}:")
+            # Filter results for the current campaign
+            campaign_results = [res for res in results if res[0] == campaign_id]
+            
+            print("  Average Soiling Rates by Tilt:")
+            for res in campaign_results:
+                tilt = res[1]
+                avg_rate = res[2]
+                print(f"    Tilt {tilt}: {avg_rate:.2f}")
+            
+            print("  Initial and Final ave Values by Tilt:")
+            for res in campaign_results:
+                tilt = res[1]
+                initial_ave = res[3]
+                final_ave = res[4]
+                print(f"    Tilt {tilt}: Initial ave = {initial_ave*100:.1f}%, Final ave = {final_ave*100:.1f}%")
+
+    return df_ref_data
+
+def loss_table_from_sim(sim_res,sim_data):
+    table_data = []
+
+    # Iterate over campaigns and tilts in the simulation data
+    for (campaign_idx, tilt), y_data in sim_res.items():
+        # Extract time data for the current campaign
+        time_data = sim_data.time[campaign_idx]
+        
+        # # Ensure time_data and y_data lengths match
+        if len(time_data) != len(y_data):
+            raise ValueError(f"Time and Y data lengths do not match for campaign {campaign_idx}, tilt {tilt}.")
+        
+        # Calculate elapsed time in days
+        elapsed_time = (time_data[time_data.index[-1]] - time_data[0]) / np.timedelta64(1, 'D')
+        
+        # Calculate initial value, final value, total loss, and average daily loss
+        initial_value = y_data[0]
+        final_value = y_data[-1]
+        total_loss = initial_value - final_value
+        avg_daily_loss = total_loss / elapsed_time if elapsed_time > 0 else np.nan
+        
+        # Append the data to the table
+        table_data.append({
+            "Campaign": f"Campaign {campaign_idx + 1}",
+            "Elapsed Time (days)": elapsed_time,
+            "Tilt": tilt,
+            "Initial Value": initial_value,
+            "Final Value": final_value,
+            "Total Loss": total_loss,
+            "Average Daily Loss": avg_daily_loss
+        })
+
+    # Convert to DataFrame for easier handling and export
+    df_sim = pd.DataFrame(table_data)
+
+    # Save to CSV
+    # output_file = "loss_summary.csv"
+    # df_sim.to_csv(output_file, index=False)
+
+    # Display the DataFrame
+    # print(df_sim)
+
+    return df_sim
+
+def loss_hel_table_from_sim(sim_res_hel,sim_data):  # provide simulated reflectance losses for each heliostats
+    table_data = []
+
+    # Iterate over campaigns and tilts in the simulation data
+    for campaign_idx in range(len(sim_res_hel)):
+        
+        for hel, y_data in sim_res_hel[campaign_idx].items():
+           
+            # Calculate elapsed time in days
+            elapsed_time = (y_data['Time'][-1]-y_data['Time'][0]).astype('timedelta64[s]')
+            elapsed_time = pd.Timedelta(elapsed_time)/ np.timedelta64(1, 'D')
+            
+            # Calculate initial value, final value, total loss, and average daily loss
+            initial_value = y_data['Reflectance'][0]
+            final_value = y_data['Reflectance'][-1]
+            total_loss = initial_value - final_value
+            avg_daily_loss = total_loss / elapsed_time if elapsed_time > 0 else np.nan
+            
+            # Append the data to the table
+            table_data.append({
+                "Campaign": f"Campaign {campaign_idx + 1}",
+                "Elapsed Time (days)": elapsed_time,
+                "Heliostat": hel,
+                "Initial Value": initial_value,
+                "Final Value": final_value,
+                "Total Loss": total_loss,
+                "Average Daily Loss": avg_daily_loss
+            })
+
+    # Convert to DataFrame for easier handling and export
+    df_sim_hel = pd.DataFrame(table_data)
+
+    # Save to CSV
+    # output_file = "loss_summary.csv"
+    # df_sim.to_csv(output_file, index=False)
+
+    # Display the DataFrame
+    # print(df_sim)
+
+    return df_sim_hel
+
+# # EXTRACT VALUES FROM PLOT (NEED FIXING!)
+def loss_table_from_plot(ax):
+    table_data = []
+
+    # Iterate over rows (tilts) and columns (campaigns)
+    for campaign_idx, row in enumerate(ax.T):  # Transpose to iterate over columns (campaigns)
+        for _ , subplot in enumerate(row):  # Iterate over individual subplots (tilts)
+            # Check if the word "Tilt" is in the title of the subplot
+            if "Tilt" in subplot.get_title():
+                lines = subplot.get_lines()
+                
+                # Process only the first line (Mean)
+                line = lines[0]  # The first line is the mean line
+                x_data = line.get_xdata()
+                y_data = line.get_ydata()
+                
+                # Calculate metrics
+                initial_value = y_data[0]         # Initial value
+                final_value = y_data[-1]          # Final value
+                elapsed_time = x_data[-1] - x_data[0]  # Time difference
+                
+                # Ensure no division by zero
+                if elapsed_time > 0:
+                    avg_daily_loss = (initial_value - final_value) / elapsed_time
+                else:
+                    avg_daily_loss = np.nan  # Handle edge case for no elapsed time
+                
+                # Add to the table
+                table_data.append({
+                    "Campaign": f"Campaign {campaign_idx + 1}",
+                    "Tilt": subplot.get_title().split(" ")[-1],  # Extract the tilt from the title
+                    "Line Type": "Mean",
+                    "Initial Value": initial_value,
+                    "Final Value": final_value,
+                    "Elapsed Time (days)": elapsed_time,
+                    "Total Loss": initial_value - final_value,
+                    "Average Daily Loss": avg_daily_loss
+                })
+
+    # Convert to DataFrame for easier handling and export
+    df_plot = pd.DataFrame(table_data)
+
+    # # Save to CSV
+    # df_plot.to_csv(cm_save_file+"loss_summary.csv", index=False)
+
+    # Display the DataFrame
+    # print(df_plot)
+
+    return df_plot
 
 class DustDistribution():
     """
@@ -571,6 +879,7 @@ class DustDistribution():
         lower_bound_sig = [0+tol]*N
         lb = lower_bound_w + lower_bound_mu + lower_bound_sig # join lists
         ub = [np.inf]*len(lb)
+
         bnds = spo.Bounds(lb=lb,ub=ub,keep_feasible=True)
         res = spo.minimize(fun,params0,bounds=bnds,tol=1e-8)
 
@@ -736,3 +1045,5 @@ class DustDistribution():
         
         wb.save(filename=file_name)
         wb.close()
+
+

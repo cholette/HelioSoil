@@ -9,12 +9,12 @@ import soiling_model.fitting as smf
 # %% Plot for the paper
 plt.rc('xtick', labelsize=16)
 plt.rc('ytick', labelsize=16)
-plt.rc('legend', fontsize=10)
+plt.rc('legend', fontsize=14)
 plt.rc('axes',labelsize=18)
 
 def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                    rows_with_legend=[3],num_legend_cols=6,legend_shift=(0,0),plot_rh=True,
-                   yticks=None):
+                   yticks=None,figsize=(12,15),lgd_size=10):
     """
     Plot reflectance data and model predictions for a set of experiments and mirror tilts.
     
@@ -38,6 +38,10 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
     Returns:
         tuple: The figure and axis objects for the generated plot.
     """
+
+    if any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
+        plot_rh = False  # the RH sensor is broken since the beginning of Port Augusta experiments
+
     mod.predict_soiling_factor(sdat,rho0=rdat.rho0) # ensure predictions are fresh
     r0 = mod.helios.nominal_reflectance
 
@@ -45,9 +49,9 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
     tilts = np.unique(mod.helios.tilt[0])
 
     if plot_rh:
-        fig,ax = plt.subplots(nrows=len(tilts)+2,ncols=len(exps),figsize=(12,15),sharex='col')
+        fig,ax = plt.subplots(nrows=len(tilts)+2,ncols=len(exps),figsize=figsize,sharex='col')
     else:
-        fig,ax = plt.subplots(nrows=len(tilts)+1,ncols=len(exps),figsize=(12,15),sharex='col')
+        fig,ax = plt.subplots(nrows=len(tilts)+1,ncols=len(exps),figsize=figsize,sharex='col')
         
     ws_max = max([max(sdat.wind_speed[f]) for f in exps]) # max wind speed for setting y-axes
     dust_max = max([max(sdat.dust_concentration[f]) for f in exps]) # max dust concentration for setting y-axes
@@ -56,19 +60,39 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
         hum_max = max([max(sdat.relative_humidity[f]) for f in exps]) # max relative humidity for setting y-axes
 
     # Define color for each orientation 
-    colors = {'N':'blue','S':'red','E':'green','W':'magenta','N/A':'blue'}
+    if any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
+        colors = {'NW':'blue','SE':'red'}
+    elif any("yadnarie".lower() in value.lower() for value in sdat.file_name.values()):
+        colors = {'NE':'blue','SE':'red','SW':'green','NW':'magenta','N/A':'blue'}
+    else:
+        colors = {'N':'blue','S':'red','E':'green','W':'magenta','N/A':'blue'}
+    
+    ref_output = {}
     for ii,e in enumerate(exps):
         for jj,t in enumerate(tilts):
             tr = rdat.times[e]
             tr = (tr-tr[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
-            idx, = np.where(rdat.tilts[e][:,0] == t)
-
-            idxs, = np.where(mod.helios.tilt[e][:,0] == t)
-            idxs = idxs[0] # take first since all predictions are the same
             
-            ts = sdat.time[e]
-            start_ts = ts.index[0]
-            ts = (ts-ts[start_ts]).values.astype('timedelta64[s]').astype(np.float64)/3600/24
+            idx, = np.where(rdat.tilts[e][:,0] == t)
+            idxs, = np.where(mod.helios.tilt[e][:,0] == t)
+
+            if not any(rdat.tilts[e][:,0] == t):
+                print('Tilt Not Found')
+                continue
+
+            if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
+                idx = idx[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
+            if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
+                idxs = idxs[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
+                        
+            if t==0 and any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
+                idx = idx[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
+            if t==0 and any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
+                idxs = idxs[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
+            
+            idxs = idxs[0] # take first since all predictions are the same
+            ts = sdat.time[e].values[0:rdat.prediction_indices[e][-1]+1]
+            ts = (ts-ts[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
             
             for kk in idx: # reflectance data
                 m = rdat.average[e][:,kk].squeeze().copy()
@@ -77,6 +101,8 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                 error_two_sigma = 1.96*s
 
                 color = colors[orientation[ii][kk]]
+                if np.ndim(ax) == 1:
+                    ax = np.vstack(ax)  # create a fictious 2D array with only one column
                 ax[jj,ii].errorbar(tr,m,yerr=error_two_sigma,label=f'Orientation {orientation[ii][kk]}',color=color)
 
                 if (e in train_experiments) and \
@@ -87,13 +113,14 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                     a.patch.set_facecolor(color='yellow')
                     a.patch.set_alpha(0.2)
             
-            
-            ym = r0*mod.helios.soiling_factor[e][idxs,:] # ensure columns are time index
+            ym = r0*mod.helios.soiling_factor[e][idxs,0:rdat.prediction_indices[e][-1]+1] # ensure columns are time index # +1 is required to include the last time point (slicing would exclude it)
+            # ref_output[e][jj] = ym
+            ref_output[(e, int(t))] = ym.copy()
             if ym.ndim == 1:
                 ym += (1.0-ym[0])
             else:
                 ym += (1.0-ym[:,0])
-            var_predict = mod.helios.soiling_factor_prediction_variance[e][idxs,:]
+            var_predict = mod.helios.soiling_factor_prediction_variance[e][idxs,0:rdat.prediction_indices[e][-1]+1]
             sigma_predict = r0*np.sqrt(var_predict)
             Lp = ym - 1.96*sigma_predict
             Up = ym + 1.96*sigma_predict
@@ -102,34 +129,241 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             ax[jj,ii].grid('on')
 
             if jj==0:
-                ax[jj,ii].set_title(f"Campaign {e}, Tilt: {t:.0f}"+r"$^{\circ}$")
+                ax[jj,ii].set_title(f"Campaign {e+1}, Tilt: {t:.0f}"+r"$^{\circ}$")
             else:
                 ax[jj,ii].set_title(f"Tilt: {t:.0f}"+r"$^{\circ}$")
             
     
-        dust_conc = sdat.dust_concentration[e]
-        ws = sdat.wind_speed[e]
-        dust_type = sdat.dust_type[e]
+        new_var = sdat.dust_concentration[e][0:rdat.prediction_indices[e][-1]+1]
+        dust_conc = new_var
+        ws = sdat.wind_speed[e][0:rdat.prediction_indices[e][-1]+1]
+        dust_type = sdat.dust_type[e][0:rdat.prediction_indices[e][-1]+1]
         if plot_rh:
             a2 = ax[-2,ii]
         else:
             a2 = ax[-1,ii]
 
-        a2.plot(ts,dust_conc, color='black')
-        a2.tick_params(axis ='y', labelcolor = 'black')
+        a2.plot(ts,dust_conc, color='brown')
+        a2.tick_params(axis ='y', labelcolor = 'brown')
         a2.set_ylim((0,1.01*dust_max))
 
         a2a = a2.twinx()
         p = a2a.plot(ts,ws,color='green')
+        a2a.tick_params(axis ='y', labelcolor = 'green')
+        #a2a.set_ylim((0,1.01*ws_max))
+        a2a.set_ylim((0,30))
+        #a2a.set_yticks((0,ws_max/2,ws_max))
+        a2a.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+
+        if plot_rh:
+            # THE LINE BELOW AVOID THE LAST ELEMENT (SO IT HAS THE SAME DIMENSION)
+            rel_hum = sdat.relative_humidity[e][0:rdat.prediction_indices[e][-1]+1]
+            a3 = ax[-1,ii]
+            a3.plot(ts,rel_hum, color='blue')
+            a3.tick_params(axis ='y', labelcolor = 'blue')
+            a3.set_ylim((0,1.01*hum_max))
+        
+        if ii==0:
+            fs = r"{0:s} $\frac{{\mu g}}{{m^3}}$"
+            a2.set_ylabel(fs.format(dust_type),color='brown')
+
+            if plot_rh:
+                a3.set_ylabel("Relative \nHumidity (%)",color='blue')
+        else:
+            a2.set_yticklabels([])
+
+        if ii==len(exps)-1:
+            fs = r"{0:s} $\frac{{\mu g}}{{m^3}}$"
+            a2a.set_ylabel('Wind Speed (m/s)', color='green')
+
+    # for ii,row in enumerate(ax):
+        # for jj,a in enumerate(row):
+        #     if ii < len(tilts):
+        #         if yticks is None:
+        #             a.set_ylim((0.85,1.01))
+        #             a.set_yticks((0.85,0.90,0.95,1.0))
+        #         else:
+        #             a.set_ylim((min(yticks),max(yticks)))
+        #             a.set_yticks(yticks)
+
+        #         if jj > 0:
+        #             a.set_yticklabels([])
+        #         if (ii in rows_with_legend) and (jj==0):
+        #             ang = rdat.reflectometer_incidence_angle[jj]
+        #             a.set_ylabel(r"Normalized reflectance $\rho(0)-\rho(t)$ at "+str(ang)+"$^{{\circ}}$")
+        #         if (ii in rows_with_legend) and (jj==0):
+        #             # a.legend(loc='center',ncol=2,bbox_to_anchor=(0.25,0.5))
+        #             h_legend,labels_legend = a.get_legend_handles_labels()
+        #     elif ii == len(tilts):
+        #         a.set_yticks((0,150,300))
+        #     else:
+        #         a.set_yticks((0,50,100))
+                
+            
+        #     if ii == ax.shape[0]-1:
+        #         a.set_xlabel('Days')
+        #     a.grid('on')
+
+    handles_leg = []
+    labels_leg = []
+
+    for ii, row in enumerate(ax):
+        for jj, a in enumerate(row):
+            if ii < len(tilts):
+                if yticks is None:
+                    a.set_ylim((0.85, 1.01))
+                    a.set_yticks((0.85, 0.90, 0.95, 1.0))
+                else:
+                    a.set_ylim((min(yticks), max(yticks)))
+                    a.set_yticks(yticks)
+
+                if jj > 0:
+                    a.set_yticklabels([])
+
+                if ii in rows_with_legend and jj == 0:
+                    ang = rdat.reflectometer_incidence_angle[jj]
+                    a.set_ylabel(r"Normalized reflectance $\rho(0)-\rho(t)$ at " + str(ang) + "$^{{\circ}}$")
+
+                # Get legend handles and labels
+                hs, ls = a.get_legend_handles_labels()
+                handles_leg.extend(hs)
+                labels_leg.extend(ls)
+
+                # # Remove duplicates from the legend
+                # for handle, label in zip(h_legend, labels_legend):
+                #     if label not in seen_labels:
+                #         seen_labels.add(label)
+                #     else:
+                #         # Remove the duplicate handle from the list
+                #         h_legend.remove(handle)
+                #         labels_legend.remove(label)
+
+            elif ii == len(tilts):
+                a.set_yticks((0, 150, 300))
+            else:
+                a.set_yticks((0, 50, 100))
+    
+    # Remove duplicates by filtering unique labels and keeping corresponding handles
+    unique_labels = []
+    unique_handles = []
+
+    for handle, label in zip(handles_leg, labels_leg):
+        if label not in unique_labels:  # Check if the label is already in the unique list
+            unique_labels.append(label)  # Add unique label
+            unique_handles.append(handle)  # Add corresponding handle
+
+    fig.legend(unique_handles,unique_labels,ncol=num_legend_cols,
+               bbox_to_anchor=(0.9025+legend_shift[0],1.025+legend_shift[1]),bbox_transform=fig.transFigure)
+    fig.subplots_adjust(wspace=0.1, hspace=0.3)
+    fig.tight_layout()
+    return fig,ax,ref_output
+
+def plot_for_heliostats(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
+                   rows_with_legend=[3],num_legend_cols=6,legend_shift=(0,0),plot_rh=True,
+                   yticks=None,figsize=None,lgd_size=10):
+    
+    mod.predict_soiling_factor(sdat,rho0=rdat.rho0) # ensure predictions are fresh
+    r0 = mod.helios.nominal_reflectance
+
+    exps = list(mod.helios.soiling_factor.keys())
+    # tilts = np.unique(mod.helios.tilt[0]) # this is for the mirror rig with fixed tilt
+    hels = rdat.mirror_names[0] # [0] assuming all campaigns uses the same heliostats, otherwise modify here!
+
+    if plot_rh:
+        fig,ax = plt.subplots(nrows=len(hels)+2,ncols=len(exps),figsize=(12,15),sharex='col')
+    else:
+        fig,ax = plt.subplots(nrows=len(hels)+1,ncols=len(exps),figsize=(12,15),sharex='col')
+        
+    ws_max = max([max(sdat.wind_speed[f]) for f in exps]) # max wind speed for setting y-axes
+    dust_max = max([max(sdat.dust_concentration[f]) for f in exps]) # max dust concentration for setting y-axes
+
+    if plot_rh:
+        hum_max = max([max(sdat.relative_humidity[f]) for f in exps]) # max relative humidity for setting y-axes
+
+    ref_output = []
+    for ii,e in enumerate(exps):
+        exp_output = {}
+        for jj,t in enumerate(hels):
+            tr = rdat.times[e]
+            tr_day = (tr-tr[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
+            
+            ts = sdat.time[e].values[0:rdat.prediction_indices[e][-1]+1]
+            ts_day = (ts-ts[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
+            
+            m = rdat.average[e][:,jj].squeeze().copy()
+            s = rdat.sigma_of_the_mean[e][:,jj].squeeze()
+
+            valid_idx = np.where(~np.isnan(m))[0]
+            if np.isnan(m).any():
+                tr = tr[valid_idx]
+                m = m[valid_idx]
+                s = s[valid_idx]  
+                tr_day = tr_day[valid_idx]
+                ts_day = ts_day[(ts>=tr[0]) & (ts<=tr[-1])]
+                ts = ts[(ts>=tr[0]) & (ts<=tr[-1])]
+                
+
+            m += (1-m[0]) # shift up so that all start at 1.0 for visual comparison
+            error_two_sigma = 1.96*s
+
+            if np.ndim(ax) == 1:
+                ax = np.vstack(ax)  # create a fictious 2D array with only one column
+            ax[jj,ii].errorbar(tr_day,m,yerr=error_two_sigma)
+
+            ym = r0*mod.helios.soiling_factor[e][jj,rdat.prediction_indices[e][valid_idx[0]]:rdat.prediction_indices[e][-1]+1] # simulate reflectance losses between valid prediction indices
+            # THE BELOW SIMPLY RESETS TO 0 THE CONFIDENCE INTERVAL IF A MEASUREMENT IS PERFORMED LATER - CHECK IF IT WORKS AS INTENDED BY MIKE
+            var_predict = mod.helios.soiling_factor_prediction_variance[e][jj,rdat.prediction_indices[e][valid_idx[0]]:rdat.prediction_indices[e][-1]+1]-mod.helios.soiling_factor_prediction_variance[e][jj,rdat.prediction_indices[e][valid_idx[0]]]
+           
+            
+            exp_output[t] = {
+                'Reflectance': ym.copy(),
+                'Variance': var_predict.copy(),
+                'Time': ts.copy()}
+
+            if ym.ndim == 1:
+                ym += (1.0-ym[0])
+            else:
+                ym += (1.0-ym[:,0])
+            
+            sigma_predict = r0*np.sqrt(var_predict)
+            Lp = ym - 1.96*sigma_predict
+            Up = ym + 1.96*sigma_predict
+            ax[jj,ii].plot(ts_day,ym,label='Prediction Mean',color='black')
+            ax[jj,ii].fill_between(ts_day,Lp,Up,color='black',alpha=0.1,label=r'Prediction Interval')
+            ax[jj,ii].grid('on')
+
+            if jj==0:
+                ax[jj,ii].set_title(f"Campaign {e+1}, Heliostat {t}")
+            else:
+                ax[jj,ii].set_title(f"Heliostat {t}")
+        ref_output.append(exp_output)
+            
+    
+        new_var = sdat.dust_concentration[e][0:rdat.prediction_indices[e][-1]+1]
+        dust_conc = new_var
+        ws = sdat.wind_speed[e][0:rdat.prediction_indices[e][-1]+1]
+        dust_type = sdat.dust_type[e][0:rdat.prediction_indices[e][-1]+1]
+        if plot_rh:
+            a2 = ax[-2,ii]
+        else:
+            a2 = ax[-1,ii]
+
+        a2.plot(ts_day,dust_conc, color='black')
+        a2.tick_params(axis ='y', labelcolor = 'black')
+        a2.set_ylim((0,1.01*dust_max))
+
+        a2a = a2.twinx()
+        p = a2a.plot(ts_day,ws,color='green')
         a2a.tick_params(axis ='y', labelcolor = 'green')
         a2a.set_ylim((0,1.01*ws_max))
         a2a.set_yticks((0,ws_max/2,ws_max))
         a2a.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
 
         if plot_rh:
-            rel_hum = sdat.relative_humidity[e]
+            # THE LINE BELOW AVOID THE LAST ELEMENT (SO IT HAS THE SAME DIMENSION)
+            rel_hum = sdat.relative_humidity[e][0:rdat.prediction_indices[e][-1]+1]
             a3 = ax[-1,ii]
-            a3.plot(ts,rel_hum, color='blue')
+            a3.plot(ts_day,rel_hum, color='blue')
             a3.tick_params(axis ='y', labelcolor = 'blue')
             a3.set_ylim((0,1.01*hum_max))
         
@@ -145,13 +379,15 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
         if ii==len(exps)-1:
             fs = r"{0:s} $\frac{{\mu g}}{{m^3}}$"
             a2a.set_ylabel('Wind Speed (m/s)', color='green')
-
+    
+    h_legend,labels_legend = [],[]
+    legend_added = False
     for ii,row in enumerate(ax):
         for jj,a in enumerate(row):
-            if ii < len(tilts):
+            if ii < len(hels):
                 if yticks is None:
-                    a.set_ylim((0.85,1.01))
-                    a.set_yticks((0.85,0.90,0.95,1.0))
+                    a.set_ylim((0.95,1.01))
+                    a.set_yticks((0.95,0.97,0.99, 1.01))
                 else:
                     a.set_ylim((min(yticks),max(yticks)))
                     a.set_yticks(yticks)
@@ -164,7 +400,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                 if (ii in rows_with_legend) and (jj==0):
                     # a.legend(loc='center',ncol=2,bbox_to_anchor=(0.25,0.5))
                     h_legend,labels_legend = a.get_legend_handles_labels()
-            elif ii == len(tilts):
+            elif ii == len(hels):
                 a.set_yticks((0,150,300))
             else:
                 a.set_yticks((0,50,100))
@@ -175,11 +411,14 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             a.grid('on')
 
 
-    fig.legend(h_legend,labels_legend,ncol=num_legend_cols,
-               bbox_to_anchor=(0.9025+legend_shift[0],1.025+legend_shift[1]),bbox_transform=fig.transFigure)
+    labels_legend,lab_idx = np.unique(labels_legend,return_index=True)
+    fig.legend([h_legend[ii] for ii in lab_idx],labels_legend,ncol=num_legend_cols,
+               bbox_to_anchor=(0.9025+legend_shift[0],1.025+legend_shift[1]),
+               bbox_transform=fig.transFigure,fontsize=lgd_size)
+    
     fig.subplots_adjust(wspace=0.1, hspace=0.3)
     fig.tight_layout()
-    return fig,ax
+    return fig,ax,ref_output
 
 def soiling_rate(alphas: np.ndarray,
                  alphas2: np.ndarray,
@@ -326,6 +565,7 @@ def fit_quality_plots(mod,rdat,files,mirrors,ax=None,min_loss=None,max_loss=None
         mm = meas[f][:,mirrors]
         sfm = sf[f][mirrors,:]
         if cumulative:
+            print(f"file index: {f}")
             cumulative_loss = 100*(r0[f][mirrors]-mm)
             cumulative_loss -= cumulative_loss[0,:]
             cumulative_loss_prediction = 100*r0[f][mirrors][:,np.newaxis]*(1-sfm[:,pi[f]-pi[f][0]])
@@ -408,6 +648,7 @@ def summarize_fit_quality(model,ref,train_experiments,train_mirrors,
     fig,ax = plt.subplots(nrows=1,ncols=3,
                           sharex=True,sharey=True,
                           figsize=figsize)
+    print('1')
     fit_quality_plots(model,
                     ref,
                     train_experiments,
@@ -416,7 +657,8 @@ def summarize_fit_quality(model,ref,train_experiments,train_mirrors,
                     min_loss=min_loss,
                     max_loss=max_loss,
                     include_fits=include_fits)
-
+    
+    print('2')
     fit_quality_plots(model,
                     ref,
                     train_experiments,
@@ -426,6 +668,7 @@ def summarize_fit_quality(model,ref,train_experiments,train_mirrors,
                     max_loss=max_loss,
                     include_fits=include_fits)
 
+    print('3')
     fit_quality_plots(model,
                         ref,
                         test_experiments,
@@ -442,7 +685,6 @@ def summarize_fit_quality(model,ref,train_experiments,train_mirrors,
     fig.savefig(save_file+"_fit_quality.pdf",bbox_inches='tight')
 
     return fig,ax
-
 
 def daily_soiling_tilt_all_data( sim_dat: smb.simulation_inputs,
                                     model_save_file: str,
@@ -481,3 +723,81 @@ def daily_soiling_tilt_all_data( sim_dat: smb.simulation_inputs,
 
     
     return sims,daily_sum_alpha,daily_sum_alpha2
+
+def plot_experiment_PA(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12)):
+    sim_data = simulation_inputs
+    reflect_data = reflectance_data
+    f = experiment_index
+
+    fig,ax = plt.subplots(nrows=3,sharex=True,figsize=figsize)
+    # fmt = r"${0:s}^\circ$"
+    fmt = "${0:s}$"
+    ave = reflect_data.average[f]
+    t = reflect_data.times[f]
+    std = reflect_data.sigma[f]
+    # names = ["M"+str(ii+1) for ii in range(ave.shape[1])]
+    names = ["SE1",	"SE2",	"SE3",	"SE4",	"SE5",	"NW1",	"NW2",	"NW3",	"NW4",	"NW5"]
+
+    for ii in range(ave.shape[1]):
+        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=fmt.format(names[ii]),marker='o',capsize=4.0)
+
+    ax[0].grid(True) 
+    label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data.reflectometer_incidence_angle[f]) 
+    ax[0].set_ylabel(label_str)
+    ax[0].legend(loc='upper left', bbox_to_anchor=(1, 1))
+    ax[0].set_ylim(0.85, 0.97)
+
+    ax[1].plot(sim_data.time[f],sim_data.dust_conc_mov_avg[f],color='brown',label="Measurements")
+    ax[1].axhline(y=sim_data.dust_concentration[f].mean(),color='brown',ls='--',label = "Average")
+    label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data.dust_type[0])
+    ax[1].set_ylabel(label_str,color='brown')
+    ax[1].tick_params(axis='y', labelcolor='brown')
+    ax[1].grid(True)
+    ax[1].legend()
+    title_str = sim_data.dust_type[f] + r" (mean = {0:.2f} $\mu g$/$m^3$)" 
+    ax[1].set_title(title_str.format(sim_data.dust_concentration[f].mean()),fontsize=15)
+    ax[1].set_ylim(0,50)
+
+    # # Rain intensity, if available
+    # if len(sim_data.rain_intensity)>0: # rain intensity is not an empty dict
+    #     ax[2].plot(sim_data.time[f],sim_data.rain_intensity[f])
+    # else:
+    #     rain_nan = np.nan*np.ones(sim_data.time[f].shape)
+    #     ax[2].plot(sim_data.time[f],rain_nan)
+    
+    # ax[2].set_ylabel(r'Rain [mm/hour]',color='blue')
+    # ax[2].tick_params(axis='y', labelcolor='blue')
+    # YL = ax[2].get_ylim()
+    # ax[2].set_ylim((0,YL[1]))
+    # ax[2].grid(True)
+
+    ax[2].plot(sim_data.time[f],sim_data.wind_speed_mov_avg[f],color='green',label="Measurements")
+    ax[2].axhline(y=sim_data.wind_speed[f].mean(),color='green',ls='--',label = "Average")
+    label_str = r'Wind Speed [$m\,/\,s$]'
+    ax[2].set_ylabel(label_str,color='green')
+    ax[2].set_xlabel('Date')
+    ax[2].tick_params(axis='y', labelcolor='green')
+    ax[2].grid(True)
+    ax[2].legend()
+    title_str = "Wind Speed (mean = {0:.2f} m/s)".format(sim_data.wind_speed[f].mean())
+    ax[2].set_title(title_str,fontsize=15)
+    ax[2].set_ylim(0,9)
+
+    # if len(sim_data.relative_humidity)>0: 
+    #     ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='black',label="measurements")
+    #     ax[4].axhline(y=sim_data.relative_humidity[f].mean(),color='black',ls='--',label = "Average")
+    # else:
+    #     rain_nan = np.nan*np.ones(sim_data.time[f].shape)
+    #     ax[4].plot(sim_data.time[f],rain_nan)
+    
+    # label_str = r'Relative Humidity [%]'
+    # ax[4].set_ylabel(label_str,color='black')
+    # ax[4].set_xlabel('Date')
+    # ax[4].tick_params(axis='y', labelcolor='black')
+    # ax[4].grid(True)
+    # ax[4].legend()
+    
+    fig.autofmt_xdate()
+    fig.tight_layout()
+
+    return fig,ax

@@ -15,7 +15,6 @@ from scipy.integrate import cumulative_trapezoid
 from scipy.spatial.distance import cdist
 import copy
 from tqdm import tqdm
-import pytz
 
 tol = np.finfo(float).eps # machine floating point precision
 
@@ -161,7 +160,7 @@ class physical_base(soiling_base):
 
         return(aerodynamic_resistance,boundary_layer_resistance,vg,vt,vz)
 
-    def deposition_flux(self,simulation_inputs,hrz0=None,verbose=True,Ra=True, plot_deposition=False):
+    def deposition_flux(self,simulation_inputs,hrz0=None,verbose=True,Ra=True):
         sim_in = simulation_inputs
         helios = self.helios
         dust = sim_in.dust
@@ -249,23 +248,6 @@ class physical_base(soiling_base):
                 helios.pdfqN[f][idx,:,:] = Fd.transpose()*dust.pdfN[f]*1e6  # Dust flux pdf, i.e. [dq[particles/(s*m^2)]/dLog_{10}(D[µm]) ] deposited on 1m2. 1e6 for cm^3->m^3 
             
         self.helios = helios
-        if plot_deposition:
-            plt.figure(figsize=(6, 6))
-        
-            plt.loglog(dust.D[0], vz[:,-1], label='deposition', linestyle='-')
-            plt.loglog(dust.D[0], vg, label='settling', linestyle='--')
-            plt.loglog(dust.D[0], vt.transpose()[:,-1], label='turbulence_diffusion', linestyle='--')
-            
-            plt.xlabel('Particle Diameter (μm)')
-            plt.ylabel('Velocity (m/s)')
-            plt.title('Velocity Components vs Particle Diameter')
-            plt.grid(True, which="both", ls="-", alpha=0.2)
-            plt.legend()
-            plt.ylim(1e-5, 1e0)
-            plt.xlim(0.1,100)
-            plt.tight_layout()
-            plt.show()      
-            
         
     def adhesion_removal(self,simulation_inputs,verbose=True):
         _print_if("Calculating adhesion/removal balance",verbose)
@@ -294,7 +276,10 @@ class physical_base(soiling_base):
                     for k in range(Ntimes):
                         mom_removal = np.sin(rad(helios.tilt[f][h,k]))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity at each tilt for each diameter
                         mom_adhesion =  (F_adhesion+F_gravity*np.cos(rad(helios.tilt[f][h,k])))*radius_sep             # [Nm] adhesion moment  
-                        helios.pdfqN[f][h,k::,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
+                        helios.pdfqN[f][h,k:,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
+                        # if any(mom_adhesion<mom_removal):
+                        #     _print_if("Some dust is removed",verbose)
+
                 
                 helios.pdfqN[f] = np.gradient(helios.pdfqN[f],dt[f],axis=1) # Take derivative so that pdfqN is the rate at wich dust is deposited at each diameter
 
@@ -422,7 +407,7 @@ class physical_base(soiling_base):
         else:
             ax1 = ax
 
-        title = rf''' 
+        title = f''' 
                         Area loss rate for given dust distribution at acceptance angle {acceptance_angle*1e3:.2f} mrad,
                         wind_speed= {wind_speed:.1f} m/s, air_temperature={air_temp:.1f} C
                         (total area loss is {dummy_model.helios.delta_soiled_area[0][0,0]:.2e} $m^2$/($s\cdot m^2$))
@@ -471,7 +456,7 @@ class constant_mean_base(soiling_base):
         
         files = list(sim_in.time.keys())
         for f in files:
-            helios.delta_soiled_area[f] = np.empty((helios.tilt[f].shape))
+            helios.delta_soiled_area[f] = np.empty((helios.tilt[f].shape[0],helios.tilt[f].shape[1]))
 
             # compute alpha
             try:
@@ -532,8 +517,10 @@ class simulation_inputs:
         self.end_datetime = {}                  # datetime64 for end
         self.air_temp = {}                      # [C] air temperature
         self.wind_speed = {}                    # [m/s] wind speed
+        self.wind_speed_mov_avg = {}            # [m/s] wind speed hourly moving average
         self.wind_direction = {}                # [degrees] wind direction
         self.dust_concentration = {}            # [µg/m3] PM10 or TSP concentration in air
+        self.dust_conc_mov_avg = {}             # [µg/m3] PM10 or TSP hourly moving average of dust concentration
         self.rain_intensity = {}                # [mm/hr] rain intensity
         self.dust_type = {}                     # Usually either "TSP" or "PM10", but coule be any PMX or PMX.X
         self.dni = {}                           # [W/m^2] Direct Normal Irradiance
@@ -586,48 +573,30 @@ class simulation_inputs:
         dust_type = _import_option_helper(files, dust_type)
         
         weather_variables = { # List of possible weather variable names and the combination of possibly names
-            'air_temp': ['airtemp', 'temperature', 'temp', 'ambt'],
-            'wind_speed': ['windspeed', 'ws'],
-            'dni': ['dni', 'directnormalirradiance'],
-            'rain_intensity': ['rainintensity', 'precipitation'],
-            'relative_humidity': ['rh', 'relativehumidity','rhx'],
-            'wind_direction': ['wd', 'winddirection']
+            'air_temp': ['AirTemp', 'Temperature', 'Temp'],
+            'wind_speed': ['WindSpeed', 'WS'],
+            'dni': ['DNI', 'DirectNormalIrradiance'],
+            'rain_intensity': ['RainIntensity', 'Precipitation'],
+            'relative_humidity': ['RH', 'RelativeHumidity'],
+            'wind_direction': ['WD', 'WindDirection']
         }
         
         dust_names = { # List of possible dust concentration names and the combination of possibly names
-            'PM_tot': ['pm_tot', 'pmtot', 'pmt', 'pm20'],
-            'TSP': ['tsp'],
-            'PM10': ['pm10'],
-            'PM2p5': ['pm2_5', 'pm2p5'],
-            'PM1': ['pm1'],
-            'PM4': ['pm4']
+            'PM_tot': ['PM_tot', 'PM_TOT', 'PMTOT', 'PMT', 'PM20'],
+            'TSP': ['TSP'],
+            'PM10': ['PM10'],
+            'PM2p5': ['PM2_5', 'PM2p5'],
+            'PM1': ['PM1'],
+            'PM4': ['PM4']
         }
 
         self.weather_variables = []
 
         for ii, file in enumerate(files): # Loop through each campaign and import weather files
             self.file_name[ii] = file
-            weather = pd.read_excel(file, 
-                                    sheet_name="Weather", 
-                                    parse_dates=True, 
-                                    date_format='%Y-%m-%d %H:%M:%S'
-                                    )
-            # Find time column
-            time_cols = ['Time', 'time', 'tmsmp', 'Timestamp', 'timestamp']
-            
-            time_col = next((col for col in time_cols if col in weather.columns), None)
-            if time_col is None:
-                raise ValueError(f"No time column found in Weather. Expected one of: {time_cols}")
-            
-            # Standardize column name to 'Time' and set as index
-            weather = weather.rename(columns={time_col: 'Time'})
-            weather['Time'] = pd.to_datetime(weather['Time']).dt.round('min')
-            # Remove duplicates (keep first occurrence)
-            weather = weather.drop_duplicates(subset='Time', keep='first')
-            
-            # Sort by time and set as index
-            weather = weather.sort_values('Time')
-            time = pd.to_datetime(weather['Time'].dt.round('min'))
+            weather = pd.read_excel(file, sheet_name="Weather")
+
+            time = pd.to_datetime(weather['Time'])
             self.start_datetime[ii] = time.iloc[0]
             self.end_datetime[ii] = time.iloc[-1]
             
@@ -639,9 +608,9 @@ class simulation_inputs:
 
             for attr_name, column_names in weather_variables.items(): # Search for weather variables inside the weather file and save them to self
                 for column in column_names:
-                    if column in [col.lower() for col in weather.columns]:
+                    if column in weather.columns:
                         setattr(self, attr_name, {}) if not hasattr(self, attr_name) else None
-                        getattr(self, attr_name)[ii] = np.array(weather.loc[:, [col for col in weather.columns if col.lower() == column][0]])
+                        getattr(self, attr_name)[ii] = np.array(weather.loc[:, column])
                         _print_if(f"Importing {column} data as {attr_name}...", verbose)
                         if attr_name not in self.weather_variables:
                             self.weather_variables.append(attr_name)
@@ -654,6 +623,7 @@ class simulation_inputs:
                 if len(idx_too_low) > 0:
                     self.wind_speed[ii][idx_too_low] = smallest_windspeed
                     _print_if(f"Warning: some windspeeds were <= 0 and were set to {smallest_windspeed}", verbose)
+            self.wind_speed_mov_avg[ii] = pd.Series(self.wind_speed[ii]).rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1).mean().values
 
             self.dust_concentration[ii] = self.k_factors[ii] * np.array(weather.loc[:, dust_type[ii]]) # Set dust concentration to be used for soiling predictions
             if 'dust_concentration' not in self.weather_variables:
@@ -662,8 +632,8 @@ class simulation_inputs:
 
             for dust_key, dust_aliases in dust_names.items(): # Load all dust concentration data inside weather file
                 for alias in dust_aliases:
-                    if alias in [col.lower() for col in weather.columns]:
-                        dust_value = np.array(weather.loc[:, [col for col in weather.columns if col.lower() == alias][0]])
+                    if alias in weather.columns:
+                        dust_value = np.array(weather.loc[:, alias])
                         if not hasattr(self, dust_key.lower()):
                             setattr(self, dust_key.lower(), {})
                         getattr(self, dust_key.lower())[ii] = dust_value
@@ -673,6 +643,8 @@ class simulation_inputs:
                         break
                 else:
                     _print_if(f"No {dust_key} data to import.", verbose)
+            
+            self.dust_conc_mov_avg[ii] = pd.Series(self.dust_concentration[ii]).rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1).mean().values
 
             if verbose:
                 T = (time.iloc[-1] - time.iloc[0]).days
@@ -702,6 +674,7 @@ class dust:
         self.youngs_modulus = {} # [Pa] young's modulus of dust
         self.PM10 = {}           # [µg/m^3] PM10 concentration computed with the given dust size distribution
         self.TSP = {}            # [µg/m^3] TSP concentration computed with the given dust size distribution
+        self.PMT = {}            # [µg/m^3] PMT concentration computed with the given dust size distribution        
         self.Nd = {}
         self.log10_mu = {}
         self.log10_sig = {}
@@ -751,6 +724,7 @@ class dust:
             self.pdfA[ii] = pdfNii*(np.pi/4*Dii**2)*1e-6 # pdfA (area) dA[m^2/m^3]/dLog10(D[µm]), 1e-6 factor from { D^2(µm^2->m^2) 1e-12 , V(cm^3->m^3) 1e6 }
             self.pdfM[ii] = pdfNii*(rhoii*np.pi/6*Dii**3)*1e-3 # pdfm (mass) dm[µg/m^3]/dLog10(D[µm]), 1e-3 factor from { D^3(µm^3->m^3) 1e-18 , m(kg->µg) 1e9 , V(cm^3->m^3) 1e6 }
             self.TSP[ii] = np.trapz(self.pdfM[ii],np.log10(Dii)) 
+            self.PMT[ii] = self.TSP[ii]
             self.PM10[ii] = np.trapz(self.pdfM[ii][Dii<=10],np.log10(Dii[Dii<=10]))  # PM10 = np.trapz(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
 
             self.hamaker[ii] = float(table.loc['hamaker_dust'].Value)
@@ -759,7 +733,7 @@ class dust:
 
         # add dust measurements if they are PMX
         for dt in dust_measurement_type:
-            if dt.lower() not in [None,"tsp"]: # another concentration is of interest (possibly because we have PMX measurements)
+            if dt not in [None,"TSP","PMT"]: # another concentration is of interest (possibly because we have PMX measurements)
                 X = dt[2::]
                 if len(X) in [1,2]: # integer, e.g. PM20
                     X = int(X)
@@ -786,7 +760,7 @@ class dust:
             pdfM = self.pdfM[ff]
 
             color = 'tab:red'
-            ax1[ff,0].set_xlabel(r"D [$\mu$m]")
+            ax1[ff,0].set_xlabel("D [$\mu$m]")
             ax1[ff,0].set_ylabel(r'$\frac{dN [cm^{{-3}} ] }{dLog(D \;[\mu m])}$', color=color,size=20)
             ax1[ff,0].plot(D_dust,pdfN, color=color)
             ax1[ff,0].tick_params(axis='y', labelcolor=color)
@@ -815,7 +789,7 @@ class dust:
             pdfA = self.pdfA[ii]
 
             color = 'black'
-            ax1[ii,0].set_xlabel(r"D [$\mu$m]")
+            ax1[ii,0].set_xlabel("D [$\mu$m]")
             ax1[ii,0].set_ylabel(r'$\frac{dA [m^2/m^3] }{dLog(D \;[\mu m])}$', color=color,size=20)
             ax1[ii,0].plot(D_dust,pdfA, color=color)
             ax1[ii,0].tick_params(axis='y', labelcolor=color)
@@ -1105,6 +1079,7 @@ class helios:
             else:
                 closest_grid = np.vstack([closest_grid,np.hstack([positions[i,:],distance_grid,closest_idx])])
         
+        
         # Store Heliostat Field information
         self.full_field['x'] = (closest_grid[:,1])
         self.full_field['y'] = (closest_grid[:,2])
@@ -1126,7 +1101,7 @@ class helios:
         self.heliostats_in_sector = np.array(representative_helio[:,-1],dtype=np.int64)
         self.sector_area = self.heliostats_in_sector * self.height * self.width
     
-    def sector_plot(self,plot_title='Solar Field Sectors', plot_size=None):
+    def sector_plot(self):
         Ns = self.x.shape[0]
         n_theta = self.num_theta_sectors
         n_radius = self.num_radial_sectors
@@ -1144,20 +1119,15 @@ class helios:
             c_map = turbo(c_map)
 
             sid = self.full_field['sector_id']
-            fig,ax = plt.subplots(figsize=(10,10))
+            fig,ax = plt.subplots()
             for ii in range(Ns):
                 ax.scatter(self.full_field['x'][sid==ii],self.full_field['y'][sid==ii],color=c_map[ii])
             ax.scatter(self.x,self.y,color='black',marker='o',label='representative heliostats')
-            ax.legend(fontsize=12)
-            ax.tick_params(axis='both', which='major', labelsize=12)
-            if plot_size is not None:
-                ax.set_xlim(plot_size[0])
-                ax.set_ylim(plot_size[1])
-            plt.xlabel('distance from receiver - x [m]',fontsize=14)
-            plt.ylabel('distance from receiver -y [m]',fontsize=14)
-            plt.title(plot_title,fontsize=16)
+            plt.legend()
+            plt.xlabel('distance from receiver - x [m]')
+            plt.ylabel('distance from receiver -y [m]')
+            plt.title('Solar Field Sectors')
             plt.show()
-            return fig
 
     def compute_extinction_weights(self,simulation_data,loss_model=None,verbose=True,show_plots=False,options={}):
         """
@@ -1327,9 +1297,9 @@ class reflectance_measurements:
         reflectance_files = _ensure_list(reflectance_files)
         N_experiments = len(reflectance_files)
         if number_of_measurements == None:
-            number_of_measurements = [1.0]*N_experiments
+            self.number_of_measurements = [1.0]*N_experiments
         else:
-            number_of_measurements = _import_option_helper(reflectance_files,number_of_measurements)
+            self.number_of_measurements = _import_option_helper(reflectance_files,number_of_measurements)
 
         
         if reflectometer_incidence_angle == None:
@@ -1345,6 +1315,8 @@ class reflectance_measurements:
         self.file_name = {}
         self.times = {}
         self.average = {}
+        self.soiling_rate = {}
+        self.delta_ref = {}
         self.sigma = {}
         self.sigma_of_the_mean = {}
         self.prediction_indices = {}
@@ -1356,20 +1328,19 @@ class reflectance_measurements:
 
         if import_tilts:
             self.tilts = {}
-        self.import_reflectance_data(reflectance_files,time_grids,number_of_measurements,
-                                reflectometer_incidence_angle,reflectometer_acceptance_angle,
-                                import_tilts=import_tilts,column_names_to_import=column_names_to_import)
+            
+        self.import_reflectance_data(reflectance_files,time_grids,reflectometer_incidence_angle,
+                                     reflectometer_acceptance_angle,import_tilts=import_tilts,
+                                     column_names_to_import=column_names_to_import)
         
-    def import_reflectance_data(self,reflectance_files,time_grids,number_of_measurements,
-                                reflectometer_incidence_angle,reflectometer_acceptance_angle,
-                                import_tilts=False,column_names_to_import=None):
+    def import_reflectance_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
+                                reflectometer_acceptance_angle, import_tilts=False,column_names_to_import=None):
         """
         Imports reflectance data from Excel files and stores the data in the object's attributes.
 
         Args:
             reflectance_files (str or list): Path(s) to the Excel file(s) containing the reflectance data.
             time_grids (list): List of time grids corresponding to each reflectance file.
-            number_of_measurements (int or list, optional): Number of reflectance measurements for each file. If not provided, defaults to 1 for each file.
             reflectometer_incidence_angle (float or list, optional): Incidence angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
             reflectometer_acceptance_angle (float or list, optional): Acceptance angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
             import_tilts (bool, optional): Whether to import tilt information from the files. Defaults to False.
@@ -1378,14 +1349,8 @@ class reflectance_measurements:
         for ii in range(len(reflectance_files)):
             
             self.file_name[ii] = reflectance_files[ii]
-            reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],
-                                                         sheet_name="Reflectance_Average", 
-                                                         parse_dates=True, 
-                                                         date_format='%Y-%m-%d %H:%M:%S'),\
-                "Sigma": pd.read_excel(reflectance_files[ii],
-                                       sheet_name="Reflectance_Sigma", 
-                                       parse_dates=True, 
-                                       date_format='%Y-%m-%d %H:%M:%S')}
+            reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Average"),\
+                "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Sigma")}
 
             time_column = next((col for col in reflectance_data['Average'].columns if col.lower() in ['time', 'timestamp']), None)
             if time_column is not None:
@@ -1393,36 +1358,66 @@ class reflectance_measurements:
             else:
                 raise ValueError(f"No 'Time' or 'Timestamp' column found in file {reflectance_files[ii]}")            
             if column_names_to_import != None: # extract relevant column names of the pandas dataframe
-                self.average[ii] = reflectance_data['Average'][column_names_to_import].dropna().values.reshape(-1,1)/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
-                self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].dropna().values.reshape(-1,1)/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])),  -np.diff(self.average[ii], axis=0)))  # compute reflectance loss between measurements
+                self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.mirror_names[ii] = column_names_to_import
-                self.rho0[ii] = self.average[ii][0,:].reshape(1,-1)
-                self.times[ii] = self.times[0][reflectance_data['Average'][column_names_to_import].dropna().index]
             else:
                 self.average[ii] = reflectance_data['Average'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])),  -np.diff(self.average[ii], axis=0))) # compute reflectance loss between measurements
                 self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1::]
-                self.rho0[ii] = self.average[ii][0,:]
 
             self.prediction_indices[ii] = []
             self.prediction_times[ii] = []
             for m in self.times[ii]:
                 self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))        
             self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
-            
+            for jj in range(self.average[ii].shape[1]):
+                self.rho0[ii] = np.nanmax(self.average[ii], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
 
             # idx = reflectance_files.index(f) 
             self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
-            self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(number_of_measurements[ii])
+            self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(self.number_of_measurements[ii])
             self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
 
-            if import_tilts: # TODO: Implement a size safety check against the number of measurements
-                self.tilts[ii] = pd.read_excel(reflectance_files[ii],
-                                               sheet_name="Tilts", 
-                                               parse_dates=True, 
-                                               date_parser=lambda x: pd.to_datetime(x, format='%Y-%m-%d %H:%M:%S'))[self.mirror_names[ii]].values.transpose()
-                if len(self.tilts[ii].shape) == 1:
-                    self.tilts[ii] = self.tilts[ii].reshape(1,-1)
+            if import_tilts:
+                self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[self.mirror_names[ii]].values.transpose()
+                    
+    # def import_heliostats_ref_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
+    #                             reflectometer_acceptance_angle,import_tilts=False,
+    #                             column_names_to_import=None):
+
+    #     for ii in range(len(reflectance_files)):
+            
+    #         self.file_name[ii] = reflectance_files[ii]
+    #         reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Heliostats_Ref"),\
+    #             "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Heliostats_Sigma")}
+
+    #         self.times[ii] = reflectance_data['Average']['Time'].values
+    #         if column_names_to_import != None: # extract relevant column names of the pandas dataframe
+    #             self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.mirror_names[ii] = column_names_to_import
+    #         else:
+    #             self.average[ii] = reflectance_data['Average'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+    #             self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1::]
+
+    #         self.prediction_indices[ii] = []
+    #         self.prediction_times[ii] = []
+    #         for m in self.times[ii]:
+    #             self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))        
+    #         self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
+    #         self.rho0[ii] = self.average[ii][0,:]
+
+    #         # idx = reflectance_files.index(f) 
+    #         self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
+    #         self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(self.number_of_measurements[ii])
+    #         self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
+
+    #         if import_tilts:
+    #             self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[self.mirror_names[ii]].values.transpose()
                     
     def get_experiment_subset(self,idx):
         attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes
