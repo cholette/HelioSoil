@@ -1,16 +1,9 @@
-# %% Analysis of Carwarp data
-main_directory = ".."
+# %% Analysis of Raygen data
+
 import os
+main_directory = ".."
 os.sys.path.append(main_directory)
 
-# CHOOSE WHETHER TO USE DAILY AVERAGE OF REFLECTANCE VALUES OR NOT
-DAILY_AVERAGE = True
-# CHOOSE WHETHER TO WORK ON HELIOSTATS OR ON THE MIRROR RIG0
-HELIOSTATS = False
-# CHOOSE PM FRACTION TO USE FOR FITTING
-dust_type = "PM2.5" # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
-
-# %% modules
 import numpy as np
 import pandas as pd
 import soiling_model.base_models as smb
@@ -22,33 +15,92 @@ from paper_specific_utilities import plot_for_paper, plot_for_heliostats, daily_
                                      fit_quality_plots, summarize_fit_quality,plot_experiment_PA
 import scipy.stats as sps
 from collections import defaultdict
+from datetime import datetime
+import warnings
+import re
+
+# %% Analysis setup
+
+# CHOOSE RAYGEN LOCATION (Carwarp or Yadnarie)
+# raygen_site = "Carwarp"
+raygen_site = "Yadnarie"
+
+# CHOOSE PM FRACTION TO USE FOR FITTING
+dust_type = "PM10" # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
+
+# CHOOSE WHETHER TO USE DAILY AVERAGE OF REFLECTANCE VALUES OR NOT
+DAILY_AVERAGE = False
+
+# CHOOSE TRAIN EXPERIMENTS 
+train_experiments = [1] # indices for training experiments from 0 to len(files)-1
+
+# CHOOSE TRAIN MIRRORS (default = True, otherwise choose individual mirrors)
+train_mirror_default = False # Set the default train mirrors for Carwarp ["ON_M1_T00"] and Yadnarie ["ONE_M2_T00"] 
+train_mirrors_custom = ["OSE_M3_T30"] # WORKS ONLY IF train_mirror_defaul is False
+
+# CHOOSE WHETHER TO WORK ON HELIOSTATS OR ON THE MIRROR RIG - it works only for Carwarp data
+hel_analysis = False
+if raygen_site == "Carwarp":
+    HELIOSTATS = hel_analysis
+else:
+    HELIOSTATS = False
+
+# default to False, set to True to save outputs (and override any previous saved output)
+save_output = False
+
+# %% Set data input
+
+site_paths = {
+    "Carwarp": {
+        "sp_save_file": f"{main_directory}/results/sp_fitting_results_mildura",
+        "cm_save_file": f"{main_directory}/results/cm_fitting_results_mildura",
+        "d": f"{main_directory}/data/mildura/",
+        "parameter_file": "parameters_mildura_experiments.xlsx",
+        "compass": 1, # cardinal directions are N, E, S, W
+        "train_mirror" : "ON_M1_T00",
+        "all_intervals": np.array([
+            [np.datetime64('2024-01-30T10:00:00'), np.datetime64('2024-02-05T08:00:00')], # January 2024 (first experiments --- nothing to remove)
+            [np.datetime64('2024-06-06T17:00:00'), np.datetime64('2024-06-11T08:00:00')]], # June 2024 (second experiments --- already removed rainy data - consider adding them back)
+            dtype='datetime64[m]') 
+    },
+    "Yadnarie": {
+        "sp_save_file": f"{main_directory}/results/sp_fitting_results_yadnarie",
+        "cm_save_file": f"{main_directory}/results/cm_fitting_results_yadnarie",
+        "d": f"{main_directory}/data/yadnarie/",
+        "parameter_file": "parameters_yadnarie_experiments.xlsx",
+        "compass": 2, # cardinal directions are NE, SE, SW, NW
+        "train_mirror" : "ONE_M2_T00",
+        "all_intervals": np.array([
+            [np.datetime64('2024-11-11T20:30:00'), np.datetime64('2024-11-16T07:30:00')], # November 2024 # First set of mirrors
+            [np.datetime64('2024-11-12T11:40:00'), np.datetime64('2024-11-16T07:30:00')]], # November 2024 # Second set of mirrors
+            dtype='datetime64[m]')
+    } }
+
+if raygen_site in site_paths:
+    sp_save_file = site_paths[raygen_site]['sp_save_file']
+    cm_save_file = site_paths[raygen_site]['cm_save_file']
+    d = site_paths[raygen_site]['d']
+    parameter_file = d+site_paths[raygen_site]['parameter_file']
+    train_mirrors = [site_paths[raygen_site]['train_mirror']] if train_mirror_default else train_mirrors_custom
+    all_intervals = site_paths[raygen_site]['all_intervals']
+    print('Analysis of ' + raygen_site + ' data')
+else:
+    raise ValueError(f"Invalid site '{raygen_site}'. Choose a valid site for analysis.")
 
 pad = 0.05
-sp_save_file = f"{main_directory}/results/sp_fitting_results_mildura"
-cm_save_file = f"{main_directory}/results/cm_fitting_results_mildura"
+
 reflectometer_incidence_angle = 15 # [deg] angle of incidence of reflectometer
 reflectometer_acceptance_angle = 12.5e-3 # [rad] half acceptance angle of reflectance measurements
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
-d = f"{main_directory}/data/mildura/"
+
 time_to_remove_at_end = [0,0]  # time to be removed for each experiment, in hours
-train_experiments = [1] # indices for training experiments from 0 to len(files)-1
-train_mirrors = ["ON_M1_T00"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for training
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
 
 
 # %% Get file list and time intervals. Import training data.
-parameter_file = d+"parameters_mildura_experiments.xlsx"
 
 files,all_intervals,exp_mirrors,all_mirrors = smu.get_training_data(d,"experiment_",time_to_remove_at_end=time_to_remove_at_end)
-orientation = [ [s[1] for s in mirrors] for mirrors in exp_mirrors]
-
-# January 2024 (first experiments --- nothing to remove)
-all_intervals[0][0] = np.datetime64('2024-01-30T10:00:00')
-all_intervals[0][1] = np.datetime64('2024-02-05T09:00:00')  # mirrors data at 8am, heliostats data at 9am
-
-# June 2024 (second experiments --- already removed rainy data - consider adding them back)
-all_intervals[1][0] = np.datetime64('2024-06-06T17:00:00')
-all_intervals[1][1] = np.datetime64('2024-06-11T08:00:00')
+orientation = [ [s[1:1+site_paths[raygen_site]['compass']] for s in mirrors] for mirrors in exp_mirrors]
 
 testing_intervals = all_intervals
         
@@ -169,7 +221,7 @@ if DAILY_AVERAGE:
         else:
             fig,ax = smu.plot_experiment_data(sim_data_train,reflect_data_train,ii)
 
-        fig.suptitle(f"Averaged Training Data for file {files[experiment]}")
+        fig.suptitle(f"Averaged Training Data for file {files_train[0]}")
         # fig,ax = smu.wind_rose(sim_data_train,ii)
         # ax.set_title(f"Wind for file {files[experiment]}"
 
@@ -183,73 +235,18 @@ if DAILY_AVERAGE:
 
 # %% PLOT EXPERIMENTAL DATA 
 
-f=0
 lgd_size=15
-fig,ax = plt.subplots(nrows=4,figsize=(12,15))
+fig,ax = plt.subplots(nrows=4,figsize=(12,15),gridspec_kw={'hspace': 0.3})
 
-ave = reflect_data_total.average[f]
-t = reflect_data_total.times[f]
-std = reflect_data_total.sigma[f]
-lgd_label = [lg[:5].replace("O","").replace("_M","") for lg in all_mirrors]      
-for ii in range(ave.shape[1]):
-    if lgd_label[ii]=='W1':
-        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
-    else:
-        ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],marker='o',capsize=4.0)
-ax[0].grid(True) 
-label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0]) 
-ax[0].set_ylabel(label_str)
-ax[0].legend(fontsize=lgd_size,loc='center right',bbox_to_anchor=(1.15,0.5))
-title_Jan = 'Raygen Experiments Summary - January 2024'
-if DAILY_AVERAGE:
-    title_Jan += ' - Daily Average'
-if HELIOSTATS:
-    title_Jan += ' - HELIOSTATS'
-plt.suptitle(title_Jan,fontsize = 20,x=0.5,y=0.92)
-
-ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")
-# label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
-ax[1].axhline(y=sim_data_total.dust_concentration[f].mean(),color='brown',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.dust_concentration[f].mean()))
-label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data_total.dust_type[0])
-ax[1].set_ylabel(label_str,color='brown',fontsize=20)
-ax[1].tick_params(axis='y', labelcolor='brown')
-ax[1].grid(True)
-ax[1].legend(fontsize=lgd_size)
-ax[1].set_ylim(0,150)
-
-ax[2].plot(sim_data_total.time[f],sim_data_total.wind_speed[f],color='green',label="Measurements")
-ax[2].axhline(y=sim_data_total.wind_speed[f].mean(),color='green',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean()))
-label_str = r'Wind Speed [$m\,/\,s$]'
-ax[2].set_ylabel(label_str,color='green')
-ax[2].tick_params(axis='y', labelcolor='green')
-ax[2].grid(True)
-ax[2].legend(fontsize=lgd_size)
-
-ax[3].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")
-ax[3].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.1f}".format(sim_data_total.relative_humidity[f].mean()))
-label_str = r'Relative Humidity [%]'
-ax[3].set_ylabel(label_str,color='blue')
-ax[3].tick_params(axis='y', labelcolor='blue')
-ax[3].grid(True)
-ax[3].legend(fontsize=lgd_size)
-plt.show()
-
-if HELIOSTATS!=True:  # Heliostats data are currently only available for January 2024
-    f=1
-    lgd_size=15
-    fig,ax = plt.subplots(nrows=4,figsize=(12,15))
+for f in range(len(reflect_data_total.average)):
 
     ave = reflect_data_total.average[f]
     t = reflect_data_total.times[f]
+    # if t[0] 
     std = reflect_data_total.sigma[f]
-    lgd_label = [lg[:5].replace("O","").replace("_M","") for lg in all_mirrors]      
+    lgd_label = [re.sub(r"_T\d{2,3}", "", lg.replace("O", "").replace("_M", "")) for lg in exp_mirrors[f]]      
     for ii in range(ave.shape[1]):
-        if lgd_label[ii]=='W2':
-            ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
-        else:
-            ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],marker='o',capsize=4.0)
-    for ii in [2,-1]:
-        if lgd_label[ii]=='W2':
+        if lgd_label[ii]=='W1':
             ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
         else:
             ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],marker='o',capsize=4.0)
@@ -257,10 +254,14 @@ if HELIOSTATS!=True:  # Heliostats data are currently only available for January
     label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0]) 
     ax[0].set_ylabel(label_str)
     ax[0].legend(fontsize=lgd_size,loc='center right',bbox_to_anchor=(1.15,0.5))
-    title_Jun = 'Raygen Experiments Summary - June 2024'
+    month_plot = datetime.fromisoformat(str(reflect_data_total.times[f][0])).strftime('%B')
+    year_plot = datetime.fromisoformat(str(reflect_data_total.times[f][0])).year
+    title_plot = raygen_site + " Experiments Summary - " + month_plot + " " + str(year_plot)
     if DAILY_AVERAGE:
-        title_Jun += ' - Daily Average'
-    plt.suptitle(title_Jun,fontsize = 20,x=0.5,y=0.92)
+        title_plot += ' - Daily Average'
+    if HELIOSTATS:
+        title_plot += ' - HELIOSTATS'
+    plt.suptitle(title_plot,fontsize = 20,x=0.5,y=0.92)
 
     ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")
     # label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
@@ -270,7 +271,7 @@ if HELIOSTATS!=True:  # Heliostats data are currently only available for January
     ax[1].tick_params(axis='y', labelcolor='brown')
     ax[1].grid(True)
     ax[1].legend(fontsize=lgd_size)
-    ax[1].set_ylim(0,40)
+    ax[1].set_ylim(0,1.1*(sim_data_total.dust_concentration[f][~np.isnan(sim_data_total.dust_concentration[f])].max()))
 
     ax[2].plot(sim_data_total.time[f],sim_data_total.wind_speed[f],color='green',label="Measurements")
     ax[2].axhline(y=sim_data_total.wind_speed[f].mean(),color='green',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean()))
@@ -281,20 +282,15 @@ if HELIOSTATS!=True:  # Heliostats data are currently only available for January
     ax[2].legend(fontsize=lgd_size)
 
     ax[3].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")
-    ax[3].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.1f}".format(sim_data_total.relative_humidity[f].mean()))
+    ax[3].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.1f}".format(sim_data_total.relative_humidity[f][~np.isnan(sim_data_total.relative_humidity[f])].mean()))
     label_str = r'Relative Humidity [%]'
     ax[3].set_ylabel(label_str,color='blue')
     ax[3].tick_params(axis='y', labelcolor='blue')
     ax[3].grid(True)
     ax[3].legend(fontsize=lgd_size)
+    ax[3].set_ylim(0,100)
 
-    # ax[1].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")
-    # ax[1].axhline(y=sim_data_total.relative_humidity[f].mean(),color='blue',ls='--',label = r"Average = {0:.3f}".format(sim_data_total.relative_humidity[f].mean()))
-    # label_str = r'Relative Humidity [%]'
-    # ax[1].set_ylabel(label_str,color='blue')
-    # ax[1].tick_params(axis='y', labelcolor='blue')
-    # ax[1].grid(True)
-    # ax[1].legend(fontsize=lgd_size)
+    [axis.tick_params(axis='x', rotation=15) for axis in ax]
     plt.show()
 
 # %% PLOT average REFLECTANCE LOSSES, RELATIVE HUMIDITY, and PM10 between measurements
@@ -359,7 +355,11 @@ for m,mir in enumerate(train_mirrors):
     for exp in sim_data_total.time.keys():
         diff_array_times = -np.diff(reflect_data_total.times[exp])
         diff_days = -diff_array_times.astype('timedelta64[s]').astype('int')/3600/24
-        idx_mir = reflect_data_total.mirror_names[exp].index(mir)
+        if mir in reflect_data_total.mirror_names[exp]:
+            idx_mir = reflect_data_total.mirror_names[exp].index(mir)
+        else:
+            warnings.warn(f"{mir} not found in mirror names. Exiting loop.")
+            break
         diff_ref = -np.diff(reflect_data_total.average[exp][:,idx_mir],axis=0)
         diff_rates = diff_ref*100/diff_days  # contain soiling rates for mir in training_mirrors
 
@@ -454,7 +454,7 @@ if DAILY_AVERAGE:
 _,_,_ = imodel.plot_soiling_factor( sim_data_train,
                             reflectance_data=reflect_data_train,
                             reflectance_std='mean',
-                            save_path=f"{main_directory}/results/mildura_sp_training",
+                            save_path=sp_save_file,
                             # fig_title="On Training Data (semi-physical)",
                             orientation_strings=orientation,
                             figsize=[12,8])
@@ -463,7 +463,7 @@ _,_,_ = imodel.plot_soiling_factor( sim_data_train,
 _,_,_ = imodel_constant.plot_soiling_factor(    sim_data_train,
                                                 reflectance_data=reflect_data_train,
                                                 reflectance_std='mean',
-                                                save_path=f"{main_directory}/results/mildura_cm_training",
+                                                save_path=cm_save_file,
                                                 # fig_title="On Training Data",
                                                 orientation_strings=orientation,
                                                 figsize = [12,8]  )
@@ -476,9 +476,9 @@ if DAILY_AVERAGE:
 
 # %% Compute average measured reflectance losses for each tilt (only for mirror rig experiments)
 
-if not HELIOSTATS:
-    ref_data_summary = smu.soiling_rates_summary(reflect_data_total,sim_data_total)
-    ref_data_summary
+# if not HELIOSTATS:
+#     ref_data_summary = smu.soiling_rates_summary(reflect_data_total,sim_data_total)
+#     ref_data_summary
 
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
@@ -497,7 +497,8 @@ if HELIOSTATS==True:
     fig.set_size_inches(10, 20) 
     
     df_hel_sp = smu.loss_hel_table_from_sim(ref_hel_sp,sim_data_total)
-    df_hel_sp.to_csv(f"{sp_save_file}_HEL_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
+    if save_output:
+        df_hel_sp.to_csv(f"{sp_save_file}_HEL_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
 
 else:
     fig,ax,ref_simulation_sp = plot_for_paper(    imodel,
@@ -506,18 +507,22 @@ else:
                                 train_experiments,
                                 train_mirrors,
                                 orientation,
-                                legend_shift=(0.075,0),
-                                yticks=(0.95,0.96,0.97,0.98,0.99,1.0)) # 
+                                legend_shift=(0.04,0),
+                                yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) # 
 
     df_sim_sp = smu.loss_table_from_sim(ref_simulation_sp,sim_data_total)
-    df_sim_sp.to_csv(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
+    if save_output:
+        df_sim_sp.to_csv(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
 
-fig.suptitle('Semi-Physical Model', fontsize=16, fontweight='bold', y=1.045)
-fig.savefig(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}\
-{'_daily' if DAILY_AVERAGE else ''}.pdf", bbox_inches='tight')
-fig.savefig(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}\
-{'_daily' if DAILY_AVERAGE else ''}.png", bbox_inches='tight')
+if save_output:
+    fig.suptitle('Semi-Physical Model', fontsize=16, fontweight='bold', y=1.045)
+    fig.savefig(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}\
+    {'_daily' if DAILY_AVERAGE else ''}.pdf", bbox_inches='tight')
+    fig.savefig(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}\
+    {'_daily' if DAILY_AVERAGE else ''}.png", bbox_inches='tight')
+
 plt.show()
+
 # %% 
 
 # df_plot_sp =smu.loss_table_from_fig(ref_simulation_sp,sim_data_total) # NEED TO BE FIXED
@@ -536,7 +541,8 @@ if HELIOSTATS:
                                     legend_shift=(0.04,0),
                                     yticks=(0.97,0.98,0.99,1.02))   
     df_hel_cm = smu.loss_hel_table_from_sim(ref_hel_cm,sim_data_total)
-    df_hel_cm.to_csv(f"{cm_save_file}_HEL_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
+    if save_output:
+        df_hel_cm.to_csv(f"{cm_save_file}_HEL_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
 
 else:
     fig,ax,ref_simulation_cm = plot_for_paper(    imodel_constant,
@@ -545,22 +551,25 @@ else:
                                 train_experiments,
                                 train_mirrors,
                                 orientation,
-                                legend_shift=(0.075,0),
-                                yticks=(0.95,0.96,0.97,0.98,0.99,1.00))
+                                legend_shift=(0.04,0),
+                                yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00))
     
     df_sim_cm = smu.loss_table_from_sim(ref_simulation_cm,sim_data_total)
-    df_sim_cm.to_csv(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
+    if save_output:
+        df_sim_cm.to_csv(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
 
-fig.suptitle('Constant-Mean Model', fontsize=16, fontweight='bold', y=1.045)
-fig.savefig(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}\
-{'_daily' if DAILY_AVERAGE else ''}.pdf", bbox_inches='tight')
-fig.savefig(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}\
-{'_daily' if DAILY_AVERAGE else ''}.png", bbox_inches='tight')
+if save_output:
+    fig.suptitle('Constant-Mean Model', fontsize=16, fontweight='bold', y=1.045)
+    fig.savefig(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}\
+    {'_daily' if DAILY_AVERAGE else ''}.pdf", bbox_inches='tight')
+    fig.savefig(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}\
+    {'_daily' if DAILY_AVERAGE else ''}.png", bbox_inches='tight')
+
 plt.show()
 
 # %%
 
-if not HELIOSTATS:
+if save_output:
     df_sim_cm = smu.loss_table_from_sim(ref_simulation_cm,sim_data_total)
     df_sim_cm.to_csv(cm_save_file+'_simulation_cm.csv', index=False)
     df_sim_cm
