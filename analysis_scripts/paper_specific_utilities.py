@@ -133,7 +133,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
 
 
             if jj==0:
-                ax[jj,ii].set_title(f"Data set {e+1}, Tilt: {t:.0f}"+r"$^{\circ}$")
+                ax[jj,ii].set_title(f"Dataset {e+1}, Tilt: {t:.0f}"+r"$^{\circ}$")
             else:
                 ax[jj,ii].set_title(f"Tilt: {t:.0f}"+r"$^{\circ}$")
             
@@ -149,8 +149,12 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
 
         a2.plot(ts,dust_conc, color='brown')
         a2.tick_params(axis ='y', labelcolor = 'brown')
-        a2.set_ylim((0,dust_max))
-        a2.set_yticks((0,dust_max/2,dust_max))
+        if any("yadnarie".lower() in value.lower() for value in sdat.file_name.values()) and dust_type == 'PM10':   # Yadnarie PM10 data have a couple of absurd spikes that skew the whole plot
+            a2.set_ylim((0,200))
+            a2.set_yticks((0,100,200))
+        else:
+            a2.set_ylim((0,dust_max))
+            a2.set_yticks((0,dust_max/2,dust_max))
         a2.grid('on')
 
         a2a = a2.twinx()
@@ -168,7 +172,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             a3 = ax[-1,ii]
             a3.plot(ts,rel_hum, color='blue')
             a3.tick_params(axis ='y', labelcolor = 'blue')
-            a3.set_ylim((0,hum_max))
+            a3.set_ylim((0,100))
             a3.grid('on')
         
         if ii==0:
