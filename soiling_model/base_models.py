@@ -519,10 +519,10 @@ class simulation_inputs:
         self.wind_speed = {}                    # [m/s] wind speed
         self.wind_speed_mov_avg = {}            # [m/s] wind speed hourly moving average
         self.wind_direction = {}                # [degrees] wind direction
-        self.dust_concentration = {}            # [µg/m3] PM10 or TSP concentration in air
-        self.dust_conc_mov_avg = {}             # [µg/m3] PM10 or TSP hourly moving average of dust concentration
+        self.dust_concentration = {}            # [µg/m3] PM2.5, PM10 or TSP concentration in air
+        self.dust_conc_mov_avg = {}             # [µg/m3] PM2.5, PM10 or TSP hourly moving average of dust concentration
         self.rain_intensity = {}                # [mm/hr] rain intensity
-        self.dust_type = {}                     # Usually either "TSP" or "PM10", but coule be any PMX or PMX.X
+        self.dust_type = {}                     # Usually either "TSP" or "PM10", but could be any PMX or PMX.X
         self.dni = {}                           # [W/m^2] Direct Normal Irradiance
         self.relative_humidity = {}             # [%] relative humidity
         self.source_normalized_intensity = {}   # [1/m^2/nm] normalized source intensity
@@ -585,7 +585,7 @@ class simulation_inputs:
             'PM_tot': ['PM_tot', 'PM_TOT', 'PMTOT', 'PMT', 'PM20'],
             'TSP': ['TSP'],
             'PM10': ['PM10'],
-            'PM2p5': ['PM2_5', 'PM2p5'],
+            'PM2p5': ['PM2_5', 'PM2p5', 'PM2.5'],
             'PM1': ['PM1'],
             'PM4': ['PM4']
         }
