@@ -22,14 +22,14 @@ import re
 # %% Analysis setup
 
 # CHOOSE RAYGEN LOCATION (Carwarp or Yadnarie)
-# raygen_site = "Carwarp"
-raygen_site = "Yadnarie"
+raygen_site = "Carwarp"
+# raygen_site = "Yadnarie"
 
 # CHOOSE PM FRACTION TO USE FOR FITTING
 dust_type = "PM2.5" # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
 
 # CHOOSE WHETHER TO USE DAILY AVERAGE OF REFLECTANCE VALUES OR NOT
-DAILY_AVERAGE = False
+DAILY_AVERAGE = True
 
 # CHOOSE TRAIN EXPERIMENTS 
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
