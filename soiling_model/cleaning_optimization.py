@@ -127,10 +127,7 @@ def optimize_periodic_schedule(opt, file=0, verbose=True):
     # Find optimal truck bounds
     min_trucks, max_trucks, bounds_data = find_truck_bounds(opt, verbose)
     progress_bar.update(10)  # Update after finding bounds
-    if verbose:
-        print(f"Periodic Schedule Simulations Running Between:")
-        print(f"Trucks: {min_trucks} to {max_trucks}")
-        print(f"Cleanings per year: {min_cleans} to {max_cleans}\n")
+
     # Calculate remaining bounds
     total_sectors = opt.field_model.helios.truck.sectors[0] * opt.field_model.helios.truck.sectors[1]
     sectors_per_truck = opt.field_model.helios.truck.n_sectors_per_truck
@@ -140,6 +137,11 @@ def optimize_periodic_schedule(opt, file=0, verbose=True):
     min_cleans = int(np.ceil(total_sectors / (max_trucks * sectors_per_truck * days_per_year)))
     max_cleans = int(365 / (total_sectors / (max_trucks * sectors_per_truck)))
 
+    if verbose:
+        print(f"Periodic Schedule Simulations Running Between:")
+        print(f"Trucks: {min_trucks} to {max_trucks}")
+        print(f"Cleanings per year: {min_cleans} to {max_cleans}\n")
+        
     # Perform coarse grid search
     best_cost = np.inf
     best_trucks = None
