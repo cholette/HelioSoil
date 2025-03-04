@@ -7,36 +7,116 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.cm import get_cmap, turbo
 from warnings import warn
+from pathlib import Path
+from dataclasses import dataclass, field
+from typing import Optional, Union
 import copy
+from tqdm.auto import tqdm
 from scipy.interpolate import RectBivariateSpline
 from soiling_model.utilities import _print_if,_ensure_list,\
                                     _extinction_function,_same_ext_coeff,\
                                     _import_option_helper,_parse_dust_str,\
                                     _check_keys
 from textwrap import dedent
-from pysolar import solar, radiation
+from pysolar import solar, radiation, solartime
 import datetime
 import pytz
 import copy
 from copylot import CoPylot
-from soiling_model.base_models import physical_base,constant_mean_base, sun
+from soiling_model.base_models import physical_base,constant_mean_base, sun, Truck
+
+@dataclass
+class ReceiverParameters:
+    """Default parameters for central receiver configuration."""
+    receiver_type: str = field(
+        default="External cylindrical",
+        metadata={'description': 'Type of receiver (External cylindrical or Flat plate)'}
+    )
+    tower_height: float = field(
+        default=120.0,
+        metadata={'units': 'm', 'description': 'Height of receiver tower'}
+    )
+    panel_height: float = field(
+        default=30.5,
+        metadata={'units': 'm', 'description': 'Height of receiver panel'}
+    )
+    width_diameter: float = field(
+        default=15.8,
+        metadata={'units': 'm', 'description': 'Width/diameter of receiver'}
+    )
+    orientation_elevation: Optional[float] = field(
+        default=None,
+        metadata={'units': 'degrees', 'description': 'Elevation angle for flat plate receiver'}
+    )
+    thermal_losses: float = field(
+        default=105,
+        metadata={'units': 'MW', 'description': 'Constant thermal losses from receiver'}
+    )
+    thermal_max: float = field(
+        default=1000.0,
+        metadata={'units': 'MW', 'description': 'Maximum thermal power'}
+    )
+    thermal_min: float = field(
+        default=210,
+        metadata={'units': 'MW', 'description': 'Minimum thermal power'}
+    )
+
+@dataclass
+class PlantParameters:
+    """Parameters for power plant configuration."""
+    power_block_efficiency: float = field(
+        default=0.42,
+        metadata={'units': 'fraction', 'description': 'Power block conversion efficiency'}
+    )
+    heliostat_aim_point_strategy: str = field(
+        default="Image size priority",
+        metadata={'description': 'Heliostat aim point strategy'}
+    )
+    electricity_price: float = field(
+        default=100.0,
+        metadata={'units': '$/MWh', 'description': 'Price of electricity'}
+    )
+    plant_other_maintenance: float = field(
+        default=0.0,
+        metadata={'units': '$/MWh', 'description': 'Non-cleaning maintenance costs'}
+    )
 
 class central_tower_plant:
+    """Central tower plant with parameter management."""
+    
     def __init__(self):
-        self.receiver = {   'receiver_type': [],
-                            'tower_height': [],
-                            'panel_height': [],
-                            'width_diameter': [],
-                            'orientation_elevation': [],
-                            'thermal_losses': [],
-                            'thermal_max': [],
-                            'thermal_min': []  }
-        self.power_block_efficiency = []
-        self.aim_point_strategy = []
+        self._receiver = ReceiverParameters()
+        self._plant = PlantParameters()
         
-    def import_plant(self, file_params):
+    @property
+    def plant(self) -> dict:
+        """Get plant parameters as dictionary for backward compatibility."""
+        return {
+            'power_block_efficiency': self._plant.power_block_efficiency,
+            'aim_point_strategy': self._plant.heliostat_aim_point_strategy,
+            'electricity_price': self._plant.electricity_price,
+            'plant_other_maintenance': self._plant.plant_other_maintenance
+        }
+        
+    @property
+    def receiver(self) -> dict:
+        """Get receiver parameters as dictionary for backward compatibility."""
+        return {
+            'receiver_type': self._receiver.receiver_type,
+            'tower_height': self._receiver.tower_height,
+            'panel_height': self._receiver.panel_height,
+            'width_diameter': self._receiver.width_diameter,
+            'orientation_elevation': self._receiver.orientation_elevation,
+            'thermal_losses': self._receiver.thermal_losses,
+            'thermal_max': self._receiver.thermal_max,
+            'thermal_min': self._receiver.thermal_min
+        }
+
+    def import_plant(self, file_params: Union[str, Path]) -> None:
+        """Load parameters from Excel file with validation."""
         table = pd.read_excel(file_params, index_col="Parameter")
         
+        # Check required parameters
         required_params = [
             'receiver_type',
             'receiver_tower_height',
@@ -45,57 +125,72 @@ class central_tower_plant:
             'minimum_receiver_power',
             'maximum_receiver_power',
             'power_block_efficiency',
-            'heliostat_aim_point_strategy'
+            'heliostat_aim_point_strategy',
+            'electricity_price',
+            'plant_other_maintenance'
         ]
         
+        # Handle width/diameter parameters
         width_params = ['receiver_width_diameter', 'receiver_width', 'receiver_diameter']
         if not any(param in table.index for param in width_params):
             required_params.append('receiver_width_diameter')
         
+        # Validate required parameters
         missing_params = [param for param in required_params if param not in table.index]
-        
         if missing_params:
-            raise ValueError(f"Missing required parameters in input file: {', '.join(missing_params)}")
+            raise ValueError(f"Missing required parameters: {', '.join(missing_params)}")
+            
+        # Update receiver parameters
+        self._receiver.receiver_type = table.loc['receiver_type'].Value
         
-        self.receiver['receiver_type'] = table.loc['receiver_type'].Value
+        # Handle width/diameter options
         if 'receiver_width_diameter' in table.index:
-            self.receiver['width_diameter'] = float(table.loc['receiver_width_diameter'].Value)
+            self._receiver.width_diameter = float(table.loc['receiver_width_diameter'].Value)
         elif 'receiver_width' in table.index:
-            self.receiver['width_diameter'] = float(table.loc['receiver_width'].Value)
+            self._receiver.width_diameter = float(table.loc['receiver_width'].Value)
         elif 'receiver_diameter' in table.index:
-            self.receiver['width_diameter'] = float(table.loc['receiver_diameter'].Value)
+            self._receiver.width_diameter = float(table.loc['receiver_diameter'].Value)
         else:
-            raise ValueError("Missing receiver width/diameter parameter in input file")
-        if self.receiver['receiver_type'] == 'Flat plate':
+            raise ValueError("Missing receiver width/diameter parameter")
+            
+        # Handle flat plate specific parameters
+        if self._receiver.receiver_type == 'Flat plate':
             if 'receiver_orientation_elevation' not in table.index:
-                raise ValueError("receiver_orientation_elevation for Flat plate not specified in parameters file")
-            self.receiver['orientation_elevation'] = float(table.loc['receiver_orientation_elevation'].Value)
-        self.receiver['tower_height'] = float(table.loc['receiver_tower_height'].Value)
-        self.receiver['panel_height'] = float(table.loc['receiver_height'].Value)
-        self.receiver['thermal_losses'] = float(table.loc['receiver_thermal_losses'].Value)
-        self.receiver['thermal_min'] = float(table.loc['minimum_receiver_power'].Value)
-        self.receiver['thermal_max'] = float(table.loc['maximum_receiver_power'].Value)
-        self.power_block_efficiency = float(table.loc['power_block_efficiency'].Value)
-        self.aim_point_strategy = table.loc['heliostat_aim_point_strategy'].Value        
+                raise ValueError("Missing receiver_orientation_elevation for Flat plate")
+            self._receiver.orientation_elevation = float(table.loc['receiver_orientation_elevation'].Value)
+            
+        # Update remaining parameters
+        self._receiver.tower_height = float(table.loc['receiver_tower_height'].Value)
+        self._receiver.panel_height = float(table.loc['receiver_height'].Value)
+        self._receiver.thermal_losses = float(table.loc['receiver_thermal_losses'].Value)
+        self._receiver.thermal_min = float(table.loc['minimum_receiver_power'].Value)
+        self._receiver.thermal_max = float(table.loc['maximum_receiver_power'].Value)
+        
+        # Update plant parameters
+        self._plant.power_block_efficiency = float(table.loc['power_block_efficiency'].Value)
+        self._plant.heliostat_aim_point_strategy = table.loc['heliostat_aim_point_strategy'].Value
+        self._plant.electricity_price = float(table.loc['electricity_price'].Value)
+        self._plant.plant_other_maintenance = float(table.loc['plant_other_maintenance'].Value)  
+           
 class field_common_methods:
     def sun_angles(self,simulation_inputs,verbose=True):
         sim_in = simulation_inputs
         sun = self.sun
-        constants = self.constants
         timezone = pytz.FixedOffset(int(self.timezone_offset*60))
         
         _print_if("Calculating sun apparent movement and angles for "+str(sim_in.N_simulations)+" simulations",verbose)
         
         files = list(sim_in.time.keys())
         for f in list(files):
-            time_utc = sim_in.time[f].dt.tz_localize(timezone) # Apply UTC to timeseries
-            time_utc = time_utc.tolist() # Convert to list
-            
+            # First convert to timezone-aware datetime objects
+            time_utc = [t.replace(tzinfo=timezone) for t in np.array(sim_in.time[f].dt.to_pydatetime())]
+
             # Loop through all times and calculate azimuth and altitude/elevation
-            solar_angles = np.array([solar.get_position(self.latitude,self.longitude,time.to_pydatetime()) for time in time_utc]) 
+            solar_angles = np.array([solar.get_position(self.latitude,self.longitude,time) for time in time_utc]) 
             sun.azimuth[f] = solar_angles[:,0] # solar_angles(:,[azimuth,elevation])
             sun.elevation[f] = solar_angles[:,1]
-            sun.DNI[f] = np.array([radiation.get_radiation_direct(time.to_pydatetime(),elevation) for time, elevation in zip(time_utc,solar_angles[:,1])])
+            sun.DNI[f] = np.array([radiation.get_radiation_direct(time,elevation) if elevation > 0 else 0.0 
+                       for time, elevation in zip(time_utc,solar_angles[:,1])])
             
         self.sun = sun # update sun in the main model 
     
@@ -295,7 +390,7 @@ class field_common_methods:
         # simulation parameters
         assert cp.data_set_number(r,"fluxsim.0.flux_time_type",0) # 1 for time simulation, 0 for solar angles
         assert cp.data_set_number(r,"fluxsim.0.flux_dni",1000.0)  # set the simulation DNI to 1000 W/m2. Only used to display indicative receiver power.
-        assert cp.data_set_string(r,"fluxsim.0.aim_method",plant.aim_point_strategy)
+        assert cp.data_set_string(r,"fluxsim.0.aim_method",plant.plant['aim_point_strategy'])
 
         files = list(sim_in.time.keys())
         Ns = len(helios.x)
@@ -308,7 +403,9 @@ class field_common_methods:
         fmt = "Getting efficiencies for az={0:.3f}, el={1:.3f}"
         
         # buliding the lookup table for grid of solar angles
-        fmt_pwr = "Power absorbed by receiver at DNI=1000 W/m2: {0:.2e} kW"
+        total_iterations = len(az_grid) * len(el_grid)
+        progress_bar = tqdm(total=total_iterations, desc="Computing optical efficiency grid", leave=True)
+
         for ii in range(len(az_grid)):
             for jj in range(len(el_grid)):
                 assert cp.data_set_number(r,"fluxsim.0.flux_solar_az_in",az_grid[ii])
@@ -318,15 +415,22 @@ class field_common_methods:
                 dat_summary = cp.summary_results(r)
 
                 effs = dat['efficiency']
-                _print_if(fmt.format(az_grid[ii],el_grid[jj]),verbose)
                 if dat_summary['Power absorbed by the receiver'] == ' -nan(ind)':
                     raise ValueError("SolarPILOT unable to simulate with current parameter configuration")
                 else:
-                    _print_if(fmt_pwr.format(dat_summary['Power absorbed by the receiver']),verbose)
+                    # Update progress bar description with current power
+                    current_power = dat_summary['Power absorbed by the receiver']
+                    progress_bar.set_description(
+                        f"Computing grid - Power: {current_power:.2e} kW (az={az_grid[ii]:.1f}°, el={el_grid[jj]:.1f}°)"
+                    )
                     
                 for kk in range(Ns):
                     idx = np.where(sec_ids==kk)[0]
                     eff_grid[kk,ii,jj] = effs[idx].mean()
+                
+                progress_bar.update(1)
+
+        progress_bar.close()
         
         # Apply lookup table to simulation
         for f in files:
@@ -342,16 +446,17 @@ class field_common_methods:
         self.helios = helios
 
 class field_model(physical_base,field_common_methods):
-    def __init__(self,file_params,file_SF,num_sectors=None):
+    def __init__(self,file_params,file_SF,cleaning_rate:float=None):
         super().__init__()
         super().import_site_data_and_constants(file_params)
 
         self.sun = sun()
         self.sun.import_sun(file_params)
         
-        self.helios.import_helios(file_params,file_SF,num_sectors=num_sectors)
+        self.helios.import_helios(file_params,file_SF,cleaning_rate=cleaning_rate)
         if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
             self.helios.stow_tilt = None
+            
     
     def compute_acceptance_angles(self,plant,verbose=True):
         # Approximate acceptance half-angles using simple geometric approximation from: 
@@ -378,16 +483,16 @@ class field_model(physical_base,field_common_methods):
 
         max_accept = max([self.helios.acceptance_angles[f].max() for f in files])
         min_accept = min([self.helios.acceptance_angles[f].min() for f in files])
-        _print_if(f"Acceptance angle range: ({min_accept*1e3:.1f}, {max_accept*1e3:.1f})",verbose)
+        _print_if(f"Acceptance angle range: ({min_accept*1e3:.1f}, {max_accept*1e3:.1f}) [mrad]",verbose)
             
 class simplified_field_model(constant_mean_base,field_common_methods):
-    def __init__(self,file_params,file_SF,num_sectors=None):
+    def __init__(self,file_params,file_SF,cleaning_rate:float=None):
         super().__init__()
         super().import_site_data_and_constants(file_params)
 
         self.sun = sun()
         self.sun.import_sun(file_params)
         
-        self.helios.import_helios(file_params,file_SF,num_sectors=num_sectors)
+        self.helios.import_helios(file_params,file_SF,cleaning_rate=cleaning_rate)
         if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
             self.helios.stow_tilt = None

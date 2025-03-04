@@ -41,7 +41,6 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
     if clean_interval < min_clean_interval:
         clean_interval = min_clean_interval
         n_cleans = int(np.floor(T_days/clean_interval))
-        print("Warning: Cannot clean that many times. Setting number of cleans = "+str(n_cleans))
 
     # evenly space cleaning ends
     clean_ends = np.linspace(0,n_hours-1,num=n_cleans+1,dtype=int)

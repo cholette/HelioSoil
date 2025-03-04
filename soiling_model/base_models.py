@@ -6,6 +6,9 @@ import matplotlib.pyplot as plt
 from matplotlib.cm import turbo
 from warnings import warn
 import copy
+from pathlib import Path
+from typing import Dict
+from dataclasses import dataclass, field
 from scipy.interpolate import interp2d
 from soiling_model.utilities import _print_if,_ensure_list,\
                                     _extinction_function,_same_ext_coeff,\
@@ -14,7 +17,7 @@ from textwrap import dedent
 from scipy.integrate import cumulative_trapezoid
 from scipy.spatial.distance import cdist
 import copy
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 
 tol = np.finfo(float).eps # machine floating point precision
 
@@ -407,11 +410,11 @@ class physical_base(soiling_base):
         else:
             ax1 = ax
 
-        title = f''' 
-                        Area loss rate for given dust distribution at acceptance angle {acceptance_angle*1e3:.2f} mrad,
-                        wind_speed= {wind_speed:.1f} m/s, air_temperature={air_temp:.1f} C
-                        (total area loss is {dummy_model.helios.delta_soiled_area[0][0,0]:.2e} $m^2$/($s\cdot m^2$))
-                '''
+        title = f'''
+            Area loss rate for given dust distribution at acceptance angle {acceptance_angle*1e3:.2f} mrad,
+            wind_speed= {wind_speed:.1f} m/s, air_temperature={air_temp:.1f} C
+            (total area loss is {dummy_model.helios.delta_soiled_area[0][0,0]:.2e} m$^2$/(s$\\cdot$m$^2$))
+        '''
         area_loss_rate = (dummy_model.helios.pdfqN[0][0,0,:]*np.pi/4*dummy_sim.dust.D[0]**2*1e-12*dummy_model.helios.extinction_weighting[0][0,:])
         ax1.plot(dummy_sim.dust.D[0],area_loss_rate)
         ax1.set_title(title.format(wind_speed,air_temp,))
@@ -573,21 +576,21 @@ class simulation_inputs:
         dust_type = _import_option_helper(files, dust_type)
         
         weather_variables = { # List of possible weather variable names and the combination of possibly names
-            'air_temp': ['AirTemp', 'Temperature', 'Temp'],
-            'wind_speed': ['WindSpeed', 'WS'],
-            'dni': ['DNI', 'DirectNormalIrradiance'],
-            'rain_intensity': ['RainIntensity', 'Precipitation'],
-            'relative_humidity': ['RH', 'RelativeHumidity'],
-            'wind_direction': ['WD', 'WindDirection']
+            'air_temp': ['airtemp', 'temperature', 'temp', 'ambt'],
+            'wind_speed': ['windspeed', 'ws', 'wind_speed'],
+            'dni': ['dni', 'directnormalirradiance'],
+            'rain_intensity': ['rainintensity', 'precipitation'],
+            'relative_humidity': ['rh', 'relativehumidity', 'rhx'],
+            'wind_direction': ['wd', 'winddirection']
         }
         
         dust_names = { # List of possible dust concentration names and the combination of possibly names
-            'PM_tot': ['PM_tot', 'PM_TOT', 'PMTOT', 'PMT', 'PM20'],
-            'TSP': ['TSP'],
-            'PM10': ['PM10'],
-            'PM2p5': ['PM2_5', 'PM2p5'],
-            'PM1': ['PM1'],
-            'PM4': ['PM4']
+            'pm_tot': ['pm_tot', 'pmtot', 'pmt', 'pm20'],
+            'tsp': ['tsp'],
+            'pm10': ['pm10'],
+            'pm2p5': ['pm2_5', 'pm2p5'],
+            'pm1': ['pm1'],
+            'pm4': ['pm4']
         }
 
         self.weather_variables = []
@@ -608,15 +611,14 @@ class simulation_inputs:
 
             for attr_name, column_names in weather_variables.items(): # Search for weather variables inside the weather file and save them to self
                 for column in column_names:
-                    if column in weather.columns:
+                    if column in [col.lower() for col in weather.columns]:
                         setattr(self, attr_name, {}) if not hasattr(self, attr_name) else None
-                        getattr(self, attr_name)[ii] = np.array(weather.loc[:, column])
-                        _print_if(f"Importing {column} data as {attr_name}...", verbose)
+                        col_match = [col for col in weather.columns if col.lower() == column][0]
+                        getattr(self, attr_name)[ii] = np.array(weather.loc[:, col_match])
+                        _print_if(f"Importing {col_match} data as {attr_name}...", verbose)
                         if attr_name not in self.weather_variables:
                             self.weather_variables.append(attr_name)
                         break
-                else:
-                    _print_if(f"No {attr_name} data to import.", verbose)
 
             if hasattr(self, 'wind_speed') and ii in self.wind_speed:
                 idx_too_low = np.where(self.wind_speed[ii] == 0)[0]
@@ -632,8 +634,9 @@ class simulation_inputs:
 
             for dust_key, dust_aliases in dust_names.items(): # Load all dust concentration data inside weather file
                 for alias in dust_aliases:
-                    if alias in weather.columns:
-                        dust_value = np.array(weather.loc[:, alias])
+                    if alias in [col.lower() for col in weather.columns]:
+                        col_match = [col for col in weather.columns if col.lower() == alias][0]
+                        dust_value = np.array(weather.loc[:, col_match])
                         if not hasattr(self, dust_key.lower()):
                             setattr(self, dust_key.lower(), {})
                         getattr(self, dust_key.lower())[ii] = dust_value
@@ -641,15 +644,12 @@ class simulation_inputs:
                         if dust_key.lower() not in self.weather_variables:
                             self.weather_variables.append(dust_key.lower())
                         break
-                else:
-                    _print_if(f"No {dust_key} data to import.", verbose)
             
             self.dust_conc_mov_avg[ii] = pd.Series(self.dust_concentration[ii]).rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1).mean().values
 
             if verbose:
                 T = (time.iloc[-1] - time.iloc[0]).days
-                _print_if(f"Length of simulation for file {file}: {T} days", verbose)
-                
+                _print_if(f"Length of simulation for file {file}: {T} days", verbose)                
     def get_experiment_subset(self,idx):
         attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes
         self_out = copy.deepcopy(self)
@@ -760,7 +760,7 @@ class dust:
             pdfM = self.pdfM[ff]
 
             color = 'tab:red'
-            ax1[ff,0].set_xlabel("D [$\mu$m]")
+            ax1[ff,0].set_xlabel(r"D [$\mu$m]")
             ax1[ff,0].set_ylabel(r'$\frac{dN [cm^{{-3}} ] }{dLog(D \;[\mu m])}$', color=color,size=20)
             ax1[ff,0].plot(D_dust,pdfN, color=color)
             ax1[ff,0].tick_params(axis='y', labelcolor=color)
@@ -789,7 +789,7 @@ class dust:
             pdfA = self.pdfA[ii]
 
             color = 'black'
-            ax1[ii,0].set_xlabel("D [$\mu$m]")
+            ax1[ii,0].set_xlabel(r"D [$\mu$m]")
             ax1[ii,0].set_ylabel(r'$\frac{dA [m^2/m^3] }{dLog(D \;[\mu m])}$', color=color,size=20)
             ax1[ii,0].plot(D_dust,pdfA, color=color)
             ax1[ii,0].tick_params(axis='y', labelcolor=color)
@@ -798,6 +798,311 @@ class dust:
             ax1[ii,0].set_xticks(10.0**np.arange(np.log10(D_dust[0]),np.log10(D_dust[-1]),1))
 
         return ax1
+
+@dataclass
+class TruckParameters:
+    """Default parameters for cleaning truck configuration."""
+    # Cost parameters
+    cost_water: float = field(default=0.87,
+        metadata={'units': '$/kL',
+                 'description': 'Cost of water'})
+    usage_water: float = field(default=0.4,
+        metadata={'units': 'L/m²',
+                 'description': 'Water usage per square meter cleaned'})
+    cost_fuel: float = field(default=2.0,
+        metadata={'units': '$/L',
+                 'description': 'Cost of fuel'})
+    usage_fuel: float = field(default=25.0,
+        metadata={'units': 'L/hour',
+                 'description': 'Fuel consumption rate'})
+    salary_operator: float = field(default=80e3,
+        metadata={'units': '$/year',
+                'description': 'Operator salary'})
+    cost_purchase: float = field(default=150e3,
+        metadata={'units': '$/truck',
+                'description': 'Cost of truck'})
+    cost_maintenance: float = field(default=15e3,
+        metadata= {'units': '$/year',
+            'description': 'Annual maintenance cost'})
+    useful_life: float = field(default=10.0,
+        metadata={'units': 'years',
+                'description': 'Useful life of truck'})
+    # Velocities 
+    velocity_cleaning: float = field(default=2.0,
+        metadata={'units': 'km/h',
+                 'description': 'Truck velocity during cleaning'})
+    velocity_travel: float = field(default=20.0,
+        metadata={'units': 'km/h',
+                 'description': 'Truck velocity during travel'})
+    # Times
+    time_setup: float = field(default=30.0,
+        metadata={'units': 'seconds/heliostat',
+                 'description': 'Setup time per heliostat'})
+    time_shift: float = field(default=8.0,
+        metadata={'units': 'hours',
+                 'description': 'Duration of cleaning shift'})
+    # Distances and volumes
+    distance_reload_station: float = field(default=750.0,
+        metadata={'units': 'm',
+                 'description': 'Distance to reload station'})
+    truck_water_volume: float = field(default=15000.0,
+        metadata={'units': 'L',
+                 'description': 'Water tank capacity'})
+    # Heliostat dimensions
+    heliostat_width: float = field(default=None,
+        metadata={'units': 'm',
+                 'description': 'Width of heliostat'})
+    heliostat_height: float = field(default=None,
+        metadata={'units': 'm',
+                 'description': 'Height of heliostat'})
+
+class Truck:
+    """Truck class with parameter management system that will automatically update cleaning sectors and cleaning rate with each update."""
+    def __init__(self, config_path: Path = None):
+        self._params = TruckParameters()
+        self._solar_field = None # Solarfield ID and positions with respect to receiver (m) [ID, x-x, y-y]
+        self._cleaning_rate = None # Number of heliostats cleaned per truck per shift
+        self._sectors = None # Number of cleaning sectors to create in the field
+        self._n_sectors_per_truck = None # Number of sectors cleaned per truck per shift
+        self._consumable_costs = {
+            'water': None,
+            'fuel': None,
+            'total': None
+        }
+        if config_path:
+            self.load_config(Path(config_path))
+            
+    @property
+    def consumable_costs(self) -> dict:
+        """Get current cleaning costs per sector."""
+        if self._consumable_costs['water'] is None or self._consumable_costs['fuel'] is None:
+            self._calculate_costs()
+        return self._consumable_costs
+
+    def _calculate_costs(self) -> None:
+        """Calculate water and fuel costs per cleaning sector."""
+        if not all([hasattr(self._params, attr) for attr in ['heliostat_width', 'heliostat_height']]):
+            raise ValueError("Must set heliostat dimensions before calculating costs")
+
+        p = self._params
+
+        # Calculate area per cleaning sector
+        area_heliostat_cleaning_sector = (
+            p.heliostat_width * # [m]
+            p.heliostat_height * # [m]
+            self.cleaning_rate / # [heliostats/shift]
+            self.n_sectors_per_truck # [sectors/shift]
+        )  # [m²/sector]
+
+        # Calculate water cost per sector
+        self._consumable_costs['water'] = (
+            p.usage_water * # [L/m²]
+            p.cost_water /1e3 * # [$/L]
+            area_heliostat_cleaning_sector # [m²/sector]
+        )  # [$/cleaning sector]
+
+        # Calculate fuel cost per sector
+        self._consumable_costs['fuel'] = (
+            p.usage_fuel * # [L/hour]
+            p.cost_fuel *  # [$/L]
+            p.time_shift /  # [hours/shift]
+            self.n_sectors_per_truck  # [sectors/shift]
+        )  # [$/cleaning sector]
+
+        # Calculate total cost
+        self._consumable_costs['total'] = self._consumable_costs['water'] + self._consumable_costs['fuel']
+        
+    @property
+    def cleaning_rate(self) -> float:
+        """Get current cleaning rate."""
+        if self._cleaning_rate is None:
+            raise ValueError("Must call calculate_cleaning_rate first")
+        return self._cleaning_rate
+    
+    @cleaning_rate.setter
+    def cleaning_rate(self, rate: float):
+        """Set cleaning rate."""
+        self._cleaning_rate = rate
+        self._params.cleaning_rate = rate
+        print(f"Updated cleaning rate to {rate:.1f} heliostats/shift")
+
+    @property
+    def sectors(self) -> tuple:
+        """Get current sector configuration."""
+        if self._sectors is None:
+            raise ValueError("Must call calculate_cleaning_rate first")
+        return self._sectors
+    
+    @sectors.setter
+    def sectors(self, new_sectors: tuple):
+        """Set sector configuration (n_rad, n_az)."""
+        self._sectors = new_sectors
+        print(f"Updated sectors to {new_sectors[0]} x {new_sectors[1]} = {new_sectors[0] * new_sectors[1]} total sectors")
+
+    @property
+    def n_sectors_per_truck(self) -> int:
+        """Get number of sectors cleaned per truck."""
+        if self._n_sectors_per_truck is None:
+            raise ValueError("Must call calculate_cleaning_rate first")
+        return self._n_sectors_per_truck
+    
+    @n_sectors_per_truck.setter
+    def n_sectors_per_truck(self, n: int):
+        """Set number of sectors cleaned per truck."""
+        self._n_sectors_per_truck = n
+        self._params.n_sectors_cleaned_per_truck = n
+        print(f"Updated sectors per truck to {n}")
+            
+    def update_parameters(self, **kwargs):
+        """Update truck parameters with validation and recalculate cleaning rate.
+        
+        Args:
+            **kwargs: Parameter names and values to update
+        """
+        old_rate = self.cleaning_rate if self._solar_field is not None else None
+        
+        for param_name, value in kwargs.items():
+            if hasattr(self._params, param_name):
+                setattr(self._params, param_name, value)
+                print(f"Updated {param_name} to {value}")
+            else:
+                print(f"Warning: {param_name} is not a valid parameter")
+        
+        # Show cleaning rate change if field properties are set
+        if self._solar_field is not None:
+            new_rate = self.cleaning_rate
+            print(f"Cleaning rate changed from {old_rate:.1f} to {new_rate:.1f} heliostats per shift")
+            print(f"Updated costs per sector:")
+            print(f"  Total: {self._costs['total']:.2f} $/cleaning sector")
+
+    def load_config(self, config_path: Path) -> None:
+        """Load parameters from CSV file, using defaults for missing values."""
+        if not config_path.exists():
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+            
+        try:
+            df = pd.read_excel(config_path, index_col="Parameter")
+            
+            # Update only parameters that exist in config file
+            for param, value in df["Value"].items():
+                if hasattr(self._params, param):
+                    setattr(self._params, param, value)
+                
+        except Exception as e:
+            print(f"Error loading truck properties: {e}")
+            print("Using default parameters")
+        
+    def calculate_cleaning_rate(self, solar_field, cleaning_rate:float=None, tolerance:float=0.05) -> tuple:
+        """Calculate cleaning rate based on truck parameters or use provided rate.
+        
+        Args:
+            solar_field (np.ndarray): Array containing heliostat positions
+            cleaning_rate (float, optional): Manual override for cleaning rate
+            tolerance (float, optional): Maximum allowed difference between calculated and discretized rates
+            
+        Returns:
+            tuple: (cleaning_rate, (n_rad, n_az), n_sectors_per_truck)
+        """
+        # Calculate or use provided cleaning rate
+        if cleaning_rate is None and self._sectors is None:
+            hour_per_reload = self._hour_per_reload_consumables()
+            spacing = self._heliostat_spacing(solar_field[:,1], solar_field[:,2])
+            hour_per_clean = self._hour_per_heliostat_cleaning(heliostat_spacing=spacing,
+                truck_velocity=self._params.velocity_travel,
+                truck_cleaning_velocity=self._params.velocity_cleaning,
+                cleaning_setup_seconds=self._params.time_setup
+            )
+            target_rate = self._heliostats_cleaned_shift(
+                shift_hours=self._params.time_shift,
+                hour_per_heliostat_clean=hour_per_clean,
+                hour_reloading_per_heliostat=hour_per_reload
+            )
+            print(f'Calculated cleaning rate: {target_rate:.1f} heliostats/shift')
+        elif cleaning_rate is not None:
+            target_rate = cleaning_rate
+            print(f'Using config specified cleaning rate: {target_rate:.1f} heliostats/shift')
+        else:
+            raise ValueError("Must provide either:\n1. Manual cleaning rate: cleaning_rate only,\n2. Auto cleaning rate calculation: no num_sectors and no cleaning_rate.\n3. Manual sector configuration: num_sectors")
+        
+        # Calculate sectors based on target rate
+        self._optimize_sectors(solar_field, target_rate, tolerance)
+        
+        # Update consumable costs
+        self._calculate_costs()
+
+    def _optimize_sectors(self, solar_field, target_rate: float, tolerance: float) -> tuple:
+        """Calculate optimal sector configuration for given cleaning rate."""
+        n_sectors_per_truck = 1
+        best_error = float('inf')
+        best_sectors = None
+        
+        while n_sectors_per_truck <= 10:
+            n_sectors = len(solar_field) / target_rate
+            n_sectors_scaled = n_sectors * n_sectors_per_truck
+            
+            n_rad = max(1, int(np.sqrt(n_sectors_scaled)))
+            n_az = int(np.ceil(n_sectors_scaled/n_rad))
+            
+            while n_rad * n_az < n_sectors_scaled:
+                n_rad += 1
+                n_az = int(np.ceil(n_sectors_scaled/n_rad))
+            
+            actual_rate = len(solar_field) / (n_rad * n_az / n_sectors_per_truck)
+            error = abs(actual_rate - target_rate) / target_rate
+            
+            if error < best_error:
+                best_error = error
+                best_sectors = (n_rad, n_az)
+                best_rate = actual_rate
+                best_n_sectors = n_sectors_per_truck
+                
+            if error <= tolerance:
+                break
+                
+            n_sectors_per_truck += 1
+        
+        # Store results
+        self._cleaning_rate = best_rate
+        self._sectors = best_sectors
+        self._n_sectors_per_truck = best_n_sectors
+        
+        print(f'Grid size: {best_sectors[0]} x {best_sectors[1]} = {best_sectors[0] * best_sectors[1]} sectors')
+        print(f'Sectors per truck: {best_n_sectors}')
+        print(f'Effective cleaning rate: {best_rate:.1f} heliostats/shift')
+        print(f'Error from target: {best_error*100:.1f}%')
+        
+    def _heliostats_cleaned_shift(self, shift_hours=None, 
+                               hour_per_heliostat_clean=None, 
+                               hour_reloading_per_heliostat=None) -> float:
+        """Calculate heliostats cleaned per shift."""
+        
+        return shift_hours / (hour_per_heliostat_clean + hour_reloading_per_heliostat)
+
+    def _hour_per_heliostat_cleaning(self, heliostat_spacing:float, truck_velocity: float=10.0, truck_cleaning_velocity: float=2.0, cleaning_setup_seconds: float=30.0):
+        """Calculates the time it takes to move to a heliostat and clean it."""
+        return heliostat_spacing / (truck_velocity*1e3) + self._params.heliostat_width / (truck_cleaning_velocity*1e3) + (cleaning_setup_seconds/3600)# [hours] time it takes to move to a heliostat and clean it
+
+    def _heliostat_spacing(self, positions_x: np.ndarray, positions_y: np.ndarray) -> float:
+        """Calculate average spacing between heliostats."""
+        n_heliostats = len(positions_x)
+        min_distances = np.zeros(n_heliostats)
+        for i in range(n_heliostats):
+            distances = np.sqrt((positions_x - positions_x[i])**2 + (positions_y - positions_y[i])**2)
+            distances[distances == 0] = np.inf
+            min_distances[i] = np.min(distances)
+        return np.mean(min_distances) - self._params.heliostat_width
+
+    def _hour_per_reload_consumables(self) -> float:
+        """Calculate time required for consumable reloading."""
+        p = self._params
+        
+        heliostat_area = p.heliostat_width * p.heliostat_height # [m^2] area of heliostat
+        cleaning_capacity_area = p.truck_water_volume / p.usage_water # [m^2] cleaning capacity of water
+        reload_occurence_rate = heliostat_area / cleaning_capacity_area # []
+        
+        hour_travel_reload = 2 * p.distance_reload_station / (p.velocity_travel * 1e3) # [hours] travel time to reload station
+        
+        return reload_occurence_rate * (hour_travel_reload + p.time_shift)  # [hours]
 
 class sun:
     def __init__(self):
@@ -869,7 +1174,7 @@ class helios:
         self.delta_soiled_area_variance = {}
         self.soiling_factor_prediction_variance = {}
 
-    def import_helios(self,file_params,file_solar_field=None,num_sectors=None,verbose=True):
+    def import_helios(self,file_params,file_solar_field=None,cleaning_rate:float=None,verbose=True):
         
         table = pd.read_excel(file_params,index_col="Parameter")
         # self.h_tower = float(table.loc['h_tower'].Value)
@@ -880,49 +1185,35 @@ class helios:
         self.height = float(table.loc['heliostat_height'].Value)
         self.width = float(table.loc['heliostat_width'].Value)
         self.stow_tilt = float(table.loc['stow_tilt'].Value)
-
-        if file_solar_field==None:
-            _print_if("Warning: solar field not defined. You will need to define it manually.",verbose)
-        elif num_sectors == None:                                 # Import all heliostats
-            _print_if("Importing representative heliostat directly. You will need to define the sector areas manually.",verbose)
-            if file_solar_field.split('.')[-1] == 'csv':
-                SF = pd.read_csv(file_solar_field,skiprows=[1])
-            elif file_solar_field.split('.')[-1] == 'xlsx':
-                SF = pd.read_excel(file_solar_field,skiprows=[1])
-            else:
-                raise ValueError("Solar field file must be csv or xlsx")
-
-            self.x = np.array(SF.loc[:,'Loc. X'])               # x cartesian coordinate of each heliostat (E>0)
-            self.y = np.array(SF.loc[:,'Loc. Y'])               # y cartesian coordinate of each heliostat (N>0)
-            self.rho = np.sqrt(self.x**2+self.y**2)             # angular polar coordinate of each heliostat (E=0, positive counterclockwise)
-            self.theta = np.arctan2(self.y,self.x)              # radial polar coordinate of each heliostat
+        solar_field = self.read_solarfield(file_solar_field)
+        
+        self.truck = Truck(config_path=file_params)
+        self.truck.calculate_cleaning_rate(solar_field=solar_field, cleaning_rate=cleaning_rate)
+            
+        if isinstance(self.truck.sectors,str) and self.truck.sectors.lower() == 'manual': # Manual importing of solar field respresentatives
+            self.x = solar_field[:,1] # x cartesian coordinate of each heliostat (E>0)
+            self.y = solar_field[:,2] # y cartesian coordinate of each heliostat (N>0)
+            self.rho = np.sqrt(self.x**2+self.y**2) # angular polar coordinate of each heliostat (E=0, positive counterclockwise)
+            self.theta = np.arctan2(self.y,self.x) # radial polar coordinate of each heliostat
             self.num_radial_sectors = None
-            self.num_theta_sectors = None
-        elif isinstance(num_sectors,tuple) and isinstance(num_sectors[0],int) and table.loc['receiver_type'].Value == 'External cylindrical'\
-            and isinstance(num_sectors[1],int):                 # import and sectorize
-            n_rho,n_theta = num_sectors
-            _print_if("Importing full solar field and sectorizing with {0:d} angular and {1:d} radial sectors".format(n_theta,n_rho),verbose)
-            self.num_radial_sectors,self.num_theta_sectors = num_sectors
-            self.sectorize_radial(file_solar_field,n_rho,n_theta)
+            self.num_theta_sectors = None    
+        elif isinstance(self.truck.sectors,tuple) and isinstance(self.truck.sectors[0],int) and table.loc['receiver_type'].Value == 'External cylindrical'\
+            and isinstance(self.truck.sectors[1],int):                 # import and sectorize
+            n_rho,n_theta = self.truck.sectors
+            _print_if("Sectorizing with {0:d} angular and {1:d} radial sectors".format(n_theta,n_rho),verbose)
+            self.num_radial_sectors,self.num_theta_sectors = self.truck.sectors
+            self.sectorize_radial(solar_field,n_rho,n_theta)
         elif table.loc['receiver_type'].Value == 'Flat plate':
-            n_hor,n_vert = num_sectors
-            _print_if("Importing full solar field and sectorizing with {0:d} horizontal and {1:d} vertical sectors".format(n_hor,n_vert),verbose)
-            self.num_radial_sectors,self.num_theta_sectors = num_sectors
-            self.sectorize_corn(file_solar_field,n_hor,n_vert)
+            n_hor,n_vert = self.truck.sectors
+            _print_if("Sectorizing with {0:d} horizontal and {1:d} vertical sectors".format(n_hor,n_vert),verbose)
+            self.num_radial_sectors,self.num_theta_sectors = self.truck.sectors
+            self.sectorize_corn(solar_field,n_hor,n_vert)
         else:
             raise ValueError("num_sectors must be None or an a 2-tuple of intergers")  
-
-    def sectorize_radial(self,whole_field_file,n_rho,n_theta,verbose=True):
-        
-        if whole_field_file.split('.')[-1] == 'csv':
-            whole_SF = pd.read_csv(whole_field_file,skiprows=[1])
-        elif whole_field_file.split('.')[-1] == 'xlsx':
-            whole_SF = pd.read_excel(whole_field_file,skiprows=[1])
-        else:
-            raise ValueError("Solar field file must be csv or xlsx")
-
-        x = np.array(whole_SF.loc[:,'Loc. X'])                         # x cartesian coordinate of each heliostat (E>0)
-        y = np.array(whole_SF.loc[:,'Loc. Y'])                         # y cartesian coordinate of each heliostat (N>0)
+    
+    def sectorize_radial(self,solar_field,n_rho,n_theta,verbose=True):
+        x = solar_field[:,1] # x cartesian coordinate of each heliostat (E>0)
+        y = solar_field[:,2] # y cartesian coordinate of each heliostat (N>0)
         # n_sec = n_rho*n_theta
         n_tot = len(x)
         extra_hel_th = np.mod(n_tot,n_theta)
@@ -1022,7 +1313,7 @@ class helios:
         self.rho = hel_rep[:,0]
         self.heliostats_in_sector = hel_sec
 
-    def sectorize_corn(self,whole_field_file,n_hor,n_vert,verbose=True):
+    def sectorize_corn(self,solar_field,n_hor,n_vert,verbose=True):
         """
         Sectorize the solar field by dividing it into a grid of horizontal and vertical sectors.
         
@@ -1040,22 +1331,6 @@ class helios:
         Returns:
             None
         """
-                
-            
-        def read_solarfield(field_filepath): # Load CSV containing solarfield coordintes
-            positions = []
-            if field_filepath.split('.')[-1] == 'csv':
-                whole_SF = pd.read_csv(field_filepath,skiprows=[1])
-            elif field_filepath.split('.')[-1] == 'xlsx':
-                whole_SF = pd.read_excel(field_filepath,skiprows=[1])
-            else:
-                raise ValueError("Solar field file must be csv or xlsx")
-            x_field = np.array(whole_SF.loc[:,'Loc. X'])                    # x cartesian coordinate of each heliostat (E>0)
-            y_field = np.array(whole_SF.loc[:,'Loc. Y'])
-            helioID = np.arange(len(x_field),dtype=np.int64)
-            positions = np.column_stack((helioID, x_field, y_field))
-            return positions
-
         def generate_grid(num_hor,num_vert,x,y): # Generate a grid around solarfield
             x_points = np.linspace(min(x),max(x),num_hor)
             y_points = np.linspace(min(y),max(y),num_vert)
@@ -1067,17 +1342,16 @@ class helios:
             closest_idx = np.argmin(distances) 
             return distances[0][closest_idx], closest_idx
             
-        positions = read_solarfield(whole_field_file)
-        grid = generate_grid(n_hor,n_vert,positions[:,1],positions[:,2])
+        grid = generate_grid(n_hor,n_vert,solar_field[:,1],solar_field[:,2])
         
         closest_grid = [] # Create a dictionary to store 
         # [heliostat ID, x position, y position, distance to closest grid, closest grid point]
-        for i in range(len(positions)):
-            distance_grid, closest_idx = find_closest_point(positions[i,:],grid) 
+        for i in range(len(solar_field)):
+            distance_grid, closest_idx = find_closest_point(solar_field[i,:],grid) 
             if i == 0:
-                closest_grid = np.hstack([positions[i,:],distance_grid,closest_idx])
+                closest_grid = np.hstack([solar_field[i,:],distance_grid,closest_idx])
             else:
-                closest_grid = np.vstack([closest_grid,np.hstack([positions[i,:],distance_grid,closest_idx])])
+                closest_grid = np.vstack([closest_grid,np.hstack([solar_field[i,:],distance_grid,closest_idx])])
         
         
         # Store Heliostat Field information
@@ -1100,8 +1374,23 @@ class helios:
         self.y = (representative_helio[:,2])
         self.heliostats_in_sector = np.array(representative_helio[:,-1],dtype=np.int64)
         self.sector_area = self.heliostats_in_sector * self.height * self.width
-    
-    def sector_plot(self):
+        
+    @staticmethod
+    def read_solarfield(field_filepath): # Load CSV containing solarfield coordintes
+        positions = []
+        if field_filepath.split('.')[-1] == 'csv':
+            whole_SF = pd.read_csv(field_filepath,skiprows=[1])
+        elif field_filepath.split('.')[-1] == 'xlsx':
+            whole_SF = pd.read_excel(field_filepath,skiprows=[1])
+        else:
+            raise ValueError("Solar field file must be csv or xlsx")
+        x_field = np.array(whole_SF.loc[:,'Loc. X'])                    # x cartesian coordinate of each heliostat (E>0)
+        y_field = np.array(whole_SF.loc[:,'Loc. Y'])
+        helioID = np.arange(len(x_field),dtype=np.int64)
+        positions = np.column_stack((helioID, x_field, y_field))
+        return positions
+        
+    def sector_plot(self, show_id=False):
         Ns = self.x.shape[0]
         n_theta = self.num_theta_sectors
         n_radius = self.num_radial_sectors
@@ -1122,8 +1411,15 @@ class helios:
             fig,ax = plt.subplots()
             for ii in range(Ns):
                 ax.scatter(self.full_field['x'][sid==ii],self.full_field['y'][sid==ii],color=c_map[ii])
-            ax.scatter(self.x,self.y,color='black',marker='o',label='representative heliostats')
-            plt.legend()
+                if show_id:
+                    # Add sector ID label with larger font
+                    center_x = np.mean(self.full_field['x'][sid==ii])
+                    center_y = np.mean(self.full_field['y'][sid==ii])
+                    ax.text(center_x, center_y, str(ii), 
+                            alpha=1.0, ha='center', va='center', fontsize=18)  
+                else:
+                    ax.scatter(self.x,self.y,color='black',marker='o',label='representative heliostats')
+                    plt.legend()
             plt.xlabel('distance from receiver - x [m]')
             plt.ylabel('distance from receiver -y [m]')
             plt.title('Solar Field Sectors')
@@ -1162,18 +1458,19 @@ class helios:
                 refractive_index = sim_dat.dust.m[f]
                 lam = sim_dat.source_wavelength[f]
                 intensities = sim_dat.source_normalized_intensity[f]
-                for h in tqdm(range(num_heliostats[f]),desc=f"File {f}"):
+                h=0
+                for h in tqdm(range(num_heliostats[f]), 
+                            desc=f"File {f}", 
+                            postfix=f"acceptance angle {phia[f][h]*1e3:.2f} mrad"):
                     already_computed = [e in computed for _,e in enumerate(same_ext[f][h])]
                     if any(already_computed):
                         idx = already_computed.index(True)
                         fe,he = same_ext[f][h][idx]                        
-                        _print_if(f"\t Using weights from file {fe}, mirror {he} for file {f}, mirror {h}...",verbose)
                         self.extinction_weighting[f][h,:] = self.extinction_weighting[fe][he,:]
                     else:
-                        _print_if(f"\t Computing weights for file {f}, heliostat {h}...",verbose)
-                        ext_weight = _extinction_function(  dia,lam,intensities,phia[f][h],
-                                                            refractive_index,verbose=verbose,
-                                                            **options)
+                        ext_weight = _extinction_function(dia,lam,intensities,phia[f][h],
+                                                        refractive_index,verbose=verbose,
+                                                        **options)
                         self.extinction_weighting[f][h,:] = ext_weight
                         computed.append((f,h))
                     
@@ -1470,13 +1767,13 @@ class reflectance_measurements:
         a.set_xlabel("Date")
 
 class field_model(soiling_base):
-    def __init__(self,file_params,file_SF,num_sectors=None):
+    def __init__(self,file_params,file_SF,cleaning_rate=None):
         super().__init__(file_params)
 
         self.sun = sun()
         self.sun.import_sun(file_params)
         
-        self.helios.import_helios(file_params,file_SF,num_sectors=num_sectors)
+        self.helios.import_helios(file_params,file_SF,cleaning_rate=cleaning_rate)
         if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
             self.helios.stow_tilt = None
 
