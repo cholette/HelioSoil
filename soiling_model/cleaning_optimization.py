@@ -67,7 +67,7 @@ def find_truck_bounds(opt, verbose=True):
     
     while True:
         # Calculate maximum cleanings possible with these trucks
-        max_cleans = int(365 / (total_sectors / (n_trucks * sectors_per_truck)))
+        max_cleans = int(np.min([365 / (total_sectors / (n_trucks * sectors_per_truck)),365.0]))
         
         # Simulate with maximum cleaning rate
         schedule = periodic_schedule_tcc(opt, n_trucks, max_cleans, verbose=False)
@@ -135,7 +135,7 @@ def optimize_periodic_schedule(opt, file=0, verbose=True):
     
     # Calculate cleaning frequency bounds
     min_cleans = int(np.ceil(total_sectors / (max_trucks * sectors_per_truck * days_per_year)))
-    max_cleans = int(365 / (total_sectors / (max_trucks * sectors_per_truck)))
+    max_cleans = int(np.min([365 / (total_sectors / (max_trucks * sectors_per_truck)),365.0]))
 
     if verbose:
         print(f"Periodic Schedule Simulations Running Between:")
@@ -986,7 +986,7 @@ def plot_optimization_results(results: dict, file: int = 0,save_path: str = None
             verticalalignment='top', horizontalalignment='right', bbox=props)
     
     max_cost = np.nanmax(TCC)/1e6  # Convert to millions
-    ax.set_ylim(0, max_cost * 0.3)
+    ax.set_ylim(0, max_cost * 0.5)
     
     # Customize plot
     ax.set_xlabel("Number of Field Cleans per Year", fontsize=14)

@@ -33,41 +33,67 @@ def _import_option_helper(file_list,option):
     
     return option
 
-def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_per_truck=1):
+def simple_annual_cleaning_schedule(n_sectors, n_trucks, n_cleans, dt=1, n_sectors_per_truck=1):
+    """
+    Generate a simple annual cleaning schedule.
+    
+    Parameters:
+    -----------
+    n_sectors : int
+        Number of sectors in the field
+    n_trucks : int
+        Number of cleaning trucks available
+    n_cleans : int
+        Target number of cleanings per year
+    dt : float, optional
+        Time step in hours, default=1
+    n_sectors_per_truck : int, optional
+        Number of sectors each truck can clean per time step, default=1
+        
+    Returns:
+    --------
+    cleans : ndarray
+        Binary matrix (n_sectors x n_hours) where 1 indicates cleaning
+    """
     T_days = 365
-    n_hours = int(T_days*(24/dt)) # number of hours between cleanings
-    clean_interval = np.floor(T_days/n_cleans)
-    min_clean_interval = np.ceil(n_sectors/n_trucks/n_sectors_per_truck)
+    n_hours = int(T_days*(24/dt))  # number of hours in simulation
+    
+    # Calculate how many sectors can be cleaned in one day by all trucks
+    daily_cleaning_capacity = n_trucks * n_sectors_per_truck
+    
+    # Calculate minimum time between cleanings based on capacity
+    min_clean_interval = np.ceil(n_sectors / daily_cleaning_capacity)
+    
+    # Adjust clean interval and number of cleanings if needed
+    clean_interval = np.floor(T_days / n_cleans)
     if clean_interval < min_clean_interval:
         clean_interval = min_clean_interval
-        n_cleans = int(np.floor(T_days/clean_interval))
-
-    # evenly space cleaning ends
-    clean_ends = np.linspace(0,n_hours-1,num=n_cleans+1,dtype=int)
-    clean_ends = np.delete(clean_ends,-1) # remove the last clean since (clean at 0 takes care of this) 
+        n_cleans = int(np.floor(T_days / clean_interval))
     
-    # shift schedule
-    cleans = np.zeros((n_sectors,n_hours))
-    for ii in range(n_trucks*n_sectors_per_truck,n_sectors,n_trucks*n_sectors_per_truck):
-        idx0 = n_sectors-ii
-        idx1 = n_sectors-(ii-n_trucks*n_sectors_per_truck)
-        idx_col = clean_ends-(24/dt)*(int(ii/n_trucks/n_sectors_per_truck)-1)
-        for jj in idx_col.astype(int):
-            if jj<0:
-                cc = jj + 365*24
-                cleans[idx0:idx1,cc] = 1
-            else:
-                cleans[idx0:idx1,jj] = 1
-
-    # take care of remainder (first day of a field clean)
-    if idx0 != 0:
-        idx_col = clean_ends-(24/dt)*int(ii/n_trucks/n_sectors_per_truck)
-        for jj in idx_col.astype(int):
-            if jj<0:
-                cc = jj + 365*24
-                cleans[0:idx0,cc] = 1
-            else:
-                cleans[0:idx0,jj] = 1
+    # Evenly space cleaning days
+    clean_ends = np.linspace(0, n_hours-1, num=n_cleans+1, dtype=int)
+    clean_ends = np.delete(clean_ends, -1)  # remove the last clean since (clean at 0 takes care of this)
+    
+    # Initialize cleaning schedule
+    cleans = np.zeros((n_sectors, n_hours))
+    
+    # Calculate number of cleaning days needed for full field
+    cleaning_days_needed = int(np.ceil(n_sectors / daily_cleaning_capacity))
+    
+    # Fill in the cleaning schedule
+    for clean_day_idx in range(cleaning_days_needed):
+        # Calculate which sectors to clean on this day
+        start_sector = clean_day_idx * daily_cleaning_capacity
+        end_sector = min(start_sector + daily_cleaning_capacity, n_sectors)
+        
+        # For each clean event in the schedule
+        for clean_time in clean_ends:
+            # Calculate actual cleaning time (shifted by day index)
+            actual_time = (clean_time - (24/dt) * clean_day_idx) % n_hours
+            
+            # Apply the cleaning
+            cleans[start_sector:end_sector, int(actual_time)] = 1
+    
     return cleans
 
 def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12),lgd_label=None,lgd_size = 15):

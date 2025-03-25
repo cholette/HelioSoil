@@ -191,8 +191,10 @@ class field_common_methods:
             sun.elevation[f] = solar_angles[:,1]
             sun.DNI[f] = np.array([radiation.get_radiation_direct(time,elevation) if elevation > 0 else 0.0 
                        for time, elevation in zip(time_utc,solar_angles[:,1])])
-            
-        self.sun = sun # update sun in the main model 
+        # Check if DNI data exists in the simulation inputs
+        if f not in sim_in.dni or not isinstance(sim_in.dni[f], (list, np.ndarray)) or len(sim_in.dni[f]) == 0:
+            print('No DNI in weather data file using clear sky DNI')
+            sim_in.dni[f] = sun.DNI[f]
     
     def helios_angles(self,plant,verbose=True,second_surface=True):
         sun = self.sun  

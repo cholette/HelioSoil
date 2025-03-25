@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.cm import turbo
 from warnings import warn
 import copy
+from sklearn.cluster import KMeans
 from pathlib import Path
 from typing import Dict
 from dataclasses import dataclass, field
@@ -248,7 +249,7 @@ class physical_base(soiling_base):
                 if Fd.min() < 0:
                     warn("Deposition velocity is negative (min value: "+str(Fd.min())+"). Setting negative components to zero.")
                     Fd[Fd<0]=0
-                helios.pdfqN[f][idx,:,:] = Fd.transpose()*dust.pdfN[f]*1e6  # Dust flux pdf, i.e. [dq[particles/(s*m^2)]/dLog_{10}(D[µm]) ] deposited on 1m2. 1e6 for cm^3->m^3 
+                helios.pdfqN[f][idx,:,:] = Fd.transpose()*dust.pdfN[f]  # Dust flux pdf, i.e. [dq[particles/(s*m^2)]/dLog_{10}(D[µm]) ] deposited on 1m2. 
             
         self.helios = helios
         
@@ -435,6 +436,10 @@ class constant_mean_base(soiling_base):
             self.mu_tilde =float(table.loc['mu_tilde'].Value)          # [-] constant average deposition
         except:
             _print_if(f"No mu_tilde model defined in {file_params}. You will need to define this before simulating",verbose)
+        try: 
+            self.sigma_dep = float(table.loc['sigma_dep'].Value)
+        except: 
+            _print_if(f"No sigma_dep model defined in {file_params}.",verbose)
 
     def calculate_delta_soiled_area(self,simulation_inputs,mu_tilde=None,sigma_dep=None,verbose=True):
 
@@ -576,7 +581,7 @@ class simulation_inputs:
         dust_type = _import_option_helper(files, dust_type)
         
         weather_variables = { # List of possible weather variable names and the combination of possibly names
-            'air_temp': ['airtemp', 'temperature', 'temp', 'ambt'],
+            'air_temp': ['airtemp', 'temperature', 'temp', 'ambt', 't1'],
             'wind_speed': ['windspeed', 'ws', 'wind_speed'],
             'dni': ['dni', 'directnormalirradiance'],
             'rain_intensity': ['rainintensity', 'precipitation'],
@@ -588,7 +593,7 @@ class simulation_inputs:
             'pm_tot': ['pm_tot', 'pmtot', 'pmt', 'pm20'],
             'tsp': ['tsp'],
             'pm10': ['pm10'],
-            'pm2p5': ['pm2_5', 'pm2p5'],
+            'pm2p5': ['pm2_5', 'pm2p5', 'pm2.5'],
             'pm1': ['pm1'],
             'pm4': ['pm4']
         }
@@ -597,9 +602,25 @@ class simulation_inputs:
 
         for ii, file in enumerate(files): # Loop through each campaign and import weather files
             self.file_name[ii] = file
-            weather = pd.read_excel(file, sheet_name="Weather")
-
-            time = pd.to_datetime(weather['Time'])
+            if file.endswith('.csv'):
+                raise ValueError("Please use an excel file for data file")
+            weather = pd.read_excel(
+                file, 
+                sheet_name="Weather"
+            )
+            # Look for time column with different possible names
+            time_column = None
+            for col in weather.columns:
+                if col.lower() in ['time', 'timestamp', 'date', 'datetime', 'date time']:
+                    time_column = col
+                    break
+                
+            if time_column is None:
+                raise ValueError(f"No time column found in file {file}. Expected column names: 'Time', 'Timestamp', 'Date', 'DateTime', or 'Date Time'")
+            
+            # Convert to datetime and round to minutes
+            weather[time_column] = pd.to_datetime(weather[time_column]).dt.round("min")
+            time = pd.to_datetime(weather[time_column])
             self.start_datetime[ii] = time.iloc[0]
             self.end_datetime[ii] = time.iloc[-1]
             
@@ -719,10 +740,10 @@ class dust:
                 lmjj = self.log10_mu[ii][jj]
                 nNd[:,jj] = Ndjj/(np.sqrt(2*np.pi)*lsjj)*np.exp(-(np.log10(Dii)-lmjj)**2/(2*lsjj**2))
 
-            pdfNii = np.sum(nNd,axis=1) # pdfN (number) distribution dN[cm^-3]/dLog10(D[µm])
+            pdfNii = np.sum(nNd,axis=1)*1e6 # pdfN (number) distribution dN[m^-3]/dLog10(D[µm]), 1e6 factor from { V(cm^3->m^3) 1e6 }
             self.pdfN[ii] = pdfNii
-            self.pdfA[ii] = pdfNii*(np.pi/4*Dii**2)*1e-6 # pdfA (area) dA[m^2/m^3]/dLog10(D[µm]), 1e-6 factor from { D^2(µm^2->m^2) 1e-12 , V(cm^3->m^3) 1e6 }
-            self.pdfM[ii] = pdfNii*(rhoii*np.pi/6*Dii**3)*1e-3 # pdfm (mass) dm[µg/m^3]/dLog10(D[µm]), 1e-3 factor from { D^3(µm^3->m^3) 1e-18 , m(kg->µg) 1e9 , V(cm^3->m^3) 1e6 }
+            self.pdfA[ii] = pdfNii*(np.pi/4*Dii**2)*1e-12 # pdfA (area) dA[m^2/m^3]/dLog10(D[µm]), 1e-12 factor from { D^2(µm^2->m^2) 1e-12}
+            self.pdfM[ii] = pdfNii*(rhoii*np.pi/6*Dii**3)*1e-9 # pdfm (mass) dm[µg/m^3]/dLog10(D[µm]), 1e-9 factor from { D^3(µm^3->m^3) 1e-18 , m(kg->µg) 1e9}
             self.TSP[ii] = np.trapz(self.pdfM[ii],np.log10(Dii)) 
             self.PMT[ii] = self.TSP[ii]
             self.PM10[ii] = np.trapz(self.pdfM[ii][Dii<=10],np.log10(Dii[Dii<=10]))  # PM10 = np.trapz(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
@@ -761,7 +782,7 @@ class dust:
 
             color = 'tab:red'
             ax1[ff,0].set_xlabel(r"D [$\mu$m]")
-            ax1[ff,0].set_ylabel(r'$\frac{dN [cm^{{-3}} ] }{dLog(D \;[\mu m])}$', color=color,size=20)
+            ax1[ff,0].set_ylabel(r'$\frac{dN [m^{{-3}} ] }{dLog(D \;[\mu m])}$', color=color,size=20)
             ax1[ff,0].plot(D_dust,pdfN, color=color)
             ax1[ff,0].tick_params(axis='y', labelcolor=color)
             ax1[ff,0].grid('on')
@@ -1024,6 +1045,10 @@ class Truck:
         else:
             raise ValueError("Must provide either:\n1. Manual cleaning rate: cleaning_rate only,\n2. Auto cleaning rate calculation: no num_sectors and no cleaning_rate.\n3. Manual sector configuration: num_sectors")
         
+        if target_rate > len(solar_field):
+            target_rate = len(solar_field)
+            cleaning_rate = len(solar_field)
+            print(f'Warning: Target rate {target_rate} exceeds number of heliostats {len(solar_field)}. Setting to {len(solar_field)}')
         # Calculate sectors based on target rate
         self._optimize_sectors(solar_field, target_rate, tolerance)
         
@@ -1036,30 +1061,38 @@ class Truck:
         best_error = float('inf')
         best_sectors = None
         
-        while n_sectors_per_truck <= 10:
-            n_sectors = len(solar_field) / target_rate
-            n_sectors_scaled = n_sectors * n_sectors_per_truck
-            
-            n_rad = max(1, int(np.sqrt(n_sectors_scaled)))
-            n_az = int(np.ceil(n_sectors_scaled/n_rad))
-            
-            while n_rad * n_az < n_sectors_scaled:
-                n_rad += 1
+        if target_rate >= len(solar_field): # Increase field resoltuion if we are cleaning full field in one truck
+            best_n_sectors = int(np.ceil(len(solar_field) / 50 ))
+            best_sectors = (int(np.floor(np.sqrt(best_n_sectors))), int(np.ceil(np.sqrt(best_n_sectors))))
+            best_rate = len(solar_field) / (best_sectors[0] * best_sectors[1]/best_n_sectors)
+            best_error = abs(best_rate - target_rate) / target_rate
+            if best_rate < target_rate:
+                raise ValueError("Target rate exceeds number of heliostats in field")
+        else:
+            while n_sectors_per_truck <= 10:
+                n_sectors = len(solar_field) / target_rate
+                n_sectors_scaled = n_sectors * n_sectors_per_truck
+                
+                n_rad = max(1, int(np.sqrt(n_sectors_scaled)))
                 n_az = int(np.ceil(n_sectors_scaled/n_rad))
-            
-            actual_rate = len(solar_field) / (n_rad * n_az / n_sectors_per_truck)
-            error = abs(actual_rate - target_rate) / target_rate
-            
-            if error < best_error:
-                best_error = error
-                best_sectors = (n_rad, n_az)
-                best_rate = actual_rate
-                best_n_sectors = n_sectors_per_truck
                 
-            if error <= tolerance:
-                break
+                while n_rad * n_az < n_sectors_scaled:
+                    n_rad += 1
+                    n_az = int(np.ceil(n_sectors_scaled/n_rad))
                 
-            n_sectors_per_truck += 1
+                actual_rate = len(solar_field) / (n_rad * n_az / n_sectors_per_truck)
+                error = abs(actual_rate - target_rate) / target_rate
+                
+                if error < best_error:
+                    best_error = error
+                    best_sectors = (n_rad, n_az)
+                    best_rate = actual_rate
+                    best_n_sectors = n_sectors_per_truck
+                    
+                if error <= tolerance:
+                    break
+                    
+                n_sectors_per_truck += 1
         
         # Store results
         self._cleaning_rate = best_rate
@@ -1207,7 +1240,8 @@ class helios:
             n_hor,n_vert = self.truck.sectors
             _print_if("Sectorizing with {0:d} horizontal and {1:d} vertical sectors".format(n_hor,n_vert),verbose)
             self.num_radial_sectors,self.num_theta_sectors = self.truck.sectors
-            self.sectorize_corn(solar_field,n_hor,n_vert)
+            self.sectorize_kmeans_clusters(solar_field, self.truck.sectors[0] * self.truck.sectors[1])
+            # self.sectorize_corn_cleaningrows(solar_field,n_hor,n_vert)
         else:
             raise ValueError("num_sectors must be None or an a 2-tuple of intergers")  
     
@@ -1313,7 +1347,51 @@ class helios:
         self.rho = hel_rep[:,0]
         self.heliostats_in_sector = hel_sec
 
-    def sectorize_corn(self,solar_field,n_hor,n_vert,verbose=True):
+    def sectorize_kmeans_clusters(self, solar_field, num_sectors):
+        """Cluster heliostats based on distance and set representative heliostats."""
+        print("Clustering heliostats...")
+        weighted_positions = solar_field[:,1:]  # Get x,y coordinates
+        kmeans = KMeans(n_clusters=num_sectors, random_state=42)
+        labels = kmeans.fit_predict(weighted_positions)
+        cluster_centers = kmeans.cluster_centers_
+        
+        # Initialize arrays to store information
+        self.x = np.zeros(num_sectors)
+        self.y = np.zeros(num_sectors)
+        heliostats_in_sector = np.zeros(num_sectors, dtype=int)
+        self.sector_area = np.zeros(num_sectors)
+        
+        # Store full field information
+        self.full_field['x'] = solar_field[:,1]
+        self.full_field['y'] = solar_field[:,2]
+        self.full_field['id'] = solar_field[:,0]
+        self.full_field['sector_id'] = labels
+        
+        # For each cluster, find closest heliostat to center and calculate sector information
+        for i in range(num_sectors):
+            # Find heliostats in this cluster
+            mask = labels == i
+            positions_in_cluster = weighted_positions[mask]
+            
+            # Count heliostats in this sector
+            heliostats_in_sector[i] = np.sum(mask)
+            
+            # Calculate cluster area
+            self.sector_area[i] = heliostats_in_sector[i] * self.height * self.width
+            
+            # Find closest heliostat to cluster center
+            if np.sum(mask) > 0:  # Make sure cluster isn't empty
+                distances = np.linalg.norm(weighted_positions - cluster_centers[i], axis=1)
+                closest_idx = np.argmin(distances)
+                
+                # Set representative heliostat coordinates
+                self.x[i] = solar_field[closest_idx, 1]
+                self.y[i] = solar_field[closest_idx, 2]
+        
+        # Store the number of heliostats per sector
+        self.heliostats_in_sector = heliostats_in_sector
+    
+    def sectorize_corn_cleaningrows(self,solar_field,n_hor,n_vert,verbose=True):
         """
         Sectorize the solar field by dividing it into a grid of horizontal and vertical sectors.
         
@@ -1384,46 +1462,76 @@ class helios:
             whole_SF = pd.read_excel(field_filepath,skiprows=[1])
         else:
             raise ValueError("Solar field file must be csv or xlsx")
+        
         x_field = np.array(whole_SF.loc[:,'Loc. X'])                    # x cartesian coordinate of each heliostat (E>0)
         y_field = np.array(whole_SF.loc[:,'Loc. Y'])
         helioID = np.arange(len(x_field),dtype=np.int64)
         positions = np.column_stack((helioID, x_field, y_field))
         return positions
+    
+    def sector_plot(self, show_id=False, cmap_name='turbo_r', figsize=(12, 10)):
+        """
+        Plot the heliostat field with sectors colored distinctly.
         
-    def sector_plot(self, show_id=False):
-        Ns = self.x.shape[0]
-        n_theta = self.num_theta_sectors
-        n_radius = self.num_radial_sectors
-
-        if n_theta == None:
-            print("No sectorization defined")
+        Parameters:
+            show_id (bool, optional): Whether to show sector IDs. Default is False.
+            cmap (str, optional): Matplotlib colormap to use. Default is 'tab20' which supports up to 20 distinct colors.
+                                Other good options: 'tab10', 'viridis', 'plasma', 'Set1', 'Set2', 'Set3'.
+            figsize (tuple, optional): Figure size (width, height) in inches.
+            
+        Returns:
+            tuple: (fig, ax) The figure and axis objects for further customization.
+        """
+        Ns = self.x.shape[0]  # Number of sectors
+        sid = self.full_field['sector_id']
         
-        else:
-            # set up colormap to make sure adjacent sectors have a different color
-            base_map = np.linspace(0.0,1.0,n_radius)
-            c_map = base_map
-            for ii in range(1,n_theta):
-                c_map = np.vstack( (c_map,np.roll(base_map,3*ii)) )
-            c_map = c_map.flatten()
-            c_map = turbo(c_map)
-
-            sid = self.full_field['sector_id']
-            fig,ax = plt.subplots()
-            for ii in range(Ns):
-                ax.scatter(self.full_field['x'][sid==ii],self.full_field['y'][sid==ii],color=c_map[ii])
-                if show_id:
-                    # Add sector ID label with larger font
-                    center_x = np.mean(self.full_field['x'][sid==ii])
-                    center_y = np.mean(self.full_field['y'][sid==ii])
-                    ax.text(center_x, center_y, str(ii), 
-                            alpha=1.0, ha='center', va='center', fontsize=18)  
-                else:
-                    ax.scatter(self.x,self.y,color='black',marker='o',label='representative heliostats')
-                    plt.legend()
-            plt.xlabel('distance from receiver - x [m]')
-            plt.ylabel('distance from receiver -y [m]')
-            plt.title('Solar Field Sectors')
-            plt.show()
+        # Create figure
+        fig, ax = plt.subplots(figsize=figsize)
+        
+        # Create a custom colormap where adjacent sectors have contrasting colors
+        base_map = np.linspace(0.0, 1.0, len(np.unique(sid)))
+        c_map = base_map
+        for ii in range(1, len(np.unique(sid))):
+            c_map = np.vstack((c_map, np.roll(base_map, 3*ii)))
+        c_map = c_map.flatten()
+        color_map = plt.cm.get_cmap(cmap_name)(c_map)
+        
+        # Plot each sector
+        for ii in range(Ns):
+            mask = sid == ii
+            ax.scatter(
+                self.full_field['x'][mask], 
+                self.full_field['y'][mask], 
+                color=color_map[ii % len(color_map)] if isinstance(color_map, np.ndarray) else color_map(ii / max(1, Ns-1)),
+                alpha=0.7,
+                s=30,
+                label=f"Sector {ii}" if ii < 10 else None  # Limit legend entries
+            )
+            
+            if show_id:
+                # Add sector ID label with larger font
+                center_x = np.mean(self.full_field['x'][mask])
+                center_y = np.mean(self.full_field['y'][mask])
+                ax.text(center_x, center_y, str(ii), 
+                        alpha=1.0, ha='center', va='center', fontsize=12,
+                        bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.3'))
+        
+        # Plot representative heliostats if not showing IDs
+        if not show_id:
+            ax.scatter(self.x, self.y, color='black', marker='X', s=100, 
+                    label='Representative heliostats', zorder=10)
+        
+        # Add plot styling
+        ax.set_xlabel('Distance from receiver - X [m]')
+        ax.set_ylabel('Distance from receiver - Y [m]')
+        ax.set_title('Solar Field Sectors')
+        ax.grid(True, linestyle='--', alpha=0.7)
+        
+        # Set aspect ratio to equal to ensure correct spatial representation
+        ax.set_aspect('equal')
+        
+        plt.tight_layout()
+        return fig, ax
 
     def compute_extinction_weights(self,simulation_data,loss_model=None,verbose=True,show_plots=False,options={}):
         """
@@ -1646,75 +1754,67 @@ class reflectance_measurements:
         for ii in range(len(reflectance_files)):
             
             self.file_name[ii] = reflectance_files[ii]
-            reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Average"),\
-                "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Sigma")}
+            reflectance_data = {
+                "Average": pd.read_excel(reflectance_files[ii], sheet_name="Reflectance_Average"),
+                "Sigma": pd.read_excel(reflectance_files[ii], sheet_name="Reflectance_Sigma")
+            }
 
-            time_column = next((col for col in reflectance_data['Average'].columns if col.lower() in ['time', 'timestamp']), None)
+            # Extract timestamps
+            time_column = next((col for col in reflectance_data['Average'].columns 
+                            if col.lower() in ['time', 'timestamp', 'tmsmp', 'date time']), None)
             if time_column is not None:
                 self.times[ii] = reflectance_data['Average'][time_column].values
             else:
-                raise ValueError(f"No 'Time' or 'Timestamp' column found in file {reflectance_files[ii]}")            
-            if column_names_to_import != None: # extract relevant column names of the pandas dataframe
-                self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
-                self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])),  -np.diff(self.average[ii], axis=0)))  # compute reflectance loss between measurements
-                self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
+                raise ValueError(f"No 'Time' or 'Timestamp' column found in file {reflectance_files[ii]}")
+            
+            # Import data and ensure proper dimensions, Reflectance assumed to be in % based hence / 100
+            if column_names_to_import is not None:
+                # Extract selected columns
+                avg_data = reflectance_data['Average'][column_names_to_import].values / 100.0
+                sig_data = reflectance_data['Sigma'][column_names_to_import].values / 100.0
                 self.mirror_names[ii] = column_names_to_import
             else:
-                self.average[ii] = reflectance_data['Average'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
-                self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])),  -np.diff(self.average[ii], axis=0))) # compute reflectance loss between measurements
-                self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
-                self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1::]
-
+                # Extract all columns except the first (time) column
+                avg_data = reflectance_data['Average'].iloc[:, 1:].values / 100.0
+                sig_data = reflectance_data['Sigma'].iloc[:, 1:].values / 100.0
+                self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1:]
+            
+            # Ensure 2D arrays for both single and multiple columns
+            if avg_data.ndim == 1:
+                self.average[ii] = avg_data.reshape(-1, 1)
+                self.sigma[ii] = sig_data.reshape(-1, 1)
+            else:
+                self.average[ii] = avg_data
+                self.sigma[ii] = sig_data
+                
+            # Calculate delta_ref with proper dimensions
+            self.delta_ref[ii] = np.vstack((
+                np.zeros((1, self.average[ii].shape[1])),
+                -np.diff(self.average[ii], axis=0)
+            ))
+            
+            # Set up prediction indices and times
             self.prediction_indices[ii] = []
             self.prediction_times[ii] = []
             for m in self.times[ii]:
-                self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))        
+                self.prediction_indices[ii].append(np.argmin(np.abs(m - time_grids[ii])))
             self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
-            for jj in range(self.average[ii].shape[1]):
-                self.rho0[ii] = np.nanmax(self.average[ii], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
-
-            # idx = reflectance_files.index(f) 
-            self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
-            self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(self.number_of_measurements[ii])
-            self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
-
-            if import_tilts:
-                self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[self.mirror_names[ii]].values.transpose()
-                    
-    # def import_heliostats_ref_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
-    #                             reflectometer_acceptance_angle,import_tilts=False,
-    #                             column_names_to_import=None):
-
-    #     for ii in range(len(reflectance_files)):
             
-    #         self.file_name[ii] = reflectance_files[ii]
-    #         reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Heliostats_Ref"),\
-    #             "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Heliostats_Sigma")}
+            # Calculate initial reflectance (rho0), handling NaN values
+            self.rho0[ii] = np.nanmax(self.average[ii], axis=0)
+            
+            # Set reflectometer parameters
+            self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
+            self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
+            self.sigma_of_the_mean[ii] = self.sigma[ii] / np.sqrt(self.number_of_measurements[ii])
 
-    #         self.times[ii] = reflectance_data['Average']['Time'].values
-    #         if column_names_to_import != None: # extract relevant column names of the pandas dataframe
-    #             self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
-    #             self.sigma[ii] = reflectance_data['Sigma'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
-    #             self.mirror_names[ii] = column_names_to_import
-    #         else:
-    #             self.average[ii] = reflectance_data['Average'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
-    #             self.sigma[ii] = reflectance_data['Sigma'].iloc[:,1::].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
-    #             self.mirror_names[ii] = list(reflectance_data['Average'].keys())[1::]
-
-    #         self.prediction_indices[ii] = []
-    #         self.prediction_times[ii] = []
-    #         for m in self.times[ii]:
-    #             self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))        
-    #         self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
-    #         self.rho0[ii] = self.average[ii][0,:]
-
-    #         # idx = reflectance_files.index(f) 
-    #         self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
-    #         self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(self.number_of_measurements[ii])
-    #         self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
-
-    #         if import_tilts:
-    #             self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[self.mirror_names[ii]].values.transpose()
+            # Import tilts if requested
+            if import_tilts:
+                tilt_data = pd.read_excel(reflectance_files[ii], sheet_name="Tilts")[self.mirror_names[ii]].values
+                if tilt_data.ndim == 1:
+                    self.tilts[ii] = tilt_data.reshape(1, -1)  # Single row becomes (1, n_times)
+                else:
+                    self.tilts[ii] = tilt_data.transpose()  # Shape becomes (n_heliostats, n_times)
                     
     def get_experiment_subset(self,idx):
         attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes
