@@ -29,7 +29,7 @@ raygen_site = "Yadnarie"
 dust_type = "PM10" # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
 
 # CHOOSE WHETHER TO USE DAILY AVERAGE OF REFLECTANCE VALUES OR NOT
-DAILY_AVERAGE = True
+DAILY_AVERAGE = False
 
 # CHOOSE TRAIN EXPERIMENTS 
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
@@ -94,7 +94,7 @@ reflectometer_incidence_angle = 15 # [deg] angle of incidence of reflectometer
 reflectometer_acceptance_angle = 12.5e-3 # [rad] half acceptance angle of reflectance measurements
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
 
-time_to_remove_at_end = [0,0]  # time to be removed for each experiment, in hours
+time_to_remove_at_end = [0,0,0]  # time to be removed for each experiment, in hours
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
 
 
