@@ -33,7 +33,7 @@ def _import_option_helper(file_list,option):
     
     return option
 
-def simple_annual_cleaning_schedule(n_sectors, n_trucks, n_cleans, dt=1, n_sectors_per_truck=1):
+def simple_annual_cleaning_schedule(n_sectors, n_trucks, n_cleans, dt=1, n_sectors_per_truck=1, n_modules=1):
     """
     Generate a simple annual cleaning schedule.
     
@@ -62,7 +62,7 @@ def simple_annual_cleaning_schedule(n_sectors, n_trucks, n_cleans, dt=1, n_secto
     daily_cleaning_capacity = n_trucks * n_sectors_per_truck
     
     # Calculate minimum time between cleanings based on capacity
-    min_clean_interval = np.ceil(n_sectors / daily_cleaning_capacity)
+    min_clean_interval = np.ceil(n_sectors * n_modules/ daily_cleaning_capacity)
     
     # Adjust clean interval and number of cleanings if needed
     clean_interval = np.floor(T_days / n_cleans)
@@ -75,16 +75,16 @@ def simple_annual_cleaning_schedule(n_sectors, n_trucks, n_cleans, dt=1, n_secto
     clean_ends = np.delete(clean_ends, -1)  # remove the last clean since (clean at 0 takes care of this)
     
     # Initialize cleaning schedule
-    cleans = np.zeros((n_sectors, n_hours))
+    cleans = np.zeros((n_sectors * n_modules, n_hours))
     
     # Calculate number of cleaning days needed for full field
-    cleaning_days_needed = int(np.ceil(n_sectors / daily_cleaning_capacity))
+    cleaning_days_needed = int(np.ceil(n_sectors * n_modules/ daily_cleaning_capacity))
     
     # Fill in the cleaning schedule
     for clean_day_idx in range(cleaning_days_needed):
         # Calculate which sectors to clean on this day
         start_sector = clean_day_idx * daily_cleaning_capacity
-        end_sector = min(start_sector + daily_cleaning_capacity, n_sectors)
+        end_sector = min(start_sector + daily_cleaning_capacity, n_sectors * n_modules)
         
         # For each clean event in the schedule
         for clean_time in clean_ends:

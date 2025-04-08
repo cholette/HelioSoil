@@ -1013,7 +1013,7 @@ class Truck:
             print(f"Error loading truck properties: {e}")
             print("Using default parameters")
         
-    def calculate_cleaning_rate(self, solar_field, cleaning_rate:float=None, tolerance:float=0.05) -> tuple:
+    def calculate_cleaning_rate(self, solar_field, cleaning_rate:float=None, tolerance:float=0.05, n_modules=1) -> tuple:
         """Calculate cleaning rate based on truck parameters or use provided rate.
         
         Args:
@@ -1050,12 +1050,12 @@ class Truck:
             cleaning_rate = len(solar_field)
             print(f'Warning: Target rate {target_rate} exceeds number of heliostats {len(solar_field)}. Setting to {len(solar_field)}')
         # Calculate sectors based on target rate
-        self._optimize_sectors(solar_field, target_rate, tolerance)
+        self._optimize_sectors(solar_field, target_rate, tolerance, n_modules)
         
         # Update consumable costs
         self._calculate_costs()
 
-    def _optimize_sectors(self, solar_field, target_rate: float, tolerance: float) -> tuple:
+    def _optimize_sectors(self, solar_field, target_rate: float, tolerance: float, n_modules = 1) -> tuple:
         """Calculate optimal sector configuration for given cleaning rate."""
         n_sectors_per_truck = 1
         best_error = float('inf')
@@ -1096,7 +1096,7 @@ class Truck:
         
         # Store results
         self._cleaning_rate = best_rate
-        self._sectors = best_sectors
+        self._sectors = best_sectors + (n_modules,)
         self._n_sectors_per_truck = best_n_sectors
         
         print(f'Grid size: {best_sectors[0]} x {best_sectors[1]} = {best_sectors[0] * best_sectors[1]} sectors')
@@ -1207,7 +1207,7 @@ class helios:
         self.delta_soiled_area_variance = {}
         self.soiling_factor_prediction_variance = {}
 
-    def import_helios(self,file_params,file_solar_field=None,cleaning_rate:float=None,verbose=True):
+    def import_helios(self,file_params,file_solar_field=None,cleaning_rate:float=None, n_modules=1, verbose=True):
         
         table = pd.read_excel(file_params,index_col="Parameter")
         # self.h_tower = float(table.loc['h_tower'].Value)
@@ -1221,7 +1221,7 @@ class helios:
         solar_field = self.read_solarfield(file_solar_field)
         
         self.truck = Truck(config_path=file_params)
-        self.truck.calculate_cleaning_rate(solar_field=solar_field, cleaning_rate=cleaning_rate)
+        self.truck.calculate_cleaning_rate(solar_field=solar_field, cleaning_rate=cleaning_rate, n_modules=n_modules)
             
         if isinstance(self.truck.sectors,str) and self.truck.sectors.lower() == 'manual': # Manual importing of solar field respresentatives
             self.x = solar_field[:,1] # x cartesian coordinate of each heliostat (E>0)
@@ -1237,9 +1237,9 @@ class helios:
             self.num_radial_sectors,self.num_theta_sectors = self.truck.sectors
             self.sectorize_radial(solar_field,n_rho,n_theta)
         elif table.loc['receiver_type'].Value == 'Flat plate':
-            n_hor,n_vert = self.truck.sectors
+            n_hor,n_vert = self.truck.sectors[0], self.truck.sectors[1]
             _print_if("Sectorizing with {0:d} horizontal and {1:d} vertical sectors".format(n_hor,n_vert),verbose)
-            self.num_radial_sectors,self.num_theta_sectors = self.truck.sectors
+            self.num_radial_sectors,self.num_theta_sectors = self.truck.sectors[0], self.truck.sectors[1]
             self.sectorize_kmeans_clusters(solar_field, self.truck.sectors[0] * self.truck.sectors[1])
             # self.sectorize_corn_cleaningrows(solar_field,n_hor,n_vert)
         else:

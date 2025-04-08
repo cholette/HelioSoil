@@ -255,7 +255,7 @@ class field_common_methods:
    
         self.helios = helios
 
-    def reflectance_loss(self,simulation_inputs,cleans,verbose=True):
+    def reflectance_loss(self,simulation_inputs,cleans,n_modules=1,verbose=True):
         """
         Calculates the reflectance losses with cleaning for the given simulation inputs and cleaning schedule.
         
@@ -274,7 +274,7 @@ class field_common_methods:
         _print_if("Calculating reflectance losses with cleaning for "+str(N_sims)+" simulations",verbose)
 
         helios = self.helios
-        n_helios = helios.x.shape[0]
+        n_helios = helios.x.shape[0] * n_modules
         
         files = list(sim_in.time.keys())
         for fi in range(len(files)):
@@ -285,8 +285,10 @@ class field_common_methods:
             # accumulate soiling between cleans
             temp_soil = np.zeros((n_helios,n_hours))
             temp_soil2 =  np.zeros((n_helios,n_hours))
+            temp_soil2_avg = np.zeros((helios.x.shape[0],n_hours))
+
             for hh in range(n_helios):
-                sra = copy.deepcopy(helios.delta_soiled_area[f][hh,:])  # use copy.deepcopy otherwise when modifying sra to compute temp_soil2, also helios.delta_soiled_area is modified
+                sra = copy.deepcopy(helios.delta_soiled_area[f][hh % helios.x.shape[0],:])  # use copy.deepcopy otherwise when modifying sra to compute temp_soil2, also helios.delta_soiled_area is modified
                 clean_idx = np.where(cleans[fi][hh,:])[0]
                 clean_at_0 = True                                       # kept true if sector hh-th is cleaned on day 0
                 if len(clean_idx)>0 and clean_idx[0]!=0:
@@ -308,9 +310,14 @@ class field_common_methods:
                 for cc in clean_idx_n[:-1]:                  
                     temp_soil2[hh,clean_idx[cc]:clean_idx[cc+1]] = \
                         np.cumsum(sra[clean_idx[cc]:clean_idx[cc+1]])
+                    
+            for m in range(helios.x.shape[0]):
+                hel_idx = np.arange(m, n_helios, helios.x.shape[0])
+                hel_array = temp_soil2[hel_idx, :]
+                temp_soil2_avg[m, :] = np.mean(hel_array, axis = 0)
                                 
-            helios.arealoss = temp_soil2
-            helios.soiling_factor[f] = 1-temp_soil2*helios.inc_ref_factor[f]  # hourly soiling factor for each sector of the solar field
+            helios.arealoss = temp_soil2_avg
+            helios.soiling_factor[f] = 1-temp_soil2_avg*helios.inc_ref_factor[f]  # hourly soiling factor for each sector of the solar field
         
         self.helios = helios
 
@@ -385,7 +392,7 @@ class field_common_methods:
         ff = helios.full_field
         N_helios = ff['id'].shape[0]
         zz = [0 for ii in range(N_helios)]
-        layout = [[ff['id'][ii],ff['x'][ii],ff['y'][ii],zz[ii]] for ii in range(N_helios)] #[list(id),list(ff['x']),list(ff['y']),list(zz)]
+        layout = [[0,ff['x'][ii],ff['y'][ii],zz[ii]] for ii in range(N_helios)] #[list(id),list(ff['x']),list(ff['y']),list(zz)]
         assert cp.assign_layout(r,layout)
         field = cp.get_layout_info(r)
         
@@ -448,14 +455,14 @@ class field_common_methods:
         self.helios = helios
 
 class field_model(physical_base,field_common_methods):
-    def __init__(self,file_params,file_SF,cleaning_rate:float=None):
+    def __init__(self,file_params,file_SF,cleaning_rate:float=None, n_modules=1):
         super().__init__()
         super().import_site_data_and_constants(file_params)
 
         self.sun = sun()
         self.sun.import_sun(file_params)
         
-        self.helios.import_helios(file_params,file_SF,cleaning_rate=cleaning_rate)
+        self.helios.import_helios(file_params,file_SF,cleaning_rate=cleaning_rate, n_modules=n_modules)
         if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
             self.helios.stow_tilt = None
             

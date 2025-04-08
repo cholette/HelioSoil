@@ -15,7 +15,7 @@ from soiling_model.utilities import _print_if,simple_annual_cleaning_schedule
 class optimization_problem():
     def __init__(   self,params,solar_field,weather_files,climate_file,num_sectors=None,\
                     cleaning_rate:float=None,dust_type=None,n_az=10,n_el=10,second_surface=True,verbose=True,
-                    model_type='semi-physical',ext_options={'grid_size_x':100}):
+                    model_type='semi-physical',ext_options={'grid_size_x':100}, n_modules = 1):
         self.electricity_price = []
         self.plant_other_maintenace = [] 
 
@@ -23,7 +23,7 @@ class optimization_problem():
         pl.import_plant(params)
         sd = simulation_inputs(weather_files,dust_type=dust_type)
         if model_type.lower() == 'semi-physical':
-            fm = field_model(params,solar_field,cleaning_rate=cleaning_rate)
+            fm = field_model(params,solar_field,cleaning_rate=cleaning_rate, n_modules=n_modules)
             fm.sun_angles(sd)
             fm.helios_angles(pl,second_surface=second_surface)
             fm.compute_acceptance_angles(pl)    
@@ -56,7 +56,7 @@ def find_truck_bounds(opt, verbose=True):
         tuple: (min_trucks, max_trucks, cost_data)
     """
     print('Finding truck search bounds...')
-    total_sectors = opt.field_model.helios.truck.sectors[0] * opt.field_model.helios.truck.sectors[1]
+    total_sectors = opt.field_model.helios.truck.sectors[0] * opt.field_model.helios.truck.sectors[1] * opt.field_model.helios.truck.sectors[2]
     sectors_per_truck = opt.field_model.helios.truck.n_sectors_per_truck
     
     # Start with single truck and increase until costs rise
@@ -129,7 +129,7 @@ def optimize_periodic_schedule(opt, file=0, verbose=True):
     progress_bar.update(10)  # Update after finding bounds
 
     # Calculate remaining bounds
-    total_sectors = opt.field_model.helios.truck.sectors[0] * opt.field_model.helios.truck.sectors[1]
+    total_sectors = opt.field_model.helios.truck.sectors[0] * opt.field_model.helios.truck.sectors[1] * opt.field_model.helios.truck.sectors[2]
     sectors_per_truck = opt.field_model.helios.truck.n_sectors_per_truck
     days_per_year = 365
     
@@ -223,7 +223,7 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
     files = list(opt.simulation_data.time.keys())
     N_files = len(files)
     # Calculate maximum possible cleanings
-    total_sectors = opt.field_model.helios.truck.sectors[0] * opt.field_model.helios.truck.sectors[1]
+    total_sectors = opt.field_model.helios.truck.sectors[0] * opt.field_model.helios.truck.sectors[1] * opt.field_model.helios.truck.sectors[2]
     sectors_per_truck = opt.field_model.helios.truck.n_sectors_per_truck
     max_cleans = int(365 / (total_sectors / (n_trucks * sectors_per_truck)))
     
@@ -242,10 +242,10 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
     for f in files:
         n_helios = field.helios.tilt[f].shape[0]
         cleans[f] = simple_annual_cleaning_schedule(n_helios,n_trucks,n_cleans,\
-            n_sectors_per_truck=field.helios.truck.n_sectors_per_truck)
+            n_sectors_per_truck=field.helios.truck.n_sectors_per_truck, n_modules = opt.field_model.helios.truck.sectors[2])
     
     # compute reflectance losses (updates field.helios.soiling_factor)
-    field.reflectance_loss(opt.simulation_data,cleans,verbose=verbose) 
+    field.reflectance_loss(opt.simulation_data,cleans,opt.field_model.helios.truck.sectors[2],verbose=verbose) 
 
     C_deg = np.zeros(N_files)
     C_cl = np.zeros(N_files)   
@@ -291,7 +291,7 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
         stow_elevation = field.sun.stow_angle
         sun_above_stow_elevation = (field.sun.elevation[f]>=stow_elevation)
 
-        TCC[fi], C_cl[fi], C_deg[fi] = _cleaning_cost(lost_power,alpha,opt,cleans[f],n_trucks)
+        TCC[fi], C_cl[fi], C_deg[fi] = _cleaning_cost(lost_power*opt.field_model.helios.truck.sectors[2],alpha,opt,cleans[f],n_trucks)
         
         # compute direct costs
         _print_if(fmt_str.format(fi,C_deg[fi]+C_cl[fi],C_deg[fi],C_cl[fi]),verbose)
