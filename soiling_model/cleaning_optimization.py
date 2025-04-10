@@ -649,17 +649,17 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method:str='gree
         doy = pd.to_datetime(opt.simulation_data.time[f]).dt.dayofyear # Day of year
         opt.field_model.helios.optical_efficiency[f][np.isnan(opt.field_model.helios.optical_efficiency[f])] = 0
         
-        sector_area = opt.field_model.helios.sector_area.reshape(-1,1)
+        sector_area = np.repeat(opt.field_model.helios.sector_area.reshape(-1,1), repeats=opt.field_model.helios.truck.sectors[2], axis=0)
         
-        clean_reflected_irradiance = opt.simulation_data.dni[f][np.newaxis,:] * sector_area * opt.field_model.helios.optical_efficiency[f] * opt.field_model.helios.nominal_reflectance
+        clean_reflected_irradiance = opt.simulation_data.dni[f][np.newaxis,:] * sector_area * np.repeat(opt.field_model.helios.optical_efficiency[f], repeats=opt.field_model.helios.truck.sectors[2], axis=0) * opt.field_model.helios.nominal_reflectance
         production_profit = opt.plant.plant['power_block_efficiency'] * (opt.plant.plant['electricity_price']/1e6-opt.plant.plant['plant_other_maintenance']/1e6) * opt.simulation_data.dt[f] / 3600.0
                 
         sector_cleaningcost = (opt.field_model.helios.truck.consumable_costs['total']) 
         
-        n_sectors = opt.field_model.helios.tilt[f].shape[0]
+        n_sectors = opt.field_model.helios.truck.sectors[0] * opt.field_model.helios.truck.sectors[1] * opt.field_model.helios.truck.sectors[2]
         n_day_horizon = np.ceil(n_sectors / (opt.field_model.helios.truck.n_sectors_per_truck*n_trucks))
-        incidence_factor = opt.field_model.helios.inc_ref_factor[f].copy()
-        soil_rate = opt.field_model.helios.delta_soiled_area[f].copy() # Actual soiling rate
+        incidence_factor = np.repeat(opt.field_model.helios.inc_ref_factor[f].copy(), repeats=opt.field_model.helios.truck.sectors[2], axis=0)
+        soil_rate = np.repeat(opt.field_model.helios.delta_soiled_area[f], repeats=opt.field_model.helios.truck.sectors[2], axis=0) # Actual soiling rate
         
         arealoss = np.zeros_like(soil_rate) # Actual area loss after rollout heuristic
         if initial_arealoss is None:
@@ -756,10 +756,18 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method:str='gree
                         'arealoss'[f]: day_arealoss}
             results['day_costs'][f] = day_costs
     
+    soiling_factor_avg = np.zeros([opt.field_model.helios.truck.sectors[0] * opt.field_model.helios.truck.sectors[1], soiling_factor.shape[1]])
+    for m in range(opt.field_model.helios.x.shape[0]):
+        hel_idx = np.arange(m, opt.field_model.helios.x.shape[0] * opt.field_model.helios.truck.sectors[2], opt.field_model.helios.x.shape[0])
+        hel_array = soiling_factor[hel_idx, :]
+        soiling_factor_avg[m, :] = np.mean(hel_array, axis = 0)
+
     results['n_trucks'] = n_trucks
     results['soiling_induced_off_times'] = np.sum(~receiver_saturation['clean_field'] & receiver_saturation['soiled_field'])
     results['soiling_induced_drops_below_upper_limit'] = np.sum(receiver_saturation['clean_field'] & ~receiver_saturation['soiled_field'])            
-    results['soiling_factor'][f] = soiling_factor
+    results['soiling_factor'][f] = soiling_factor_avg
+
+
     results['cleaning_actions'][f] = cleaning_schedule
     return results
 
