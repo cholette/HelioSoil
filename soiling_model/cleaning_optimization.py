@@ -7,6 +7,9 @@ from tqdm.notebook import tqdm
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.dates import DateFormatter
+from scipy.interpolate import RegularGridInterpolator
+import ast
+
 
 from soiling_model.base_models import simulation_inputs
 from soiling_model.field_models import field_model,simplified_field_model,central_tower_plant
@@ -15,7 +18,7 @@ from soiling_model.utilities import _print_if,simple_annual_cleaning_schedule
 class optimization_problem():
     def __init__(   self,params,solar_field,weather_files,climate_file,num_sectors=None,\
                     cleaning_rate:float=None,dust_type=None,n_az=10,n_el=10,second_surface=True,verbose=True,
-                    model_type='semi-physical',ext_options={'grid_size_x':100}, n_modules = 1):
+                    model_type='semi-physical',ext_options={'grid_size_x':100}, n_modules = 1, electrical_efficiency_file = None, thermal_efficiency_file = None):
         self.electricity_price = []
         self.plant_other_maintenace = [] 
 
@@ -40,6 +43,8 @@ class optimization_problem():
             raise ValueError("Model type not recognized. Must be either semi-physical or simplified.")
 
         fm.optical_efficiency(pl,sd,climate_file,n_az=n_az,n_el=n_el,verbose=verbose)
+        if electrical_efficiency_file != None and thermal_efficiency_file != None:
+            fm.electrical_efficiency(sd, pl, electrical_efficiency_file, thermal_efficiency_file)
 
         self.field_model = fm
         self.simulation_data = sd
@@ -282,7 +287,11 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
         eta_nom = field.helios.nominal_reflectance
         eta_clean = eta_nom*opt_eff
         DT = opt.simulation_data.dt[f]
-        alpha = eta_pb*(P-COM)*DT/3600.0
+
+        if getattr(opt.field_model, 'electrical_efficiency', None) == None:
+            alpha = np.repeat(eta_pb*(P-COM)*DT/3600.0, repeats=len(opt.simulation_data.time[f]))
+        else:
+            alpha = opt.field_model.electrical_efficiency[f] *(P-COM)*DT/3600.0
         
         clean_sector_reflected_power = DNI*Aj*eta_clean
         
@@ -302,7 +311,7 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
     ccl_days = np.zeros_like(night_idx)
     cdeg_days = np.zeros_like(night_idx)
     for idx in  np.arange(len(night_idx)):
-        tcc_days[idx], ccl_days[idx], cdeg_days[idx] = _cleaning_cost(lost_power[:night_idx[idx]], alpha,opt,cleans[0][:,:night_idx[idx]],n_trucks)
+        tcc_days[idx], ccl_days[idx], cdeg_days[idx] = _cleaning_cost(lost_power[:night_idx[idx]], alpha[:night_idx[idx]],opt,cleans[0][:,:night_idx[idx]],n_trucks)
     
     results = { 'n_trucks': n_trucks,
                 'n_cleans': n_cleans,
@@ -614,7 +623,7 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method:str='gree
                         temp_schedule[cleaned_heliostat,:].reshape(1,-1),
                         incidence_factor[cleaned_heliostat,:].reshape(1,-1),
                         clean_reflected_irradiance[cleaned_heliostat,:].reshape(1,-1),
-                        production_profit,
+                        production_profit[idx['horizon']],
                         sector_cleaningcost,
                         existing_schedule=cleaning_schedule_horizon_day[cleaned_heliostat,:].reshape(1,-1)
                     )
@@ -652,8 +661,11 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method:str='gree
         sector_area = np.repeat(opt.field_model.helios.sector_area.reshape(-1,1), repeats=opt.field_model.helios.truck.sectors[2], axis=0)
         
         clean_reflected_irradiance = opt.simulation_data.dni[f][np.newaxis,:] * sector_area * np.repeat(opt.field_model.helios.optical_efficiency[f], repeats=opt.field_model.helios.truck.sectors[2], axis=0) * opt.field_model.helios.nominal_reflectance
-        production_profit = opt.plant.plant['power_block_efficiency'] * (opt.plant.plant['electricity_price']/1e6-opt.plant.plant['plant_other_maintenance']/1e6) * opt.simulation_data.dt[f] / 3600.0
-                
+        if getattr(opt.field_model, 'electrical_efficiency', None) == None:
+            production_profit = opt.plant.plant['power_block_efficiency'] * (opt.plant.plant['electricity_price']/1e6-opt.plant.plant['plant_other_maintenance']/1e6) * opt.simulation_data.dt[f] / 3600.0
+        else:
+            production_profit = opt.field_model.electrical_efficiency[f] * (opt.plant.plant['electricity_price']/1e6-opt.plant.plant['plant_other_maintenance']/1e6) * opt.simulation_data.dt[f] / 3600.0
+
         sector_cleaningcost = (opt.field_model.helios.truck.consumable_costs['total']) 
         
         n_sectors = opt.field_model.helios.truck.sectors[0] * opt.field_model.helios.truck.sectors[1] * opt.field_model.helios.truck.sectors[2]
@@ -691,7 +703,7 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method:str='gree
                                                             cleaning_schedule_day, 
                                                             incidence_factor[:,idx['horizon']], 
                                                             clean_reflected_irradiance[:,idx['horizon']], 
-                                                            production_profit, 
+                                                            production_profit[idx['horizon']], 
                                                             sector_cleaningcost)
             
             # Choose optimization method
@@ -845,7 +857,7 @@ def _sector_revenue(soilrate, cleaning_schedule, incidence_factor, clean_reflect
     delta_soilingfactor[np.isnan(delta_soilingfactor) | (delta_soilingfactor < 0)] = 0
     # Revenue
     delta_sector_irradiance = clean_reflected_irradiance * delta_soilingfactor
-    return np.sum(delta_sector_irradiance,axis=1) * production_profit - sector_cleaningcost
+    return np.sum(delta_sector_irradiance * production_profit,axis=1) - sector_cleaningcost
     
 def _simulate_receiver_power(soiling_factor, clean_sector_power, receiver_max, receiver_min, receiver_losses, verbose=False):
     """Calculates the power output of a receiver given the soiling factor and clean sector power.
@@ -911,7 +923,7 @@ def _cleaning_cost(lost_power, production_profit, opt, cleaning_schedule, n_truc
             - cost_degradation (float): Degradation costs [$/yr]
     """   
     # Soil degradation cost
-    cost_degradation = production_profit * np.sum(lost_power)  # [$/year]
+    cost_degradation = np.sum(production_profit * lost_power)  # [$/year]
     
     # Fixed cleaning costs
     depreciation_cost = opt.field_model.helios.truck._params.cost_purchase / opt.field_model.helios.truck._params.useful_life  # [$/truck/year]

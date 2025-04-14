@@ -24,6 +24,9 @@ import pytz
 import copy
 from copylot import CoPylot
 from soiling_model.base_models import physical_base,constant_mean_base, sun, Truck
+from scipy.interpolate import RegularGridInterpolator
+import ast
+
 
 @dataclass
 class ReceiverParameters:
@@ -107,6 +110,7 @@ class central_tower_plant:
             'panel_height': self._receiver.panel_height,
             'width_diameter': self._receiver.width_diameter,
             'orientation_elevation': self._receiver.orientation_elevation,
+            'orientation_azimuth': self._receiver.orientation_azimuth,
             'thermal_losses': self._receiver.thermal_losses,
             'thermal_max': self._receiver.thermal_max,
             'thermal_min': self._receiver.thermal_min
@@ -158,6 +162,9 @@ class central_tower_plant:
             if 'receiver_orientation_elevation' not in table.index:
                 raise ValueError("Missing receiver_orientation_elevation for Flat plate")
             self._receiver.orientation_elevation = float(table.loc['receiver_orientation_elevation'].Value)
+            if 'receiver_orientation_azimuth' not in table.index:
+                raise ValueError("Missing receiver_orientation_azmuth for Flat plate")
+            self._receiver.orientation_azimuth = float(table.loc['receiver_orientation_azimuth'].Value)
             
         # Update remaining parameters
         self._receiver.tower_height = float(table.loc['receiver_tower_height'].Value)
@@ -384,6 +391,12 @@ class field_common_methods:
                 assert cp.data_set_number(r,"receiver.0.rec_elevation",plant.receiver['orientation_elevation'])
             except:
                 assert cp.data_set_number(r,"receiver.0.rec_elevation",-35)
+            try:
+                assert cp.data_set_number(r, "receiver.0.rec_azimuth", plant.receiver['orientation_azimuth'])
+            except:
+                assert cp.data_set_number(r, "receiver.0.rec_azimuth", 180)
+
+
         assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['width_diameter']) 
         assert cp.data_set_number(r,"receiver.0.rec_height",plant.receiver['panel_height'])
         assert cp.data_set_number(r,"receiver.0.optical_height",plant.receiver['tower_height'])
@@ -453,6 +466,59 @@ class field_common_methods:
                     for tt in range(T)] )
             _print_if("Done!",verbose)
         self.helios = helios
+    
+    def electrical_efficiency(self, sim_in, plant, electrical_efficiency_file, thermal_efficiency_file):
+        sun = self.sun
+        files = list(sim_in.time.keys())
+
+        electrical_efficiency_df = pd.read_csv(electrical_efficiency_file, index_col=0)
+        electrical_efficiency_df.columns = pd.to_numeric(electrical_efficiency_df.columns, errors='coerce')
+
+        thermal_efficiency_df = pd.read_csv(thermal_efficiency_file, index_col=0)
+        thermal_efficiency_df.columns = pd.to_numeric(thermal_efficiency_df.columns, errors='coerce')
+
+        self.electrical_efficiency = {}
+
+        for f in files:
+            T = len(sim_in.time[f])
+            self.electrical_efficiency[f] = np.zeros(T)
+            azimuth_min = ((sun.azimuth[f] // 10) * 10).astype(int)
+            azimuth_max = (((sun.azimuth[f] + 10) // 10) * 10).astype(int)
+            elevation_min = ((sun.elevation[f] // 10) * 10).astype(int)
+            elevation_max = (((sun.elevation[f] + 10) // 10) * 10).astype(int)
+            DNI_min = ((sun.DNI[f] // 100) * 100).astype(int)
+            DNI_min_idx = ((sun.DNI[f] // 100)).astype(int) - 1
+            DNI_max = (((sun.DNI[f] + 100) // 100) * 100).astype(int)
+            DNI_max_idx = (((sun.DNI[f] + 100) // 100)).astype(int) 
+
+            for dt in range(T):
+                if sun.elevation[f][dt] <= sun.stow_angle:
+                    self.electrical_efficiency[f][dt] = 0
+                else:
+                    values = np.array([
+                        [ast.literal_eval(electrical_efficiency_df.at[azimuth_min[dt], elevation_min[dt]])[DNI_min_idx[dt]:DNI_max_idx[dt]], 
+                        ast.literal_eval(electrical_efficiency_df.at[azimuth_min[dt], elevation_max[dt]])[DNI_min_idx[dt]:DNI_max_idx[dt]]],
+                        [ast.literal_eval(electrical_efficiency_df.at[azimuth_max[dt], elevation_min[dt]])[DNI_min_idx[dt]:DNI_max_idx[dt]], 
+                        ast.literal_eval(electrical_efficiency_df.at[azimuth_max[dt], elevation_max[dt]])[DNI_min_idx[dt]:DNI_max_idx[dt]]]
+                    ])
+
+                    interp_func = RegularGridInterpolator(([azimuth_min[dt], azimuth_max[dt]], [elevation_min[dt], elevation_max[dt]], [DNI_min[dt], DNI_max[dt]]), values)
+                    point = [sun.azimuth[f][dt], sun.elevation[f][dt], sun.DNI[f][dt]]
+                    self.electrical_efficiency[f][dt] = interp_func(point)[0]
+
+                    values = np.array([
+                        [ast.literal_eval(thermal_efficiency_df.at[azimuth_min[dt], elevation_min[dt]])[DNI_min_idx[dt]:DNI_max_idx[dt]], 
+                        ast.literal_eval(thermal_efficiency_df.at[azimuth_min[dt], elevation_max[dt]])[DNI_min_idx[dt]:DNI_max_idx[dt]]],
+                        [ast.literal_eval(thermal_efficiency_df.at[azimuth_max[dt], elevation_min[dt]])[DNI_min_idx[dt]:DNI_max_idx[dt]], 
+                        ast.literal_eval(thermal_efficiency_df.at[azimuth_max[dt], elevation_max[dt]])[DNI_min_idx[dt]:DNI_max_idx[dt]]]
+                    ])
+
+                    interp_func = RegularGridInterpolator(([azimuth_min[dt], azimuth_max[dt]], [elevation_min[dt], elevation_max[dt]], [DNI_min[dt], DNI_max[dt]]), values)
+
+                    self.electrical_efficiency[f][dt] += interp_func(point)[0] * plant.plant['power_block_efficiency']
+
+
+
 
 class field_model(physical_base,field_common_methods):
     def __init__(self,file_params,file_SF,cleaning_rate:float=None, n_modules=1):
