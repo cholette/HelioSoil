@@ -51,6 +51,10 @@ class ReceiverParameters:
         default=None,
         metadata={'units': 'degrees', 'description': 'Elevation angle for flat plate receiver'}
     )
+    orientation_azimuth: Optional[float] = field(
+        default=None,
+        metadata={'units': 'degrees', 'description': 'Azimuth angle for flat plate receiver'}
+    )
     thermal_losses: float = field(
         default=105,
         metadata={'units': 'MW', 'description': 'Constant thermal losses from receiver'}
@@ -75,6 +79,10 @@ class PlantParameters:
         default="Image size priority",
         metadata={'description': 'Heliostat aim point strategy'}
     )
+    aim_strategy_sigma: float = field(
+        default=2.0,
+        metadata={'description': 'Heliostat aim point strategy sigma'}
+    )
     electricity_price: float = field(
         default=100.0,
         metadata={'units': '$/MWh', 'description': 'Price of electricity'}
@@ -97,6 +105,7 @@ class central_tower_plant:
         return {
             'power_block_efficiency': self._plant.power_block_efficiency,
             'aim_point_strategy': self._plant.heliostat_aim_point_strategy,
+            'aim_strategy_sigma': self._plant.aim_strategy_sigma,
             'electricity_price': self._plant.electricity_price,
             'plant_other_maintenance': self._plant.plant_other_maintenance
         }
@@ -130,6 +139,7 @@ class central_tower_plant:
             'maximum_receiver_power',
             'power_block_efficiency',
             'heliostat_aim_point_strategy',
+            'aim_strategy_sigma',
             'electricity_price',
             'plant_other_maintenance'
         ]
@@ -163,7 +173,7 @@ class central_tower_plant:
                 raise ValueError("Missing receiver_orientation_elevation for Flat plate")
             self._receiver.orientation_elevation = float(table.loc['receiver_orientation_elevation'].Value)
             if 'receiver_orientation_azimuth' not in table.index:
-                raise ValueError("Missing receiver_orientation_azmuth for Flat plate")
+                raise ValueError("Missing receiver_orientation_azimuth for Flat plate")
             self._receiver.orientation_azimuth = float(table.loc['receiver_orientation_azimuth'].Value)
             
         # Update remaining parameters
@@ -176,6 +186,7 @@ class central_tower_plant:
         # Update plant parameters
         self._plant.power_block_efficiency = float(table.loc['power_block_efficiency'].Value)
         self._plant.heliostat_aim_point_strategy = table.loc['heliostat_aim_point_strategy'].Value
+        self._plant.aim_strategy_sigma = float(table.loc['aim_strategy_sigma'].Value)
         self._plant.electricity_price = float(table.loc['electricity_price'].Value)
         self._plant.plant_other_maintenance = float(table.loc['plant_other_maintenance'].Value)  
            
@@ -412,7 +423,9 @@ class field_common_methods:
         # simulation parameters
         assert cp.data_set_number(r,"fluxsim.0.flux_time_type",0) # 1 for time simulation, 0 for solar angles
         assert cp.data_set_number(r,"fluxsim.0.flux_dni",1000.0)  # set the simulation DNI to 1000 W/m2. Only used to display indicative receiver power.
-        assert cp.data_set_string(r,"fluxsim.0.aim_method",plant.plant['aim_point_strategy'])
+        assert cp.data_set_string(r,"fluxsim.0.aim_method", plant.plant['aim_point_strategy'])
+        assert cp.data_set_number(r,"fluxsim.0.sigma_limit_x", plant.plant['aim_strategy_sigma'])
+        assert cp.data_set_number(r,"fluxsim.0.sigma_limit_y", plant.plant['aim_strategy_sigma'])
 
         files = list(sim_in.time.keys())
         Ns = len(helios.x)
@@ -477,19 +490,24 @@ class field_common_methods:
         thermal_efficiency_df = pd.read_csv(thermal_efficiency_file, index_col=0)
         thermal_efficiency_df.columns = pd.to_numeric(thermal_efficiency_df.columns, errors='coerce')
 
+        dim_azimuth = 360/(electrical_efficiency_df.shape[0] - 1)
+        dim_elevation = (90 - sun.stow_angle)/(electrical_efficiency_df.shape[1] - 1)
+        dim_dni = (1100-100)/(len(ast.literal_eval(electrical_efficiency_df.iloc[0, 0])) - 1)
+
         self.electrical_efficiency = {}
 
         for f in files:
             T = len(sim_in.time[f])
             self.electrical_efficiency[f] = np.zeros(T)
-            azimuth_min = ((sun.azimuth[f] // 10) * 10).astype(int)
-            azimuth_max = (((sun.azimuth[f] + 10) // 10) * 10).astype(int)
-            elevation_min = ((sun.elevation[f] // 10) * 10).astype(int)
-            elevation_max = (((sun.elevation[f] + 10) // 10) * 10).astype(int)
-            DNI_min = ((sun.DNI[f] // 100) * 100).astype(int)
-            DNI_min_idx = ((sun.DNI[f] // 100)).astype(int) - 1
-            DNI_max = (((sun.DNI[f] + 100) // 100) * 100).astype(int)
-            DNI_max_idx = (((sun.DNI[f] + 100) // 100)).astype(int) 
+
+            azimuth_min = ((sun.azimuth[f] // dim_azimuth) * dim_azimuth).astype(int)
+            azimuth_max = (((sun.azimuth[f] + dim_azimuth) // dim_azimuth) * dim_azimuth).astype(int)
+            elevation_min = ((sun.elevation[f] // dim_elevation) * dim_elevation).astype(int)
+            elevation_max = (((sun.elevation[f] + dim_elevation) // dim_elevation) * dim_elevation).astype(int)
+            DNI_min = ((sun.DNI[f] // dim_dni) * dim_dni).astype(int)
+            DNI_min_idx = ((sun.DNI[f] // dim_dni)).astype(int) - 1
+            DNI_max = (((sun.DNI[f] + dim_dni) // dim_dni) * dim_dni).astype(int)
+            DNI_max_idx = (((sun.DNI[f] + dim_dni) // dim_dni)).astype(int) 
 
             for dt in range(T):
                 if sun.elevation[f][dt] <= sun.stow_angle:
