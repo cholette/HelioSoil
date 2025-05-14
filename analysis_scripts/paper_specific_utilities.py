@@ -39,7 +39,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
         tuple: The figure and axis objects for the generated plot.
     """
 
-    if any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
+    if any("augusta".lower() in value.lower() for value in sdat.files):
         plot_rh = False  # the RH sensor is broken since the beginning of Port Augusta experiments
 
     mod.predict_soiling_factor(sdat,rho0=rdat.rho0) # ensure predictions are fresh
@@ -60,9 +60,9 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
         hum_max = max([max(sdat.relative_humidity[f]) for f in exps]) # max relative humidity for setting y-axes
 
     # Define color for each orientation 
-    if any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
+    if any("augusta".lower() in value.lower() for value in sdat.files):
         colors = {'NW':'blue','SE':'red'}
-    elif any("yadnarie".lower() in value.lower() for value in sdat.file_name.values()):
+    elif any("yadnarie".lower() in value.lower() for value in sdat.files):
         colors = {'NE':'blue','SE':'red','SW':'green','NW':'magenta','N/A':'blue'}
     else:
         colors = {'N':'blue','S':'red','E':'green','W':'magenta','N/A':'blue'}
@@ -80,14 +80,14 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                 print('Tilt Not Found')
                 continue
 
-            if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
+            if t==0 and any("augusta".lower() in value.lower() for value in sdat.files):
                 idx = idx[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
-            if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
+            if t==0 and any("augusta".lower() in value.lower() for value in sdat.files):
                 idxs = idxs[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
                         
-            if t==0 and any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
+            if t==0 and any("mildura".lower() in value.lower() for value in sdat.files):
                 idx = idx[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
-            if t==0 and any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
+            if t==0 and any("mildura".lower() in value.lower() for value in sdat.files):
                 idxs = idxs[2:]   # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
             
             idxs = idxs[0] # take first since all predictions are the same
@@ -446,7 +446,7 @@ def soiling_rate(alphas: np.ndarray,
         log_param_hat_cov = data['transformed_parameter_covariance']
         mu_tilde,sigma_dep = np.exp(log_param_hat)
     
-    assert isinstance(imodel,smf.constant_mean_deposition), "Model in saved file must be constant-mean type."
+    assert isinstance(imodel,smf.ConstantMeanDeposition), "Model in saved file must be constant-mean type."
 
     # simulate 
     sims = np.zeros((M,len(alphas)))
@@ -468,7 +468,7 @@ def soiling_rate(alphas: np.ndarray,
     
     return sims
 
-def daily_soiling_rate( sim_dat: smb.simulation_inputs,
+def daily_soiling_rate( sim_dat: smb.SimulationInputs,
                         model_save_file: str,
                         percents: list or np.ndarray = None,
                         M: int = 10000,
@@ -492,7 +492,7 @@ def daily_soiling_rate( sim_dat: smb.simulation_inputs,
     # This assumes a horizontal reflector
 
     # get daily sums for \alpha and \alpha^2
-    df = [pd.read_excel(f,"Weather") for f in sim_dat.file_name.values()]
+    df = [pd.read_excel(f,"Weather") for f in sim_dat.files]
     df = pd.concat(df)
     df.sort_values(by="Time",inplace=True)
 
@@ -686,7 +686,7 @@ def summarize_fit_quality(model,ref,train_experiments,train_mirrors,
 
     return fig,ax
 
-def daily_soiling_tilt_all_data( sim_dat: smb.simulation_inputs,
+def daily_soiling_tilt_all_data( sim_dat: smb.SimulationInputs,
                                     model_save_file: str,
                                     M: int = 1000,
                                     dust_type="TSP",
@@ -694,7 +694,7 @@ def daily_soiling_tilt_all_data( sim_dat: smb.simulation_inputs,
                                     trim_percents = None):
 
     # get daily sums for \alpha and \alpha^2
-    df = [pd.read_excel(f,"Weather") for f in sim_dat.file_name.values()]
+    df = [pd.read_excel(f,"Weather") for f in sim_dat.files]
     df = pd.concat(df)
     df.sort_values(by="Time",inplace=True)
 

@@ -92,18 +92,18 @@ plot_title = "Training: "+str(train_mirrors)+", Exp: "+str(t)
 #     # ax.set_title(f"Wind for file {files[experiment]}")
 
 # %% Load and trim total data
-sim_data_total = smb.simulation_inputs( files,
+sim_data_total = smb.SimulationInputs( files,
                                         k_factors=k_factor,
                                         dust_type=dust_type
                                         )
-reflect_data_total = smb.reflectance_measurements(
+reflect_data_total = smb.ReflectanceMeasurements(
                   files,
                   sim_data_total.time,
                   number_of_measurements,
                   reflectometer_incidence_angle,
                   reflectometer_acceptance_angle,
                   import_tilts=False,
-                  column_names_to_import=None
+                  imported_column_names=None
                   )
 
 # %% compute daily_averaged values of reflectance to avoid morning-afternoon (not understood) recoveries

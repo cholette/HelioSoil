@@ -3,14 +3,12 @@ from numpy import matlib
 from numpy import radians as rad
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.cm import turbo
 from warnings import warn
 import copy
 from sklearn.cluster import KMeans
 from pathlib import Path
-from typing import Dict
 from dataclasses import dataclass, field
-from scipy.interpolate import interp2d
+from typing import List, Optional, Dict, Any, Union, Tuple
 from soiling_model.utilities import _print_if,_ensure_list,\
                                     _extinction_function,_same_ext_coeff,\
                                     _import_option_helper,_parse_dust_str
@@ -19,10 +17,12 @@ from scipy.integrate import cumulative_trapezoid
 from scipy.spatial.distance import cdist
 import copy
 from tqdm.notebook import tqdm
+import pytz
+from pysolar import solar, radiation
 
 tol = np.finfo(float).eps # machine floating point precision
 
-class soiling_base:
+class SoilingBase:
     def __init__(self):
         """
         Initializes the base model class with parameters from a file.
@@ -44,8 +44,8 @@ class soiling_base:
         self.latitude = None                  # latitude in degrees of site
         self.longitude = None                 # longitude in degrees of site
         self.timezone_offset = None           # [hrs from GMT] timezone of site
-        self.constants = constants()          # a subclass for constant
-        self.helios = helios()                # a subclass containing information about the heliostats
+        self.constants = Constants()          # a subclass for constant
+        self.helios = Heliostats()                # a subclass containing information about the heliostats
         self.sigma_dep = None                 # standard deviation for deposition velocity
         self.loss_model = None                # either "geometry" or "mie"
 
@@ -70,7 +70,7 @@ class soiling_base:
 
         self.constants.import_constants(file_params,verbose=verbose)
 
-class physical_base(soiling_base):
+class PhysicalBase(SoilingBase):
     def __init__(self):
         super().__init__()
         self.hrz0 =None                       # [-] site roughness height ratio
@@ -359,7 +359,8 @@ class physical_base(soiling_base):
                         tilt=0.0,hrz0=None,constants=None,
                         ax=None,Ra=True,verbose=True):
         
-        dummy_sim = simulation_inputs()
+        dummy_sim = SimulationInputs()
+        dummy_sim.dust = Dust()
 
         for att_name in sim_data.dust.__dict__.keys():
             val = {0:getattr(sim_data.dust,att_name)[exp_idx]}
@@ -383,7 +384,7 @@ class physical_base(soiling_base):
             acceptance_angle = np.nan
 
         dummy_model = copy.deepcopy(self)
-        dummy_model.helios = helios()
+        dummy_model.helios = Heliostats()
         dummy_model.helios.tilt = {0:np.array([[tilt]])}
         dummy_model.sigma_dep = None
         dummy_model.loss_model = self.loss_model
@@ -424,7 +425,7 @@ class physical_base(soiling_base):
         plt.xscale('log')   
         ax1.set_xticks([0.001,0.01,0.1,1,2.5,4,10,20,100])
 
-class constant_mean_base(soiling_base):
+class ConstantMeanBase(SoilingBase):
     def __init__(self):
         super().__init__()
         self.mu_tilde = None
@@ -497,90 +498,170 @@ class constant_mean_base(soiling_base):
 
         self.helios = helios
 
-class simulation_inputs:
+@dataclass
+class SimulationInputs:
     """
-    Defines a `simulation_inputs` class that manages the input data for a soiling model simulation.
-    
-    The class provides methods to import weather and dust data from Excel files, and stores the data in dictionaries
-    with the file number as the key. The class also includes a `dust` attribute that stores the dust properties
-    for each experiment.
-    
-    The `import_weather` method reads weather data such as air temperature, wind speed, dust concentration, etc.
-    from the Excel files and stores them in the corresponding dictionaries.
-    
-    The `import_source_intensity` method reads the source intensity data from the Excel files and stores it in
-    the `source_wavelength` and `source_normalized_intensity` dictionaries.
-    
-    The `get_experiment_subset` method creates a copy of the `simulation_inputs` object with only the specified
-    experiments included.
+    Manage input data for soiling model simulations.
+
+    Parses weather, dust, and source intensity data from Excel files for each experiment.
+
+    Args:
+        files (Optional[List[str]]): Paths to simulation input files.
+        k_factors (Optional[List[float]]): Dust concentration multipliers per file.
+        dust_type (Optional[List[str]]): Dust measurement types (e.g., 'TSP', 'PM10').
+        verbose (bool): Whether to display progress messages.
     """
-    def __init__(self,experiment_files=None,k_factors=None,dust_type=None,verbose=True):
+    files: Optional[List[str]] = field(default=None)
+    k_factors: Optional[List[float]] = field(default=None)
+    dust_type: Optional[List[str]] = field(default=None,metadata={'description':"Dust measurement type (TSP, PMX, PMX.Y)"})
+    verbose: bool = field(default=True)
 
-        # the below will be dictionaries of 1D arrays with file numbers as keys 
-        self.file_name = {}                     # name of the input file
-        self.dt = {}                            # [seconds] simulation time step
-        self.time = {}                          # absolute time (taken from 1st Jan)
-        self.time_diff = {}                     # [days] delta_time since start date
-        self.start_datetime = {}                # datetime64 for start 
-        self.end_datetime = {}                  # datetime64 for end
-        self.air_temp = {}                      # [C] air temperature
-        self.wind_speed = {}                    # [m/s] wind speed
-        self.wind_speed_mov_avg = {}            # [m/s] wind speed hourly moving average
-        self.wind_direction = {}                # [degrees] wind direction
-        self.dust_concentration = {}            # [µg/m3] PM10 or TSP concentration in air
-        self.dust_conc_mov_avg = {}             # [µg/m3] PM10 or TSP hourly moving average of dust concentration
-        self.rain_intensity = {}                # [mm/hr] rain intensity
-        self.dust_type = {}                     # Usually either "TSP" or "PM10", but coule be any PMX or PMX.X
-        self.dni = {}                           # [W/m^2] Direct Normal Irradiance
-        self.relative_humidity = {}             # [%] relative humidity
-        self.source_normalized_intensity = {}   # [1/m^2/nm] normalized source intensity
-        self.source_wavelength = {}             # [nm] source wavelengths corersponding to source_intensity 
+    dt: Dict[int, float] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'simulation time step', 'units': 'seconds'}
+    )
+    time: Dict[int, pd.Series] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'absolute time (taken from first entry)', 'units': 'n/a'}
+    )
+    time_diff: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'delta_time since start date', 'units': 'days'}
+    )
+    start_datetime: Dict[int, np.datetime64] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'start datetime of simulation', 'units': 'datetime64'}
+    )
+    end_datetime: Dict[int, np.datetime64] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'end datetime of simulation', 'units': 'datetime64'}
+    )
+    air_temp: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'air temperature', 'units': 'C'}
+    )
+    wind_speed: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'wind speed', 'units': 'm/s'}
+    )
+    wind_speed_mov_avg: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'wind speed hourly moving average', 'units': 'm/s'}
+    )
+    wind_direction: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'wind direction', 'units': 'degrees'}
+    )
+    dust_concentration: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'PM10 or TSP concentration in air', 'units': 'µg/m3'}
+    )
+    dust_conc_mov_avg: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'hourly moving average of dust concentration', 'units': 'µg/m3'}
+    )
+    rain_intensity: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'rain intensity', 'units': 'mm/hr'}
+    )
+    dni: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'Direct Normal Irradiance', 'units': 'W/m^2'}
+    )
+    relative_humidity: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'relative humidity', 'units': '%'}
+    )
+    source_normalized_intensity: Dict[int, Optional[np.ndarray]] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'Source intensity (normalized to integrate to 1)', 'units': '1/m^2/nm'}
+    )
+    source_wavelength: Dict[int, Optional[np.ndarray]] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'source wavelengths corresponding to intensity', 'units': 'nm'}
+    )
+    dust: 'Dust' = field(
+        init=False,
+        metadata={'description': 'Dust properties per experiment', 'units': 'n/a'}
+    )
+    weather_variables: List[str] = field(
+        init=False,
+        default_factory=list,
+        metadata={'description': 'list of imported weather variables', 'units': 'n/a'}
+    )
+    N_simulations: int = field(
+        init=False,
+        default=0,
+        metadata={'description': 'number of simulations', 'units': 'count'}
+    )
+    k_factors_dict: Dict[int, float] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'description': 'k-factors per experiment', 'units': 'dimensionless'}
+    )
 
-        self.dust = dust()                      # dust properties will be per experiment
+    smallest_windspeed: float = field(default=1e-6, metadata={'description': 'smallest wind speed to set zero values', 'units': 'm/s'})
 
-        # if experiment files are supplied, import
-        if experiment_files is not None:
-            experiment_files = _ensure_list(experiment_files)
-            self.N_simulations = len(experiment_files)
+    def __post_init__(self) -> None:
+        if self.files is not None:
+            self.files = _ensure_list(self.files)
+            self.dust_type = _import_option_helper(self.files, self.dust_type)
+            self.N_simulations = len(self.files)
 
-            if k_factors == None: 
-                k_factors = [1.0]*len(experiment_files)
-            elif k_factors == "import": # import k-factors from parameter file
-                k_factors = []
-                for f in experiment_files:
-                    k_factors.append(pd.read_excel(f,sheet_name="Dust",index_col="Parameter").loc['k_factor'].values[0])
+            # Prepare k_factors list
+            if self.k_factors is None:
+                k_list = [1.0] * self.N_simulations
+            elif self.k_factors == "import":
+                k_list = [
+                    pd.read_excel(f, sheet_name="Dust", index_col="Parameter")
+                      .loc['k_factor'].values[0]
+                    for f in self.files
+                ]
             else:
-                k_factors = _import_option_helper(experiment_files,k_factors)
-                if len(k_factors) != len(experiment_files):
+                k_list = _import_option_helper(self.files, self.k_factors)
+                if len(k_list) != self.N_simulations:
                     raise ValueError("Please specify a k-factor for each weather file")
 
-            self.k_factors = {ii:k_factors[ii] for ii in range(self.N_simulations)} 
-            self.import_weather(experiment_files,dust_type,verbose=verbose)
-            self.dust.import_dust(experiment_files,verbose=verbose,dust_measurement_type=dust_type)
+            self.k_factors_dict = {ii: k_list[ii] for ii in range(self.N_simulations)}
 
-            # will import source intensity if the sheet exists
-            self.import_source_intensity(experiment_files,verbose=verbose)
+            # Import data
+            self.import_weather()
+            self.dust = Dust(self.files)
+            self.dust.import_dust()
+            self.import_source_intensity()
 
-    def import_source_intensity(self,files,verbose=True):
-        for ii,f in enumerate(files):
+    def import_source_intensity(self) -> None:
+        for ii, f in enumerate(self.files):
             xl = pd.ExcelFile(f)
             if "Source_Intensity" in xl.sheet_names:
-                _print_if(f"Loading source (normalized) intensity from {f}",verbose)
+                _print_if(f"Loading source (normalized) intensity from {f}", self.verbose)
                 intensity = xl.parse("Source_Intensity")
                 self.source_wavelength[ii] = intensity['Wavelength (nm)'].to_numpy()
                 self.source_normalized_intensity[ii] = intensity['Source Intensity (W/m^2 nm)'].to_numpy()
-                norm = np.trapz(y=self.source_normalized_intensity[ii],x=self.source_wavelength[ii])
-                self.source_normalized_intensity[ii] = self.source_normalized_intensity[ii]/norm # make sure intensity is normalized for later computations
+                norm = np.trapz(y=self.source_normalized_intensity[ii], x=self.source_wavelength[ii])
+                self.source_normalized_intensity[ii] /= norm
             else:
                 self.source_normalized_intensity[ii] = None
             xl.close()
 
-
-    def import_weather(self, files, dust_type, verbose=True, smallest_windspeed=1e-6):
-        files = _ensure_list(files)
-        dust_type = _import_option_helper(files, dust_type)
-        
-        weather_variables = { # List of possible weather variable names and the combination of possibly names
+    def import_weather(self) -> None:
+        weather_variables_map = {
             'air_temp': ['airtemp', 'temperature', 'temp', 'ambt', 't1'],
             'wind_speed': ['windspeed', 'ws', 'wind_speed'],
             'dni': ['dni', 'directnormalirradiance'],
@@ -588,8 +669,7 @@ class simulation_inputs:
             'relative_humidity': ['rh', 'relativehumidity', 'rhx'],
             'wind_direction': ['wd', 'winddirection']
         }
-        
-        dust_names = { # List of possible dust concentration names and the combination of possibly names
+        dust_names = {
             'pm_tot': ['pm_tot', 'pmtot', 'pmt', 'pm20'],
             'tsp': ['tsp'],
             'pm10': ['pm10'],
@@ -598,61 +678,67 @@ class simulation_inputs:
             'pm4': ['pm4']
         }
 
-        self.weather_variables = []
-
-        for ii, file in enumerate(files): # Loop through each campaign and import weather files
-            self.file_name[ii] = file
+        for ii, file in enumerate(self.files):
             if file.endswith('.csv'):
                 raise ValueError("Please use an excel file for data file")
-            weather = pd.read_excel(
-                file, 
-                sheet_name="Weather"
+            weather = pd.read_excel(file, sheet_name="Weather")
+
+            # Identify time column
+            time_col = next(
+                (col for col in weather.columns if col.lower() in
+                 ['time', 'timestamp', 'date', 'datetime', 'date time']),
+                None
             )
-            # Look for time column with different possible names
-            time_column = None
-            for col in weather.columns:
-                if col.lower() in ['time', 'timestamp', 'date', 'datetime', 'date time']:
-                    time_column = col
-                    break
-                
-            if time_column is None:
-                raise ValueError(f"No time column found in file {file}. Expected column names: 'Time', 'Timestamp', 'Date', 'DateTime', or 'Date Time'")
-            
-            # Convert to datetime and round to minutes
-            weather[time_column] = pd.to_datetime(weather[time_column]).dt.round("min")
-            time = pd.to_datetime(weather[time_column])
+            if time_col is None:
+                raise ValueError(f"No time column found in file {file}.")
+
+            # Parse time
+            weather[time_col] = pd.to_datetime(weather[time_col]).dt.round('min')
+            time = pd.to_datetime(weather[time_col])
             self.start_datetime[ii] = time.iloc[0]
-            self.end_datetime[ii] = time.iloc[-1]
-            
-            _print_if(f"Importing site data (weather,time). Using dust_type = {dust_type[ii]}, test_length = {(self.end_datetime[ii]-self.start_datetime[ii]).days} days", verbose)
-            
-            self.time[ii] = time
-            self.dt[ii] = (self.time[ii][1] - self.time[ii][0]).total_seconds()
+            self.end_datetime[ii]   = time.iloc[-1]
+
+            _print_if(
+                f"Importing site data from {file}, dust_type={self.dust_type[ii]}, length={(self.end_datetime[ii]-self.start_datetime[ii]).days} days",
+                self.verbose
+            )
+
+            self.time[ii]       = time
+            self.dt[ii]         = (time.iloc[1] - time.iloc[0]).total_seconds()
             self.time_diff[ii] = (self.time[ii].values - self.time[ii].values.astype('datetime64[D]')).astype('timedelta64[h]').astype('int')
 
-            for attr_name, column_names in weather_variables.items(): # Search for weather variables inside the weather file and save them to self
+            # Load weather variables
+            for attr_name, column_names in weather_variables_map.items(): # Search for weather variables inside the weather file and save them to self
                 for column in column_names:
                     if column in [col.lower() for col in weather.columns]:
                         setattr(self, attr_name, {}) if not hasattr(self, attr_name) else None
                         col_match = [col for col in weather.columns if col.lower() == column][0]
                         getattr(self, attr_name)[ii] = np.array(weather.loc[:, col_match])
-                        _print_if(f"Importing {col_match} data as {attr_name}...", verbose)
+                        _print_if(f"Importing {col_match} data as {attr_name}...", self.verbose)
                         if attr_name not in self.weather_variables:
                             self.weather_variables.append(attr_name)
                         break
 
-            if hasattr(self, 'wind_speed') and ii in self.wind_speed:
-                idx_too_low = np.where(self.wind_speed[ii] == 0)[0]
-                if len(idx_too_low) > 0:
-                    self.wind_speed[ii][idx_too_low] = smallest_windspeed
-                    _print_if(f"Warning: some windspeeds were <= 0 and were set to {smallest_windspeed}", verbose)
-            self.wind_speed_mov_avg[ii] = pd.Series(self.wind_speed[ii]).rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1).mean().values
+            # Correct zero wind speeds
+            if ii in self.wind_speed:
+                idx_low = np.where(self.wind_speed[ii] == 0)[0]
+                if len(idx_low) > 0:
+                    self.wind_speed[ii][idx_low] = self.smallest_windspeed
+                    _print_if(f"Warning: zero windspeeds set to {self.smallest_windspeed}", self.verbose)
 
-            self.dust_concentration[ii] = self.k_factors[ii] * np.array(weather.loc[:, dust_type[ii]]) # Set dust concentration to be used for soiling predictions
+            self.wind_speed_mov_avg[ii] = (
+                pd.Series(self.wind_speed[ii])
+                  .rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1)
+                  .mean()
+                  .to_numpy()
+            )
+
+            # Dust concentration
+            self.dust_concentration[ii] = self.k_factors_dict[ii] * weather[self.dust_type[ii]].to_numpy()
             if 'dust_concentration' not in self.weather_variables:
                 self.weather_variables.append('dust_concentration')
-            self.dust_type[ii] = dust_type[ii]
 
+            # Load all dust measurements
             for dust_key, dust_aliases in dust_names.items(): # Load all dust concentration data inside weather file
                 for alias in dust_aliases:
                     if alias in [col.lower() for col in weather.columns]:
@@ -661,49 +747,122 @@ class simulation_inputs:
                         if not hasattr(self, dust_key.lower()):
                             setattr(self, dust_key.lower(), {})
                         getattr(self, dust_key.lower())[ii] = dust_value
-                        _print_if(f"Importing {dust_key} data...", verbose)
+                        _print_if(f"Importing {dust_key} data...", self.verbose)
                         if dust_key.lower() not in self.weather_variables:
                             self.weather_variables.append(dust_key.lower())
                         break
-            
-            self.dust_conc_mov_avg[ii] = pd.Series(self.dust_concentration[ii]).rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1).mean().values
 
-            if verbose:
-                T = (time.iloc[-1] - time.iloc[0]).days
-                _print_if(f"Length of simulation for file {file}: {T} days", verbose)                
-    def get_experiment_subset(self,idx):
-        attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes
-        self_out = copy.deepcopy(self)
-        for a in attributes:
-            attr = self_out.__getattribute__(a)
-            if isinstance(attr,dict):
-                for k in list(attr.keys()):
-                    if k not in idx:
-                        attr.pop(k)
-        return self_out
+            self.dust_conc_mov_avg[ii] = (
+                pd.Series(self.dust_concentration[ii])
+                  .rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1)
+                  .mean()
+                  .to_numpy()
+            )
 
-class dust:
-    def __init__(self):
-        self.D     = {}          # [µm] dust particles diameter 
-        self.rho   = {}          # [kg/m^3] particle material density
-        self.m     = {}          # [-] complex refractive index
-        self.pdfN  = {}          # "pdf" of dust number d(N [1/cm3])/d(log10(D[µm]))
-        self.pdfM  = {}          # "pdf" of dust mass dm[µg/m3]/dLog10(D[µm])
-        self.pdfA  = {}          # "pdf" of dust mass dm[µg/m3]/dLog10(D[µm])
-        self.hamaker = {}        # [J] hamaker constant of dust  
-        self.poisson = {}        # [-] poisson ratio of dust
-        self.youngs_modulus = {} # [Pa] young's modulus of dust
-        self.PM10 = {}           # [µg/m^3] PM10 concentration computed with the given dust size distribution
-        self.TSP = {}            # [µg/m^3] TSP concentration computed with the given dust size distribution
-        self.PMT = {}            # [µg/m^3] PMT concentration computed with the given dust size distribution        
-        self.Nd = {}
-        self.log10_mu = {}
-        self.log10_sig = {}
-    
-    def import_dust(self,experiment_files,verbose=True,dust_measurement_type=None):
+            if self.verbose:
+                days = (self.end_datetime[ii] - self.start_datetime[ii]).days
+                _print_if(f"Simulation length for {file}: {days} days", self.verbose)
+
+    def get_experiment_subset(self, idx: Union[int,List[int]]) -> 'SimulationInputs':
+        copy_self = copy.deepcopy(self)
+        idxs = [idx] if isinstance(idx, int) else list(idx)
+        for attr in vars(copy_self):
+            val = getattr(copy_self, attr)
+            if isinstance(val, dict):
+                for key in list(val.keys()):
+                    if key not in idxs:
+                        del val[key]
+        return copy_self
+
+@dataclass
+class Dust:
+    """
+    Data class for dust properties loaded from experiment files.
+
+    Attributes are keyed by experiment index.
+    """
+    files: List[str] = field(default=None)
+
+    D: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': 'µm', 'description': 'Dust particle diameters'}
+    )
+    rho: Dict[int, float] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': 'kg/m^3', 'description': 'Particle material density (assummed constant)'}
+    )
+    m: Dict[int, complex] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': '-', 'description': 'Complex refractive index'}
+    )
+    pdfN: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': '[1/cm3]/log10([µm])', 'description': 'Number distribution dN/d(log10(D))'}
+    )
+    pdfM: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': '[µg/m3]/dLog10(D[µm])', 'description': 'Mass distribution dm/dLog10(D)'}
+    )
+    pdfA: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': '[m2/m3]/dLog10([µm])', 'description': 'Area distribution dA/dLog10(D)'}
+    )
+    hamaker: Dict[int, float] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': 'J', 'description': 'Hamaker constant of dust'}
+    )
+    poisson: Dict[int, float] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': '-', 'description': "Poisson's ratio of dust"}
+    )
+    youngs_modulus: Dict[int, float] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': 'Pa', 'description': "Young's modulus of dust"}
+    )
+    PM10: Dict[int, float] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': 'µg/m³', 'description': 'PM10 concentration'}
+    )
+    TSP: Dict[int, float] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': 'µg/m³', 'description': 'TSP concentration'}
+    )
+    PMT: Dict[int, float] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': 'µg/m³', 'description': 'PMT concentration'}
+    )
+    Nd: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': '1/cm³', 'description': 'Number concentration components'}
+    )
+    log10_mu: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': 'log10(µm)', 'description': 'Log10 of mean diameters'}
+    )
+    log10_sig: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={'units': 'log10(µm)', 'description': 'Log10 of distribution widths'}
+    )
+
+    def import_dust(self,verbose=True,dust_measurement_type=None):
         
         _print_if("Importing dust properties for each experiment",verbose)
-        experiment_files = _ensure_list(experiment_files)
+        experiment_files = self.files
         dust_measurement_type = _import_option_helper(experiment_files,dust_measurement_type)
         
         for ii,f in enumerate(experiment_files):
@@ -770,55 +929,78 @@ class dust:
                 setattr(self,att,new_meas)
                 _print_if("Added "+att+" attribute to dust class to all experiment dust classes",verbose)
 
-    def plot_distributions(self,figsize=(5,5)):
-        N_files = len(self.D)
-        fig,ax1 = plt.subplots(nrows=N_files,sharex=True,squeeze=False,figsize=figsize)
+    def plot_distributions(
+        self,
+        figsize: Tuple[float, float] = (5, 5)
+    ) -> Tuple[plt.Figure, Any, List[Any]]:
+        """
+        Plot number and mass PDFs on a shared log-scale diameter axis.
 
-        ax2 = []
-        for ff in range(N_files):
-            D_dust = self.D[ff]
-            pdfN = self.pdfN[ff]
-            pdfM = self.pdfM[ff]
+        Args:
+            figsize: Tuple of figure width and height in inches.
 
-            color = 'tab:red'
-            ax1[ff,0].set_xlabel(r"D [$\mu$m]")
-            ax1[ff,0].set_ylabel(r'$\frac{dN [m^{{-3}} ] }{dLog(D \;[\mu m])}$', color=color,size=20)
-            ax1[ff,0].plot(D_dust,pdfN, color=color)
-            ax1[ff,0].tick_params(axis='y', labelcolor=color)
-            ax1[ff,0].grid('on')
+        Returns:
+            fig: Figure containing the subplots.
+            axes1: Array of primary axes (number PDFs).
+            axes2: List of secondary axes (mass PDFs).
+        """
+        N = len(self.D)
+        fig, axes1 = plt.subplots(nrows=N, sharex=True, squeeze=False, figsize=figsize)
+        axes2: List[Any] = []
 
-            ax2.append(ax1[ff,0].twinx())  # instantiate a second axes that shares the same x-axis
-            color = 'tab:blue'
-            ax2[ff].set_ylabel(r'$\frac{dm \; [\mu g \, m^{{-3}} ] }{dLog(D \; [\mu m])}$', color=color,size=20)  # we already handled the x-label with ax1
-            ax2[ff].plot(D_dust,pdfM, color=color)
-            ax2[ff].tick_params(axis='y', labelcolor=color)
-            ax2[ff].grid('on')
-        
-        plt.xscale('log')
-        ax2[-1].set_xticks(10.0**np.arange(np.log10(D_dust[0]),np.log10(D_dust[-1]),1))
+        for i in range(N):
+            d = self.D[i]
+            n_pdf = self.pdfN[i]
+            m_pdf = self.pdfM[i]
+
+            ax1 = axes1[i, 0]
+            ax1.set_xscale('log')
+            ax1.set_xlabel(r"Diameter $D$ [$\mu$m]")
+            ax1.set_ylabel(r"dN/dlog$D$ [# m$^{-3}$]", color='tab:red')
+            ax1.plot(d, n_pdf, color='tab:red')
+            ax1.tick_params(axis='y', labelcolor='tab:red')
+            ax1.grid(True)
+
+            ax2 = ax1.twinx()
+            ax2.set_ylabel(r"dm/dlog$D$ [µg m$^{-3}$]", color='tab:blue')
+            ax2.plot(d, m_pdf, color='tab:blue')
+            ax2.tick_params(axis='y', labelcolor='tab:blue')
+            axes2.append(ax2)
+
         plt.tight_layout()
-        fig.suptitle("Number and Mass PDFs")
+        fig.suptitle("Number and Mass PDFs", y=1.02)
+        return fig, axes1, axes2
 
-        return fig,ax1,ax2
+    def plot_area_distribution(
+        self,
+        figsize: Tuple[float, float] = (5, 5)
+    ) -> List[Any]:
+        """
+        Plot area PDF on a log-scale diameter axis.
 
-    def plot_area_distribution(self,figsize=(5,5)):
-        N_files = len(self.D)
-        _,ax1 = plt.subplots(nrows=N_files,sharex=True,squeeze=False,figsize=figsize)
-        
-        for ii in range(N_files):
-            D_dust = self.D[ii]
-            pdfA = self.pdfA[ii]
+        Args:
+            figsize: Tuple of figure width and height in inches.
 
-            color = 'black'
-            ax1[ii,0].set_xlabel(r"D [$\mu$m]")
-            ax1[ii,0].set_ylabel(r'$\frac{dA [m^2/m^3] }{dLog(D \;[\mu m])}$', color=color,size=20)
-            ax1[ii,0].plot(D_dust,pdfA, color=color)
-            ax1[ii,0].tick_params(axis='y', labelcolor=color)
-            plt.xscale('log')
-            ax1[ii,0].set_title("Area PDF")
-            ax1[ii,0].set_xticks(10.0**np.arange(np.log10(D_dust[0]),np.log10(D_dust[-1]),1))
+        Returns:
+            axes: List of axes objects for each experiment.
+        """
+        N = len(self.D)
+        fig, axes = plt.subplots(nrows=N, sharex=True, squeeze=False, figsize=figsize)
 
-        return ax1
+        for i in range(N):
+            d = self.D[i]
+            a_pdf = self.pdfA[i]
+            ax = axes[i, 0]
+            ax.set_xscale('log')
+            ax.set_xlabel(r"Diameter $D$ [$\mu$m]")
+            ax.set_ylabel(r"dA/dlog$D$ [m$^2$ m$^{-3}$]", color='black')
+            ax.plot(d, a_pdf, color='black')
+            ax.tick_params(axis='y', labelcolor='black')
+            ax.set_title("Area PDF")
+            ax.grid(True)
+
+        plt.tight_layout()
+        return [axes[i, 0] for i in range(N)]
 
 @dataclass
 class TruckParameters:
@@ -1137,23 +1319,133 @@ class Truck:
         
         return reload_occurence_rate * (hour_travel_reload + p.time_shift)  # [hours]
 
-class sun:
-    def __init__(self):
-        self.irradiation = {}   # [W/m^2] Extraterrestrial nominal solar irradiation
-        self.elevation = {}     # [degrees]
-        self.declination = {}   # [degrees]
-        self.azimuth = {}       # [degrees]
-        self.zenith = {}        # [degrees]
-        self.hourly = {}        
-        self.time = {}          # time vector for solar angles (datetime)
-        self.DNI = {}           # [W/m^2] direct normal irradiance at ground
-        self.stow_angle = {}    # [deg] minimum sun elevation angle where heliostat field operates
-        
-    def import_sun(self,file_params):
-        table = pd.read_excel(file_params,index_col="Parameter")
+@dataclass
+class Sun:
+    """
+    Manage solar geometry and clearsky direct normal irradiance data.
+
+    Stores solar irradiation, angles, and clearsky DNI per time index.
+    """
+    irradiation: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={
+            'units': 'W/m^2',
+            'description': 'Extraterrestrial nominal solar irradiation'
+        }
+    )
+    elevation: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={
+            'units': 'degrees',
+            'description': 'Solar elevation angles'
+        }
+    )
+    declination: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={
+            'units': 'degrees',
+            'description': 'Solar declination angles'
+        }
+    )
+    azimuth: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={
+            'units': 'degrees',
+            'description': 'Solar azimuth angles'
+        }
+    )
+    zenith: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={
+            'units': 'degrees',
+            'description': 'Solar zenith angles'
+        }
+    )
+    hourly: Dict[int, Any] = field(
+        init=False,
+        default_factory=dict,
+        metadata={
+            'description': 'Hourly solar parameters'
+        }
+    )
+    time: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={
+            'units': 'datetime',
+            'description': 'Time vector for solar angles'
+        }
+    )
+    DNI: Dict[int, np.ndarray] = field(
+        init=False,
+        default_factory=dict,
+        metadata={
+            'units': 'W/m^2',
+            'description': 'Direct normal irradiance at ground'
+        }
+    )
+    stow_angle: float = field(
+        init=False,
+        metadata={
+            'units': 'degrees',
+            'description': 'Minimum sun elevation angle where heliostat field operates'
+        }
+    )
+
+    def import_sun(self, file_params: str) -> None:
+        """
+        Load stow angle from an Excel parameter file.
+
+        Args:
+            file_params (str): Path to the Excel file containing 'stowangle'.
+        """
+        table = pd.read_excel(file_params, index_col="Parameter")
         self.stow_angle = float(table.loc['stowangle'].Value)
-        
-class helios:
+
+    def angles_and_clearsky_dni(
+        self,
+        lat: float,
+        lon: float,
+        time_grid: pd.Series,
+        tz_offset: float = 0.0
+    ) -> None:
+        """
+        Compute solar angles and clearsky direct normal irradiance.
+
+        Calculates azimuth, elevation, and clearsky DNI using pysolar for each
+        datetime in the provided time grid, storing them keyed by the next index.
+
+        Args:
+            lat (float): Latitude in degrees.
+            lon (float): Longitude in degrees.
+            time_grid (pd.Series): Series of datetimes for solar calculations.
+            tz_offset (float, optional): UTC offset in hours. Defaults to 0.0.
+        """
+        timezone = pytz.FixedOffset(int(tz_offset * 60))
+        tg = np.array(time_grid.dt.to_pydatetime())
+        time_utc = [t.replace(tzinfo=timezone)for t in tg]
+
+        solar_angles = np.array([
+            solar.get_position(lat, lon, t) for t in time_utc
+        ])
+        az = solar_angles[:, 0]
+        el = solar_angles[:, 1]
+        dni_vals = np.array([
+            radiation.get_radiation_direct(time, elevation)
+            if elevation > 0 else 0.0
+            for time, elevation in zip(time_utc, el)
+        ])
+
+        idx = len(self.azimuth)
+        self.azimuth[idx] = az
+        self.elevation[idx] = el
+        self.DNI[idx] = dni_vals
+class Heliostats:
     def __init__(self):
         
         # Properties of heliostat (scalars, assumes identical heliostats)
@@ -1192,7 +1484,7 @@ class helios:
         self.azimuth = {}                   # [deg] azimuth angle of the heliostat
         self.incidence_angle = {}           # [deg] incidence angle of solar rays
         self.elevation = {}                 # [deg] elevation angle of the heliostat
-        self.inc_ref_factor = {}            # [ - ] incidence factor for reflectance computation (1st surface for now)
+        self.inc_ref_factor = {}            # [ - ] incidence factor for reflectance computation (1st or second surface)
         self.stow_tilt = {}                 # [deg] tilt at which heliostats are stowed at night
         self.optical_efficiency = {}        # [ - ] average total optical efficiency of the sector represented by the heliostat
         
@@ -1548,7 +1840,7 @@ class helios:
         """
         sim_dat = simulation_data
         dust = sim_dat.dust
-        files = list(sim_dat.file_name.keys())
+        files = range(len(sim_dat.files))
         num_diameters = [len(dust.D[f]) for f in files]
         num_heliostats = [len(self.tilt[f]) for f in files]
         phia = self.acceptance_angles
@@ -1639,124 +1931,243 @@ class helios:
         
         return fig,ax
         
-class constants:
-    def __init__(self):
-        self.air_rho = []
-        self.air_mu = []
-        self.air_nu = []
-        self.air_lambda_p = []
-        self.irradiation = []
-        self.g = []
-        self.A_slip = []
-        self.k_Boltzman = []
-        self.k_von_Karman = []
-        self.N_iter = []
-        self.tol = []
-        self.Re_Limit =[]
-        self.alpha_EIM = []
-        self.beta_EIM = []
-        self.eps0 = []
-        self.D0 = []
-        
-    def import_constants(self,file_params,verbose=True):
-        _print_if("\nImporting constants",verbose)
-        table = pd.read_excel(file_params,index_col="Parameter")
-        self.air_rho = float(table.loc['air_density'].Value)            # [kg/m3] air density at T=293K and p=1 atm
-        self.air_mu = float(table.loc['air_dynamic_viscosity'].Value)   # [Pa*s] air dynamic viscosity at T=293K and p=1 atm
-        self.air_nu = self.air_mu/self.air_rho                          # [m^2/s] air kinematic viscosity  at T=293K and p=1 atm
-        self.air_lambda_p = float(table.loc['mean_free_path_air'].Value)# [m] mean free path in air at T=293K and p=1 atm
-        self.irradiation = float(table.loc['I_solar'].Value)            # [W/m2] solar extraterrestrial constant
-        self.g = 9.81                                                   # [m/s^2] gravitational constant
-        self.A_slip = np.array(table.loc['A1_A2_A3'].Value.split(';')).astype('float')  # coefficients for slip correction factor
-        self.k_Boltzman = float(table.loc['k_boltzman'].Value)          # [J/K] Boltzman constant 
-        self.k_von_Karman = float(table.loc['k_von_karman'].Value)      # Von Karman constant
-        self.N_iter = int(table.loc['N_iter'].Value)                    # max interations to compute the gravitational settling velocity
-        self.tol = float(table.loc['tol'].Value)                        # tolerance to reach convergence in the gravitational settling velocity computation
-        self.Re_Limit = np.array(table.loc['Re_Limit'].Value.split(';')).astype('float') # Reynolds limit values to choose among correlations for the drag coefficient
-        self.alpha_EIM = float(table.loc['alpha_EIM'].Value)            # factor for impaction factor computation
-        self.beta_EIM = float(table.loc['beta_EIM'].Value)              # factor for impaction factor computation
-        self.eps0 = float(table.loc['eps0'].Value)                      # empirical factor for boundary layer resistance computation
-        self.D0 = float(table.loc['D0'].Value)                          # [m] common value of separation distance (Ahmadi)
-
-class reflectance_measurements:
+@dataclass
+class Constants:
     """
-    Represents a class for managing reflectance measurement data.
-    
-    The `reflectance_measurements` class is used to import and manage reflectance data from multiple experiments. It can handle multiple files, each containing 
-    average and standard deviation of reflectance measurements, as well as optional tilt information. The class provides methods to access the imported data and generate plots.
-    
-    Args:
-        reflectance_files (str or list): Path(s) to the Excel file(s) containing the reflectance data.
-        time_grids (list): List of time grids corresponding to each reflectance file.
-        number_of_measurements (int or list, optional): Number of reflectance measurements for each file. If not provided, defaults to 1 for each file.
-        reflectometer_incidence_angle (float or list, optional): Incidence angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
-        reflectometer_acceptance_angle (float or list, optional): Acceptance angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
-        import_tilts (bool, optional): Whether to import tilt information from the files. Defaults to False.
-        column_names_to_import (list, optional): List of column names to import from the data sheets. If not provided, all columns will be imported.
-        verbose (bool, optional): Whether to print progress messages. Defaults to True.
+    Holds physical and empirical constants, loaded from an Excel sheet.
     """
-    def __init__(self,reflectance_files,time_grids,number_of_measurements=None, 
-                    reflectometer_incidence_angle=None,reflectometer_acceptance_angle=None,
-                    import_tilts=False,column_names_to_import=None,verbose=True):
-        
-        reflectance_files = _ensure_list(reflectance_files)
-        N_experiments = len(reflectance_files)
-        if number_of_measurements == None:
-            self.number_of_measurements = [1.0]*N_experiments
-        else:
-            self.number_of_measurements = _import_option_helper(reflectance_files,number_of_measurements)
+    air_rho: float = field(
+        init=False,
+        metadata={
+            'units': 'kg/m3',
+            'description': 'air density at T=293K and p=1 atm'
+        }
+    )
+    air_mu: float = field(
+        init=False,
+        metadata={
+            'units': 'Pa*s',
+            'description': 'air dynamic viscosity at T=293K and p=1 atm'
+        }
+    )
+    air_nu: float = field(
+        init=False,
+        metadata={
+            'units': 'm^2/s',
+            'description': 'air kinematic viscosity at T=293K and p=1 atm'
+        }
+    )
+    air_lambda_p: float = field(
+        init=False,
+        metadata={
+            'units': 'm',
+            'description': 'mean free path in air at T=293K and p=1 atm'
+        }
+    )
+    irradiation: float = field(
+        init=False,
+        metadata={
+            'units': 'W/m2',
+            'description': 'solar extraterrestrial constant'
+        }
+    )
+    g: float = field(
+        default=9.81,
+        metadata={
+            'units': 'm/s^2',
+            'description': 'gravitational constant'
+        }
+    )
+    A_slip: np.ndarray = field(
+        init=False,
+        metadata={
+            'units': 'dimensionless array',
+            'description': 'coefficients for slip correction factor'
+        }
+    )
+    k_Boltzman: float = field(
+        init=False,
+        metadata={
+            'units': 'J/K',
+            'description': 'Boltzman constant'
+        }
+    )
+    k_von_Karman: float = field(
+        init=False,
+        metadata={
+            'units': 'dimensionless',
+            'description': 'Von Karman constant'
+        }
+    )
+    N_iter: int = field(
+        init=False,
+        metadata={
+            'units': 'count',
+            'description': 'max iterations to compute gravitational settling velocity'
+        }
+    )
+    tol: float = field(
+        init=False,
+        metadata={
+            'units': 'dimensionless',
+            'description': 'tolerance for convergence in settling velocity computation'
+        }
+    )
+    Re_Limit: np.ndarray = field(
+        init=False,
+        metadata={
+            'units': 'dimensionless array',
+            'description': 'Reynolds limit values for drag coefficient correlations'
+        }
+    )
+    alpha_EIM: float = field(
+        init=False,
+        metadata={
+            'units': 'dimensionless',
+            'description': 'factor for impaction efficiency computation'
+        }
+    )
+    beta_EIM: float = field(
+        init=False,
+        metadata={
+            'units': 'dimensionless',
+            'description': 'factor for impaction efficiency computation'
+        }
+    )
+    eps0: float = field(
+        init=False,
+        metadata={
+            'units': 'dimensionless',
+            'description': 'empirical factor for boundary layer resistance'
+        }
+    )
+    D0: float = field(
+        init=False,
+        metadata={
+            'units': 'm',
+            'description': 'common separation distance (Ahmadi)'
+        }
+    )
 
-        
-        if reflectometer_incidence_angle == None:
-            reflectometer_incidence_angle = [0]*N_experiments
-        else:
-            reflectometer_incidence_angle = _import_option_helper(reflectance_files,reflectometer_incidence_angle)
-        
-        if reflectometer_acceptance_angle == None:
-            reflectometer_acceptance_angle = [0]*N_experiments
-        else:
-            reflectometer_acceptance_angle = _import_option_helper(reflectance_files,reflectometer_acceptance_angle)
-
-        self.file_name = {}
-        self.times = {}
-        self.average = {}
-        self.soiling_rate = {}
-        self.delta_ref = {}
-        self.sigma = {}
-        self.sigma_of_the_mean = {}
-        self.prediction_indices = {}
-        self.prediction_times = {}
-        self.rho0 = {}
-        self.reflectometer_incidence_angle = {}
-        self.reflectometer_acceptance_angle = {}
-        self.mirror_names = {}
-
-        if import_tilts:
-            self.tilts = {}
-            
-        self.import_reflectance_data(reflectance_files,time_grids,reflectometer_incidence_angle,
-                                     reflectometer_acceptance_angle,import_tilts=import_tilts,
-                                     column_names_to_import=column_names_to_import)
-        
-    def import_reflectance_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
-                                reflectometer_acceptance_angle, import_tilts=False,column_names_to_import=None):
+    def import_constants(self, file_params: str, verbose: bool = True):
         """
-        Imports reflectance data from Excel files and stores the data in the object's attributes.
-
-        Args:
-            reflectance_files (str or list): Path(s) to the Excel file(s) containing the reflectance data.
-            time_grids (list): List of time grids corresponding to each reflectance file.
-            reflectometer_incidence_angle (float or list, optional): Incidence angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
-            reflectometer_acceptance_angle (float or list, optional): Acceptance angle of the reflectometer for each file. If not provided, defaults to 0 for each file.
-            import_tilts (bool, optional): Whether to import tilt information from the files. Defaults to False.
-            column_names_to_import (list, optional): List of column names to import from the data sheets. If not provided, all columns will be imported.
+        Reads constants from an Excel file (indexed by 'Parameter') and populates this dataclass.
         """
-        for ii in range(len(reflectance_files)):
-            
-            self.file_name[ii] = reflectance_files[ii]
+        _print_if("\nImporting constants", verbose)
+
+        table = pd.read_excel(file_params, index_col="Parameter")
+
+        self.air_rho = float(table.loc['air_density'].Value)
+        self.air_mu = float(table.loc['air_dynamic_viscosity'].Value)
+        self.air_nu = self.air_mu / self.air_rho
+        self.air_lambda_p = float(table.loc['mean_free_path_air'].Value)
+
+        self.irradiation = float(table.loc['I_solar'].Value)
+        # g remains default
+
+        self.A_slip = np.array(
+            table.loc['A1_A2_A3'].Value.split(';')
+        ).astype(float)
+
+        self.k_Boltzman = float(table.loc['k_boltzman'].Value)
+        self.k_von_Karman = float(table.loc['k_von_karman'].Value)
+
+        self.N_iter = int(table.loc['N_iter'].Value)
+        self.tol = float(table.loc['tol'].Value)
+
+        self.Re_Limit = np.array(
+            table.loc['Re_Limit'].Value.split(';')
+        ).astype(float)
+
+        self.alpha_EIM = float(table.loc['alpha_EIM'].Value)
+        self.beta_EIM = float(table.loc['beta_EIM'].Value)
+        self.eps0 = float(table.loc['eps0'].Value)
+        self.D0 = float(table.loc['D0'].Value)
+@dataclass
+class ReflectanceMeasurements:
+    """
+    Data class for managing reflectance measurement data.
+    """
+    files: List[str] = field(default_factory=list, 
+                                    metadata={"description": "Files from which reflectance data was imported."})
+    time_grids: List[Any] = field(default_factory=list, 
+                                  metadata={"description": "A fine grid of times where reflectance measurements are desired (e.g. at times where simulations are available)."})
+    number_of_measurements: Optional[List[float]] = field(default_factory=list, 
+                                                          metadata={"description": "Number of measurements for each file. This should be a float for later operations."})
+    reflectometer_incidence_angle: Optional[List[float]] = field(default_factory=list, 
+                                                                 metadata={"description": "Incidence angle of the reflectometer for each file.",
+                                                                            "units": "degrees"})
+    reflectometer_acceptance_angle: Optional[List[float]] = field(default_factory=list, 
+                                                                  metadata={"description": "Half-angle describing the (conical) acceptance solid angle of the reflectometer ",
+                                                                            "units": "radians"})
+    import_tilts: bool = False
+    imported_column_names: Optional[List[str]] = field(default_factory=list,
+                                                        metadata={"description": "List of column names to import from the reflectance data files."})
+    verbose: bool = True
+
+    # Internal dictionaries populated in __post_init__
+    times: Dict[int, np.ndarray]                  = field(init=False, default_factory=dict)
+    average: Dict[int, np.ndarray]                = field(init=False, default_factory=dict)
+    soiling_rate: Dict[int, Any]                  = field(init=False, default_factory=dict)
+    delta_ref: Dict[int, Any]                     = field(init=False, default_factory=dict)
+    sigma: Dict[int, np.ndarray]                  = field(init=False, default_factory=dict)
+    sigma_of_the_mean: Dict[int, np.ndarray]      = field(init=False, default_factory=dict)
+    prediction_indices: Dict[int, Any]            = field(init=False, default_factory=dict)
+    prediction_times: Dict[int, Any]              = field(init=False, default_factory=dict)
+    rho0: Dict[int, Any]                          = field(init=False, default_factory=dict)
+    mirror_names: Dict[int, List[str]]            = field(init=False, default_factory=dict)
+    tilts: Dict[int, np.ndarray]                  = field(init=False, default_factory=dict)
+
+    def __post_init__(self):
+        # Ensure file list
+        source_files = _ensure_list(self.files)
+        n = len(source_files)
+
+        # Set up defaults or import lists
+        if self.number_of_measurements is None:
+            self.number_of_measurements = [1.0] * n
+        else:
+            self.number_of_measurements = _import_option_helper(source_files, self.number_of_measurements)
+
+        if self.reflectometer_incidence_angle is None:
+            self.reflectometer_incidence_angle = [0.0] * n
+        else:
+            self.reflectometer_incidence_angle = _import_option_helper(
+                source_files, self.reflectometer_incidence_angle)
+
+        if self.reflectometer_acceptance_angle is None:
+            self.reflectometer_acceptance_angle = [0.0] * n
+        else:
+            self.reflectometer_acceptance_angle = _import_option_helper(
+                source_files, self.reflectometer_acceptance_angle)
+
+        # Finally, import the data
+        self.import_reflectance_data(
+            source_files,
+            self.time_grids,
+            self.reflectometer_incidence_angle,
+            self.reflectometer_acceptance_angle,
+            import_tilts=self.import_tilts,
+            column_names_to_import=self.imported_column_names
+        )
+
+    def import_reflectance_data(
+        self,
+        source_files: List[str],
+        time_grids: List[Any],
+        incidence_angles: List[float],
+        acceptance_angles: List[float],
+        import_tilts: bool = False,
+        column_names_to_import: Optional[List[str]] = None
+    ):
+        """
+        Imports reflectance data from Excel source_files into the object's dictionaries.
+        """
+        for ii, fpath in enumerate(source_files):
+            self.files[ii] = source_files[ii]
             reflectance_data = {
-                "Average": pd.read_excel(reflectance_files[ii], sheet_name="Reflectance_Average"),
-                "Sigma": pd.read_excel(reflectance_files[ii], sheet_name="Reflectance_Sigma")
+                "Average": pd.read_excel(source_files[ii], sheet_name="Reflectance_Average"),
+                "Sigma": pd.read_excel(source_files[ii], sheet_name="Reflectance_Sigma")
             }
 
             # Extract timestamps
@@ -1765,7 +2176,7 @@ class reflectance_measurements:
             if time_column is not None:
                 self.times[ii] = reflectance_data['Average'][time_column].values
             else:
-                raise ValueError(f"No 'Time' or 'Timestamp' column found in file {reflectance_files[ii]}")
+                raise ValueError(f"No 'Time' or 'Timestamp' column found in file {source_files[ii]}")
             
             # Import data and ensure proper dimensions, Reflectance assumed to be in % based hence / 100
             if column_names_to_import is not None:
@@ -1804,13 +2215,13 @@ class reflectance_measurements:
             self.rho0[ii] = np.nanmax(self.average[ii], axis=0)
             
             # Set reflectometer parameters
-            self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
-            self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
+            self.reflectometer_incidence_angle[ii] = incidence_angles[ii]
+            self.reflectometer_acceptance_angle[ii] = acceptance_angles[ii]
             self.sigma_of_the_mean[ii] = self.sigma[ii] / np.sqrt(self.number_of_measurements[ii])
 
             # Import tilts if requested
             if import_tilts:
-                tilt_data = pd.read_excel(reflectance_files[ii], sheet_name="Tilts")[self.mirror_names[ii]].values
+                tilt_data = pd.read_excel(source_files[ii], sheet_name="Tilts")[self.mirror_names[ii]].values
                 if tilt_data.ndim == 1:
                     self.tilts[ii] = tilt_data.reshape(1, -1)  # Single row becomes (1, n_times)
                 else:
@@ -1826,7 +2237,7 @@ class reflectance_measurements:
                     if k not in idx:
                         attr.pop(k)
         return self_out
-   
+
     def plot(self):
         files = list(self.average.keys())
         N_mirrors = self.average[0].shape[1]
@@ -1865,260 +2276,4 @@ class reflectance_measurements:
             a.set_ylabel(r"Reflectance at ${0:.1f}^{{\circ}}$".format(self.reflectometer_incidence_angle[ii]))
         a.set_ylim((miny,1))
         a.set_xlabel("Date")
-
-class field_model(soiling_base):
-    def __init__(self,file_params,file_SF,cleaning_rate=None):
-        super().__init__(file_params)
-
-        self.sun = sun()
-        self.sun.import_sun(file_params)
-        
-        self.helios.import_helios(file_params,file_SF,cleaning_rate=cleaning_rate)
-        if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
-            self.helios.stow_tilt = None
-
-    def sun_angles(self,simulation_inputs,verbose=True):
-        sim_in = simulation_inputs
-        sun = self.sun
-        constants = self.constants
-        timezone = pytz.FixedOffset(int(self.timezone_offset*60))
-        
-        _print_if("Calculating sun apparent movement and angles for "+str(sim_in.N_simulations)+" simulations",verbose)
-        
-        files = list(sim_in.time.keys())
-        for f in list(files):
-            time_utc = sim_in.time[f].dt.tz_localize(timezone) # Apply UTC to timeseries
-            time_utc = time_utc.tolist() # Convert to list
-            
-            # Loop through all times and calculate azimuth and altitude/elevation
-            solar_angles = np.array([solar.get_position(self.latitude,self.longitude,time.to_pydatetime()) for time in time_utc]) 
-            sun.azimuth[f] = solar_angles[:,0] # solar_angles(:,[azimuth,elevation])
-            sun.elevation[f] = solar_angles[:,1]
-            sun.DNI[f] = np.array([radiation.get_radiation_direct(time.to_pydatetime(),elevation) for time, elevation in zip(time_utc,solar_angles[:,1])])
-            
-        self.sun = sun # update sun in the main model 
     
-    def helios_angles(self,plant,verbose=True,second_surface=True):
-        """
-        Calculates the heliostat movement and angles for a given solar field and simulation inputs.
-        
-        Parameters:
-            plant (object): The solar plant object containing information about the plant configuration.
-            verbose (bool, optional): Whether to print progress messages. Defaults to True.
-            second_surface (bool, optional): Whether to use the second surface model for the incidence reflection factor. Defaults to True.
-        
-        Returns:
-            None
-        """
-        sun = self.sun  
-        helios = self.helios
-
-        files = list(sun.elevation.keys())
-        N_sims = len(files)
-        _print_if("Calculating heliostat movement and angles for "+str(N_sims)+" simulations",verbose)
-
-        for f in files:
-            stowangle = sun.stow_angle
-            h_tower = plant.receiver['tower_height']
-            helios.dist = np.sqrt(helios.x**2+helios.y**2)                                  # horizontal distance between mirror and tower
-            helios.elevation_angle_to_tower = np.degrees(np.arctan((h_tower/helios.dist)))  # elevation angle from heliostats to tower
-            
-            T_m = np.array([-helios.y,-helios.x,np.ones((len(helios.x)))*h_tower])          # relative position of tower from mirror (left-handed ref.sys.)
-            L_m = np.sqrt(np.sum(T_m**2,axis=0))                                            # distance mirror-tower [m]
-            t_m = T_m/L_m                                                                   # unit vector in the direction of the tower (from mirror, left-handed ref.sys.)
-            s_m = np.array(\
-                        [np.cos(rad(sun.elevation[f]))*np.cos(rad(sun.azimuth[f])), \
-                            np.cos(rad(sun.elevation[f]))*np.sin(rad(sun.azimuth[f])), \
-                            np.sin(rad(sun.elevation[f]))])                                # unit vector of direction of the sun from mirror (left-handed)
-            s_m = np.transpose(s_m)
-            THETA_m = 0.5*np.arccos(s_m.dot(t_m))
-            THETA_m = np.transpose(THETA_m)                                                 # incident angle (the angle a ray of sun makes with the normal to the surface of the mirrors) in radians
-            helios.incidence_angle[f] = np.degrees(THETA_m)                                 # incident angle in degrees
-            helios.incidence_angle[f][:,sun.elevation[f]<=stowangle] = np.nan               # heliostats are stored vertically at night facing north
-            
-            # apply the formula (Guo et al.) to obtain the components of the normal for each mirror
-            A_norm = np.zeros((len(helios.x),max(s_m.shape),min(s_m.shape)))
-            B_norm = np.sin(THETA_m)/np.sin(2*THETA_m)
-            for ii in range(len(helios.x)):
-                A_norm[ii,:,:] = s_m+t_m[:,ii]
-            
-            N = A_norm[:,:,0]*B_norm                                # north vector
-            E = A_norm[:,:,1]*B_norm                                # east vector
-            H = A_norm[:,:,2]*B_norm                                # height vector
-            N[:,sun.elevation[f]<=stowangle] = 1                    # heliostats are stored at night facing north
-            E[:,sun.elevation[f]<=stowangle] = 0                    # heliostats are stored at night facing north
-            H[:,sun.elevation[f]<=stowangle] = 0                    # heliostats are stored at night facing north
-            # Nd = np.degrees(np.arctan2(E,N))                      
-            # Ed = np.degrees(np.arctan2(N,E))
-            # Hd = np.degrees(np.arctan2(H,np.sqrt(E**2+N**2)))   
-            
-            helios.elevation[f] = np.degrees(np.arctan(H/(np.sqrt(N**2+E**2))))         # [deg] elevation angle of the heliostats
-            helios.elevation[f][:,sun.elevation[f]<=stowangle] = 90 - helios.stow_tilt  # heliostats are stored at stow_tilt at night facing north
-            helios.tilt[f] = 90-helios.elevation[f]                                     # [deg] tilt angle of the heliostats
-            helios.azimuth[f] = np.degrees(np.arctan2(E,N))                             # [deg] azimuth angle of the heliostat
-
-            if second_surface==False:
-                helios.inc_ref_factor[f] = (1+np.sin(rad(helios.incidence_angle[f])))/np.cos(rad(helios.incidence_angle[f])) # first surface
-                _print_if("First surface model",verbose)
-            elif second_surface==True:
-                helios.inc_ref_factor[f] = 2/np.cos(rad(helios.incidence_angle[f]))  # second surface model
-                _print_if("Second surface model",verbose)
-            else:
-                _print_if("Choose either first or second surface model",verbose)
-   
-        self.helios = helios
-
-    def reflectance_loss(self,simulation_inputs,cleans,verbose=True):
-        
-        sim_in = simulation_inputs
-        N_sims = sim_in.N_simulations
-        _print_if("Calculating reflectance losses with cleaning for "+str(N_sims)+" simulations",verbose)
-
-        helios = self.helios
-        n_helios = helios.x.shape[0]
-        
-        files = list(sim_in.time.keys())
-        for fi in range(len(files)):
-            f = files[fi]
-            T_days = (sim_in.time[f].iloc[-1]-sim_in.time[f].iloc[0]).days # needs to be more than one day
-            n_hours = int(helios.delta_soiled_area[f].shape[1] )
-            
-            # accumulate soiling between cleans
-            temp_soil = np.zeros((n_helios,n_hours))
-            temp_soil2 =  np.zeros((n_helios,n_hours))
-            for hh in range(n_helios):
-                sra = copy.deepcopy(helios.delta_soiled_area[f][hh,:])     # use copy.deepcopy otherwise when modifying sra to compute temp_soil2, also helios.delta_soiled_area is modified
-                clean_idx = np.where(cleans[fi][hh,:])[0]
-                clean_at_0 = True                                       # kept true if sector hh-th is cleaned on day 0
-                if len(clean_idx)>0 and clean_idx[0]!=0:
-                    clean_idx = np.insert(clean_idx,0,0)                # insert clean_idx = 0 to compute soiling since the beginning
-                    clean_at_0 = False                                  # true only when sector hh-th is cleaned on day 0
-                if len(clean_idx)==0 or clean_idx[-1]!=(sra.shape[0]):                      
-                    clean_idx = np.append(clean_idx,sra.shape[0])       # append clean_idx = 8760 to compute soiling until the end
-                
-                clean_idx_n = np.arange(len(clean_idx))
-                for cc in clean_idx_n[:-1]:  
-                    temp_soil[hh,clean_idx[cc]:clean_idx[cc+1]] = \
-                        np.cumsum(sra[clean_idx[cc]:clean_idx[cc+1]])  # Note: clean_idx = 8760 would be outside sra, but Python interprets it as "till the end"
-                  
-                # Run again with initial condition equal to final soiling to obtain an approximation of "steady-state" soiling
-                # if clean_at_0:
-                #     temp_soil2[hh,:] = temp_soil[hh,:]
-                # else:
-                sra[0] = temp_soil[hh,-1]
-                for cc in clean_idx_n[:-1]:                  
-                    temp_soil2[hh,clean_idx[cc]:clean_idx[cc+1]] = \
-                        np.cumsum(sra[clean_idx[cc]:clean_idx[cc+1]])
-                                
-            helios.soiling_factor[f] = 1-temp_soil2*helios.inc_ref_factor[f]  # hourly soiling factor for each sector of the solar field
-        
-        self.helios = helios
-
-    def optical_efficiency(self,plant,simulation_inputs,climate_file,verbose=True,n_az=10,n_el=10):
-        helios = self.helios
-        sim_in = simulation_inputs
-        sun = self.sun
-
-        # check that lat/lon and timezone correspond to the same location
-        if climate_file.split('.')[-1] == "epw":
-            with open(climate_file) as f:
-                line = f.readline()
-                line = line.split(',')
-                lat = line[6]
-                lon = line[7]
-                tz = line[-2]
-        else:
-            raise ValueError("Climate file type must be .epw")
-
-        # check that parameter file and climate file have same location and timezone
-        if self.latitude != float(lat) or self.longitude != float(lon):
-            raise ValueError("Location of field_model and climate file do not match")
-        if self.timezone_offset != float(tz):
-            raise ValueError("Timezone offset of field_model and climate file do not match")
-        
-        cp = CoPylot()
-        r = cp.data_create()
-        assert cp.data_set_string(
-            r,
-            "ambient.0.weather_file",
-            climate_file,
-        )
-        
-        # layout setup
-        assert cp.data_set_number(r,"heliostat.0.height",helios.height)
-        assert cp.data_set_number(r,"heliostat.0.width",helios.width)
-        assert cp.data_set_number(r,"heliostat.0.soiling",1) # Sets cleanliness to 100%
-        assert cp.data_set_number(r,"heliostat.0.reflectivity",1)
-        try:
-            assert cp.data_set_string(r,"receiver.0.rec_type",plant.receiver['receiver_type'])
-        except:
-            assert cp.data_set_string(r,"receiver.0.rec_type",'External cylindrical')
-        if plant.receiver['receiver_type'] == 'External cylindrical':
-            assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['width_diameter'])
-        elif plant.receiver['receiver_type'] == 'Flat plate':
-            assert cp.data_set_number(r,"receiver.0.rec_width",plant.receiver['width_diameter'])
-            try:    
-                assert cp.data_set_number(r,"receiver.0.rec_elevation",plant.receiver['orientation_elevation'])
-            except:
-                assert cp.data_set_number(r,"receiver.0.rec_elevation",-35)
-        assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['width_diameter']) 
-        assert cp.data_set_number(r,"receiver.0.rec_height",plant.receiver['panel_height'])
-        assert cp.data_set_number(r,"receiver.0.optical_height",plant.receiver['tower_height'])
-
-        # field setup
-        ff = helios.full_field
-        N_helios = ff['id'].shape[0]
-        zz = [0 for ii in range(N_helios)]
-        layout = [[ff['id'][ii],ff['x'][ii],ff['y'][ii],zz[ii]] for ii in range(N_helios)] #[list(id),list(ff['x']),list(ff['y']),list(zz)]
-        assert cp.assign_layout(r,layout)
-        field = cp.get_layout_info(r)
-        
-        # simulation parameters
-        assert cp.data_set_number(r,"fluxsim.0.flux_time_type",0) # 1 for time simulation, 0 for solar angles
-        assert cp.data_set_number(r,"fluxsim.0.flux_dni",1000.0)  # set the simulation DNI to 1000 W/m2. Only used to display indicative receiver power.
-        assert cp.data_set_string(r,"fluxsim.0.aim_method",plant.aim_point_strategy)
-
-        files = list(sim_in.time.keys())
-        Ns = len(helios.x)
-        helios.optical_efficiency = {f: [] for f in files}
-        az_grid = np.linspace(0,360,num=n_az) 
-        el_grid = np.linspace(sun.stow_angle,90,num=n_el)
-        eff_grid = np.zeros((Ns,n_az,n_el))
-        rec_power_grid = np.zeros((n_az,n_el))
-        sec_ids = ff['sector_id'][field['id'].values.astype(int)] # CoPylot re-orders sectors
-        fmt = "Getting efficiencies for az={0:.3f}, el={1:.3f}"
-        
-        # buliding the lookup table for grid of solar angles
-        fmt_pwr = "Power absorbed by receiver at DNI=1000 W/m2: {0:.2e} kW"
-        for ii in range(len(az_grid)):
-            for jj in range(len(el_grid)):
-                assert cp.data_set_number(r,"fluxsim.0.flux_solar_az_in",az_grid[ii])
-                assert cp.data_set_number(r,"fluxsim.0.flux_solar_el_in",el_grid[jj])
-                assert cp.simulate(r)
-                dat = cp.detail_results(r)
-                dat_summary = cp.summary_results(r)
-
-                effs = dat['efficiency']
-                _print_if(fmt.format(az_grid[ii],el_grid[jj]),verbose)
-                if dat_summary['Power absorbed by the receiver'] == ' -nan(ind)':
-                    raise ValueError("SolarPILOT unable to simulate with current parameter configuration")
-                else:
-                    _print_if(fmt_pwr.format(dat_summary['Power absorbed by the receiver']),verbose)
-                    
-                for kk in range(Ns):
-                    idx = np.where(sec_ids==kk)[0]
-                    eff_grid[kk,ii,jj] = effs[idx].mean()
-        
-        # Apply lookup table to simulation
-        for f in files:
-            T = len(sim_in.time[f])
-            # Use above lookup to compute helios.optical_efficiency[f]
-            _print_if("Computing optical efficiency time series for file "+str(f),verbose)
-            helios.optical_efficiency[f] = np.zeros((Ns,T))
-            for ll in range(Ns):
-                opt_fun = interp2d(el_grid,az_grid,eff_grid[ll,:,:],fill_value=np.nan)
-                helios.optical_efficiency[f][ll,:] = np.array( [opt_fun(sun.elevation[f][tt],sun.azimuth[f][tt])[0] \
-                    for tt in range(T)] )
-            _print_if("Done!",verbose)
-        self.helios = helios
-

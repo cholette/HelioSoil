@@ -1,29 +1,18 @@
 import numpy as np
-from numpy import matlib
 from numpy import radians as rad
 from numpy.linalg import inv
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from matplotlib.cm import get_cmap, turbo
-from warnings import warn
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, Union
 import copy
 from tqdm.auto import tqdm
 from scipy.interpolate import RectBivariateSpline
-from soiling_model.utilities import _print_if,_ensure_list,\
-                                    _extinction_function,_same_ext_coeff,\
-                                    _import_option_helper,_parse_dust_str,\
-                                    _check_keys
-from textwrap import dedent
-from pysolar import solar, radiation, solartime
-import datetime
+from soiling_model.utilities import _print_if
 import pytz
 import copy
 from copylot import CoPylot
-from soiling_model.base_models import physical_base,constant_mean_base, sun, Truck
+from soiling_model.base_models import PhysicalBase,ConstantMeanBase, Sun, Truck
 
 @dataclass
 class ReceiverParameters:
@@ -81,7 +70,7 @@ class PlantParameters:
         metadata={'units': '$/MWh', 'description': 'Non-cleaning maintenance costs'}
     )
 
-class central_tower_plant:
+class CentralTowerPlant:
     """Central tower plant with parameter management."""
     
     def __init__(self):
@@ -172,25 +161,18 @@ class central_tower_plant:
         self._plant.electricity_price = float(table.loc['electricity_price'].Value)
         self._plant.plant_other_maintenance = float(table.loc['plant_other_maintenance'].Value)  
            
-class field_common_methods:
+class FieldCommonMethods:
     def sun_angles(self,simulation_inputs,verbose=True):
         sim_in = simulation_inputs
         sun = self.sun
-        timezone = pytz.FixedOffset(int(self.timezone_offset*60))
+        timezone = pytz.FixedOffset(int(self.timezone_offset*60)) # FixedOffeset uses minutes
         
         _print_if("Calculating sun apparent movement and angles for "+str(sim_in.N_simulations)+" simulations",verbose)
         
         files = list(sim_in.time.keys())
-        for f in list(files):
-            # First convert to timezone-aware datetime objects
-            time_utc = [t.replace(tzinfo=timezone) for t in np.array(sim_in.time[f].dt.to_pydatetime())]
-
-            # Loop through all times and calculate azimuth and altitude/elevation
-            solar_angles = np.array([solar.get_position(self.latitude,self.longitude,time) for time in time_utc]) 
-            sun.azimuth[f] = solar_angles[:,0] # solar_angles(:,[azimuth,elevation])
-            sun.elevation[f] = solar_angles[:,1]
-            sun.DNI[f] = np.array([radiation.get_radiation_direct(time,elevation) if elevation > 0 else 0.0 
-                       for time, elevation in zip(time_utc,solar_angles[:,1])])
+        for f in files:
+            sun.angles_and_clearsky_dni(self.latitude,self.longitude,sim_in.time[f],tz_offset=self.timezone_offset)
+            
         # Check if DNI data exists in the simulation inputs
         if f not in sim_in.dni or not isinstance(sim_in.dni[f], (list, np.ndarray)) or len(sim_in.dni[f]) == 0:
             print('No DNI in weather data file using clear sky DNI')
@@ -318,7 +300,10 @@ class field_common_methods:
         """
         Computes the optical efficiency of a heliostat field for a given set of simulation inputs and climate data.
         
-        This method sets up the simulation parameters in the CoPylot library, including the heliostat field layout, receiver properties, and simulation settings. It then computes the optical efficiency of each heliostat in the field for a grid of solar azimuth and elevation angles, and uses this lookup table to compute the time series of optical efficiency for each heliostat during the simulation.
+        This method sets up the simulation parameters in the CoPylot library, including the heliostat field layout, 
+        receiver properties, and simulation settings. It then computes the optical efficiency of each heliostat in 
+        the field for a grid of solar azimuth and elevation angles, and uses this lookup table to compute the time 
+        series of optical efficiency for each heliostat during the simulation.
         
         Args:
             plant (object): A plant object containing information about the receiver and aim point strategy.
@@ -447,19 +432,18 @@ class field_common_methods:
             _print_if("Done!",verbose)
         self.helios = helios
 
-class field_model(physical_base,field_common_methods):
+class FieldModel(PhysicalBase,FieldCommonMethods):
     def __init__(self,file_params,file_SF,cleaning_rate:float=None):
         super().__init__()
         super().import_site_data_and_constants(file_params)
 
-        self.sun = sun()
+        self.sun = Sun()
         self.sun.import_sun(file_params)
         
         self.helios.import_helios(file_params,file_SF,cleaning_rate=cleaning_rate)
         if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
             self.helios.stow_tilt = None
-            
-    
+               
     def compute_acceptance_angles(self,plant,verbose=True):
         # Approximate acceptance half-angles using simple geometric approximation from: 
         #    Sutter, Montecchi, von Dahlen, Fernández-García, and M. Röger, 
@@ -486,13 +470,13 @@ class field_model(physical_base,field_common_methods):
         max_accept = max([self.helios.acceptance_angles[f].max() for f in files])
         min_accept = min([self.helios.acceptance_angles[f].min() for f in files])
         _print_if(f"Acceptance angle range: ({min_accept*1e3:.1f}, {max_accept*1e3:.1f}) [mrad]",verbose)
-            
-class simplified_field_model(constant_mean_base,field_common_methods):
+          
+class SimplifiedFieldModel(ConstantMeanBase,FieldCommonMethods):
     def __init__(self,file_params,file_SF,cleaning_rate:float=None):
         super().__init__()
         super().import_site_data_and_constants(file_params)
 
-        self.sun = sun()
+        self.sun = Sun()
         self.sun.import_sun(file_params)
         
         self.helios.import_helios(file_params,file_SF,cleaning_rate=cleaning_rate)

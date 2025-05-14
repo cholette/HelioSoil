@@ -22,7 +22,7 @@ def _ensure_list(s):
 
 def _check_keys(simulation_data,reflectance_data):
     for ii in range(len(simulation_data.time.keys())):
-            if simulation_data.file_name[ii] != reflectance_data.file_name[ii]:
+            if simulation_data.files[ii] != reflectance_data.files[ii]:
                 raise ValueError("Filenames in simulation data and reflectance do not match. Please ensure you imported the same list of files for both.")
 
 def _import_option_helper(file_list,option):
@@ -248,7 +248,7 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
         # trim simulation data
         mask = (sim_dat.time[f]>=lb.astype('datetime64[ns]')) & (sim_dat.time[f]<=ub.astype('datetime64[ns]'))   # .astype('datetime64[ns]') guarantees compatibility with Pandas Timestamp
         if all(mask==0):
-            raise ValueError(f"Provided date range of {lb} to {ub} for file {sim_dat.file_name[f]} excludes all data.")
+            raise ValueError(f"Provided date range of {lb} to {ub} for file {sim_dat.files[f]} excludes all data.")
             
         for var in weather_variables:
             if hasattr(sim_dat, var) and len(getattr(sim_dat, var)) > 0:
@@ -300,7 +300,7 @@ def daily_average(ref_dat,time_grids,dt=None):
     # tilts
 
     ref_dat_new = deepcopy(ref_dat)
-    num_files = len(ref_dat.file_name)
+    num_files = len(ref_dat.files)
     for f in range(num_files):
         num_mirrors = ref_dat.average[f].shape[1]
         df = pd.DataFrame({"times":ref_dat.times[f],
@@ -451,7 +451,7 @@ def _same_ext_coeff(helios,simulation_data):
     intensities = sim_dat.source_normalized_intensity
     phia = helios.acceptance_angles
 
-    files = list(sim_dat.file_name.keys())
+    files = range(len(sim_dat.files))
     num_heliostats = [helios.tilt[f].shape[0] for f in files]
     same_dust = np.zeros((len(files),len(files)))
     same_ext = [ [[] for n in range(num_heliostats[f])] for f in files]

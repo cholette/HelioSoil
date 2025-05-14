@@ -10,7 +10,7 @@ from scipy.optimize import minimize_scalar, minimize
 import numdifftools as ndt
 import pickle
 
-class common_fitting_methods:
+class CommonFittingMethods:
     def compute_soiling_factor(self,rho0=None):
         # Converts helios.delta_soiled_area into an accumulated area loss and 
         # populates helios.soiling_factor.
@@ -486,8 +486,7 @@ class common_fitting_methods:
             return fig,ax,mean_predictions,CI_lower_predictions,CI_upper_predictions
         else:
             return mean_predictions,CI_lower_predictions,CI_upper_predictions
-    
-class semi_physical(smb.physical_base,common_fitting_methods):
+class SemiPhysical(smb.PhysicalBase,CommonFittingMethods):
     def __init__(self,file_params):
         table = pd.read_excel(file_params,index_col="Parameter")
         super().__init__()
@@ -662,8 +661,7 @@ class semi_physical(smb.physical_base,common_fitting_methods):
                 save_data['reflectance_data'] = training_reflectance_data
 
             pickle.dump(save_data,f)
-
-class constant_mean_deposition(smb.constant_mean_base,common_fitting_methods):
+class ConstantMeanDeposition(smb.ConstantMeanBase,CommonFittingMethods):
     
     def __init__(self,file_params):
         super().__init__()

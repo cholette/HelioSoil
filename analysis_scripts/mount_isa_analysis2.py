@@ -42,19 +42,19 @@ t = [t for t in train_experiments]
 plot_title = "Training: "+str(train_mirrors)+", Exp: "+str(t)
 
 # %% Import & plot training data
-imodel = smf.semi_physical(parameter_file)
-imodel_constant = smf.constant_mean_deposition(parameter_file)
-sim_data_train = smb.simulation_inputs( files_train,
+imodel = smf.SemiPhysical(parameter_file)
+imodel_constant = smf.ConstantMeanDeposition(parameter_file)
+sim_data_train = smb.SimulationInputs( files_train,
                                         k_factors=k_factor,
                                         dust_type=dust_type
                                         )
-reflect_data_train = smb.reflectance_measurements(  files_train,
+reflect_data_train = smb.ReflectanceMeasurements(  files_train,
                                                     sim_data_train.time,
                                                     number_of_measurements=9.0,
                                                     reflectometer_incidence_angle=reflectometer_incidence_angle,
                                                     reflectometer_acceptance_angle=reflectometer_acceptance_angle,
                                                     import_tilts=True,
-                                                    column_names_to_import=train_mirrors
+                                                    imported_column_names=train_mirrors
                                                     )
 # Trim data and plot
 sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
@@ -138,18 +138,18 @@ _,_,_ = imodel_constant.plot_soiling_factor(    sim_data_train,
                                         orientation_strings=orientation  )
 
 # %% Load and trim total data
-sim_data_total = smb.simulation_inputs( files,
+sim_data_total = smb.SimulationInputs( files,
                                         k_factors=k_factor,
                                         dust_type=dust_type
                                         )
 
-reflect_data_total = smb.reflectance_measurements(  files,
+reflect_data_total = smb.ReflectanceMeasurements(  files,
                                                     sim_data_total.time,
                                                     number_of_measurements=9.0,
                                                     reflectometer_incidence_angle=reflectometer_incidence_angle,
                                                     reflectometer_acceptance_angle=reflectometer_acceptance_angle,
                                                     import_tilts=True,
-                                                    column_names_to_import=None
+                                                    imported_column_names=None
                                                     )
 
 # Trim data and plot                                                           

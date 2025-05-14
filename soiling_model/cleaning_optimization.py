@@ -8,22 +8,22 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.dates import DateFormatter
 
-from soiling_model.base_models import simulation_inputs
-from soiling_model.field_models import field_model,simplified_field_model,central_tower_plant
+from soiling_model.base_models import SimulationInputs
+from soiling_model.field_models import FieldModel,SimplifiedFieldModel,CentralTowerPlant
 from soiling_model.utilities import _print_if,simple_annual_cleaning_schedule
 
-class optimization_problem():
+class OptimizationProblem():
     def __init__(   self,params,solar_field,weather_files,climate_file,num_sectors=None,\
                     cleaning_rate:float=None,dust_type=None,n_az=10,n_el=10,second_surface=True,verbose=True,
                     model_type='semi-physical',ext_options={'grid_size_x':100}):
         self.electricity_price = []
         self.plant_other_maintenace = [] 
 
-        pl = central_tower_plant()
+        pl = CentralTowerPlant()
         pl.import_plant(params)
-        sd = simulation_inputs(weather_files,dust_type=dust_type)
+        sd = SimulationInputs(weather_files,dust_type=dust_type)
         if model_type.lower() == 'semi-physical':
-            fm = field_model(params,solar_field,cleaning_rate=cleaning_rate)
+            fm = FieldModel(params,solar_field,cleaning_rate=cleaning_rate)
             fm.sun_angles(sd)
             fm.helios_angles(pl,second_surface=second_surface)
             fm.compute_acceptance_angles(pl)    
@@ -32,7 +32,7 @@ class optimization_problem():
             fm.adhesion_removal(sd)
             fm.calculate_delta_soiled_area(sd)
         elif model_type.lower() == 'simplified':
-            fm = simplified_field_model(params,solar_field,cleaning_rate=cleaning_rate)
+            fm = SimplifiedFieldModel(params,solar_field,cleaning_rate=cleaning_rate)
             fm.sun_angles(sd)
             fm.helios_angles(pl,second_surface=second_surface)
             fm.calculate_delta_soiled_area(sd)
@@ -217,7 +217,7 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
             - 'soiling_induced_off_times': The number of time steps where the receiver is off due to soiling
             - 'soiling_induced_drops_below_upper_limit': The number of time steps where the clean receiver would be saturated but the actual receiver is not
     """
-    assert isinstance(opt,optimization_problem),"First input must be a soiling_model.cleaning_optimization.optimization_problem instance. "
+    assert isinstance(opt,OptimizationProblem),"First input must be a soiling_model.cleaning_optimization.optimization_problem instance. "
     field = opt.field_model
     plant = opt.plant
     files = list(opt.simulation_data.time.keys())
@@ -318,6 +318,7 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
                 'day_cdeg':cdeg_days,
                 'day_ccl':ccl_days} #'day_tcc', day_tcc
     return results
+
 def optimize_rollout_schedule(opt, file=0, verbose=True, max_trucks=20, initial_arealoss=None):
     """Optimizes the rollout cleaning schedule by finding optimal number of trucks.
     
@@ -1101,7 +1102,7 @@ def plot_cleaning_schedule(opt, results_schedule: dict, file: int = 0, save_path
     ax.set_xlabel("Month", fontsize=14)
     ax.set_ylabel("Sector", fontsize=14)
     ax.set_xlim(df_cleaning_actions.index[0], df_cleaning_actions.index[-1])
-    plt.title(f'Cleaning Schedule (blue dot = clean)\nTrucks: {results_schedule['n_trucks']}, Avg Cleanings: {avg_cleanings:.1f}\nTotal Cleanings: {total_cleanings}', fontsize=14)
+    plt.title(f"Cleaning Schedule (blue dot = clean)\nTrucks: {results_schedule['n_trucks']}, Avg Cleanings: {avg_cleanings:.1f}\nTotal Cleanings: {total_cleanings}", fontsize=14)
     ax.tick_params(axis='both', which='major', labelsize=12)
     ax.xaxis.set_major_formatter(DateFormatter('%m'))
     

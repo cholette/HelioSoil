@@ -55,19 +55,19 @@ t = [t for t in train_experiments]
 plot_title = "Training: "+str(train_mirrors)+", Exp: "+str(t)
 
 # %% Import training data
-imodel = smf.semi_physical(parameter_file)
-imodel_constant = smf.constant_mean_deposition(parameter_file)
-sim_data_train = smb.simulation_inputs( files_train,
+imodel = smf.SemiPhysical(parameter_file)
+imodel_constant = smf.ConstantMeanDeposition(parameter_file)
+sim_data_train = smb.SimulationInputs( files_train,
                                         k_factors=k_factor,
                                         dust_type=dust_type,
                                         )
-reflect_data_train = smb.reflectance_measurements(  files_train,
+reflect_data_train = smb.ReflectanceMeasurements(  files_train,
                                                     sim_data_train.time,
                                                     number_of_measurements,
                                                     reflectometer_incidence_angle,
                                                     reflectometer_acceptance_angle,
                                                     import_tilts=True,
-                                                    column_names_to_import=train_mirrors
+                                                    imported_column_names=train_mirrors
                                                     )
 
 # %% compute daily_averaged values of reflectance training data to avoid morning-afternoon (not understood) recoveries
@@ -90,7 +90,7 @@ sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
 # %% Plot training data
 
 for ii,experiment in enumerate(train_experiments):
-    if any("augusta".lower() in value.lower() for value in sim_data_train.file_name.values()):
+    if any("augusta".lower() in value.lower() for value in sim_data_train.files):
         fig,ax = plot_experiment_PA(sim_data_train,reflect_data_train,ii)
     else:
         smu.plot_experiment_data(sim_data_train,reflect_data_train,ii)
@@ -100,18 +100,18 @@ for ii,experiment in enumerate(train_experiments):
     # ax.set_title(f"Wind for file {files[experiment]}")
 
 # %% Load and trim total data
-sim_data_total = smb.simulation_inputs( files,
+sim_data_total = smb.SimulationInputs( files,
                                         k_factors=k_factor,
                                         dust_type=dust_type
                                         )
 
-reflect_data_total = smb.reflectance_measurements(  files,
+reflect_data_total = smb.ReflectanceMeasurements(  files,
                                                     sim_data_total.time,
                                                     number_of_measurements,
                                                     reflectometer_incidence_angle,
                                                     reflectometer_acceptance_angle,
                                                     import_tilts=True,
-                                                    column_names_to_import=None
+                                                    imported_column_names=None
                                                     )
 
 # %% compute daily_averaged values of reflectance data to avoid morning-afternoon (not understood) recoveries
@@ -127,7 +127,7 @@ sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
                                                             )
 
 for ii,experiment in enumerate(sim_data_total.dt.keys()):
-    if any("augusta".lower() in value.lower() for value in sim_data_total.file_name.values()):
+    if any("augusta".lower() in value.lower() for value in sim_data_total.files):
             fig,ax = plot_experiment_PA(sim_data_total,reflect_data_total,ii,figsize=(7,13))
     else:
         fig,ax = smu.plot_experiment_data(sim_data_total,reflect_data_total,ii)
@@ -138,7 +138,7 @@ for ii,experiment in enumerate(sim_data_total.dt.keys()):
 # %% Plot training and total data after daily averaging
 if DAILY_AVERAGE:
     for ii,experiment in enumerate(train_experiments):
-        if any("augusta".lower() in value.lower() for value in sim_data_train.file_name.values()):
+        if any("augusta".lower() in value.lower() for value in sim_data_train.files):
             fig,ax = plot_experiment_PA(sim_data_train,reflect_data_train,ii)
         else:
             fig,ax = smu.plot_experiment_data(sim_data_train,reflect_data_train,ii)
@@ -148,7 +148,7 @@ if DAILY_AVERAGE:
         # ax.set_title(f"Wind for file {files[experiment]}"
 
     for ii,experiment in enumerate(files):
-        if any("augusta".lower() in value.lower() for value in sim_data_total.file_name.values()):
+        if any("augusta".lower() in value.lower() for value in sim_data_total.files):
             fig,ax = plot_experiment_PA(sim_data_total,reflect_data_total,ii)
         else:
             fig,ax = smu.plot_experiment_data(sim_data_total,reflect_data_total,ii)
@@ -329,7 +329,7 @@ _,_,_ = imodel_constant.plot_soiling_factor(    sim_data_train,
 
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
-file_inds = np.arange(len(reflect_data_total.file_name))
+file_inds = np.arange(len(reflect_data_total.files))
 imodel = smu.set_extinction_coefficients(imodel,ext_weights,file_inds)
 
 # %% run plot
