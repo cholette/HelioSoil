@@ -72,7 +72,7 @@ reflect_data_train = smb.reflectance_measurements(  files_train,
                                                     reflectometer_incidence_angle=reflectometer_incidence_angle,
                                                     reflectometer_acceptance_angle=reflectometer_acceptance_angle,
                                                     import_tilts=True,
-                                                    column_names_to_import=train_mirrors
+                                                    imported_column_names=train_mirrors
                                                     )
 # %% Trim training data 
 sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
@@ -120,7 +120,7 @@ reflect_data_total = smb.reflectance_measurements(  files,
                                                     reflectometer_incidence_angle=reflectometer_incidence_angle,
                                                     reflectometer_acceptance_angle=reflectometer_acceptance_angle,
                                                     import_tilts=True,
-                                                    column_names_to_import=None
+                                                    imported_column_names=None
                                                     )
 
 # %% compute daily_averaged values of reflectance to avoid morning-afternoon (not understood) recoveries

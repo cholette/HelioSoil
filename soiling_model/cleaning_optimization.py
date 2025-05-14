@@ -1101,7 +1101,7 @@ def plot_cleaning_schedule(opt, results_schedule: dict, file: int = 0, save_path
     ax.set_xlabel("Month", fontsize=14)
     ax.set_ylabel("Sector", fontsize=14)
     ax.set_xlim(df_cleaning_actions.index[0], df_cleaning_actions.index[-1])
-    plt.title(f'Cleaning Schedule (blue dot = clean)\nTrucks: {results_schedule['n_trucks']}, Avg Cleanings: {avg_cleanings:.1f}\nTotal Cleanings: {total_cleanings}', fontsize=14)
+    plt.title(f"Cleaning Schedule (blue dot = clean)\nTrucks: {results_schedule['n_trucks']}, Avg Cleanings: {avg_cleanings:.1f}\nTotal Cleanings: {total_cleanings}", fontsize=14)
     ax.tick_params(axis='both', which='major', labelsize=12)
     ax.xaxis.set_major_formatter(DateFormatter('%m'))
     

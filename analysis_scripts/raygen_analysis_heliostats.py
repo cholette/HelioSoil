@@ -103,7 +103,7 @@ reflect_data_total = smb.reflectance_measurements(
                   reflectometer_incidence_angle,
                   reflectometer_acceptance_angle,
                   import_tilts=False,
-                  column_names_to_import=None
+                  imported_column_names=None
                   )
 
 # %% compute daily_averaged values of reflectance to avoid morning-afternoon (not understood) recoveries
