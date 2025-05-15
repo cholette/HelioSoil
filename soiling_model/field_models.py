@@ -165,7 +165,7 @@ class FieldCommonMethods:
     def sun_angles(self,simulation_inputs,verbose=True):
         sim_in = simulation_inputs
         sun = self.sun
-        timezone = pytz.FixedOffset(int(self.timezone_offset*60)) # FixedOffeset uses minutes
+        timezone = pytz.FixedOffset(int(self.timezone_offset*60)) # FixedOffset uses minutes
         
         _print_if("Calculating sun apparent movement and angles for "+str(sim_in.N_simulations)+" simulations",verbose)
         
