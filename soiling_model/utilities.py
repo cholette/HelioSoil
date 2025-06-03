@@ -7,6 +7,7 @@ import numpy as np
 from copy import deepcopy
 from openpyxl import load_workbook
 import os
+os.environ["MIEPYTHON_USE_JIT"] = "1"  # Must be set before importing
 import miepython
 from collections import defaultdict
 

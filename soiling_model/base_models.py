@@ -45,7 +45,7 @@ class SoilingBase:
         self.longitude = None                 # longitude in degrees of site
         self.timezone_offset = None           # [hrs from GMT] timezone of site
         self.constants = Constants()          # a subclass for constant
-        self.helios = Heliostats()                # a subclass containing information about the heliostats
+        self.helios = Heliostats()            # a subclass containing information about the heliostats
         self.sigma_dep = None                 # standard deviation for deposition velocity
         self.loss_model = None                # either "geometry" or "mie"
 
@@ -113,13 +113,15 @@ class PhysicalBase(SoilingBase):
         vg = (constants.g*(D_meters**2)*Cc*(dust.rho[0]))/(18*constants.air_mu);    # terminal velocity [m/s] if Re<0.1 
         Re = constants.air_rho*vg*D_meters/constants.air_mu                      # Reynolds number for vg(Re<0.1)
         for ii in range(constants.N_iter):
+            vnew = vg.copy()  # initialize vnew with vg
             Cd_g = 24/Re
             Cd_g[Re>constants.Re_Limit[0]] = 24/Re[Re>constants.Re_Limit[0]] * \
                 (1 + 3/16*Re[Re>constants.Re_Limit[0]] + 9/160*(Re[Re>constants.Re_Limit[0]]**2)*\
                     np.log(2*Re[Re>constants.Re_Limit[0]]))
             Cd_g[Re>constants.Re_Limit[1]] = 24/Re[Re>constants.Re_Limit[1]] * (1 + 0.15*Re[Re>constants.Re_Limit[1]]**0.687)      
             Cd_g[Re>constants.Re_Limit[2]] = 0.44;      
-            vnew = np.sqrt(4*constants.g*D_meters*Cc*dust.rho[0]/(3*Cd_g*constants.air_rho))
+            vg_high_re = np.sqrt(4*constants.g*D_meters*Cc*dust.rho[0]/(3*Cd_g*constants.air_rho))
+            vnew[constants.Re_Limit[0]>=Re] = vg_high_re[constants.Re_Limit[0]>=Re]  # replace vg with vg_high_re for Re>Re_Limit[0]
             if max(abs(vnew-vg)/vnew)<constants.tol:
                 vg = vnew
                 break
@@ -193,13 +195,15 @@ class PhysicalBase(SoilingBase):
             vg = (constants.g*(D_meters**2)*Cc*(dust.rho[f]))/(18*constants.air_mu);    # terminal velocity [m/s] if Re<0.1 
             Re = constants.air_rho*vg*D_meters/constants.air_mu                      # Reynolds number for vg(Re<0.1)
             for ii in range(constants.N_iter):
+                vnew = vg.copy()  # initialize vnew with vg
                 Cd_g = 24/Re
                 Cd_g[Re>constants.Re_Limit[0]] = 24/Re[Re>constants.Re_Limit[0]] * \
                     (1 + 3/16*Re[Re>constants.Re_Limit[0]] + 9/160*(Re[Re>constants.Re_Limit[0]]**2)*\
                         np.log(2*Re[Re>constants.Re_Limit[0]]))
                 Cd_g[Re>constants.Re_Limit[1]] = 24/Re[Re>constants.Re_Limit[1]] * (1 + 0.15*Re[Re>constants.Re_Limit[1]]**0.687)      
                 Cd_g[Re>constants.Re_Limit[2]] = 0.44;      
-                vnew = np.sqrt(4*constants.g*D_meters*Cc*dust.rho[f]/(3*Cd_g*constants.air_rho))
+                vg_high_re = np.sqrt(4*constants.g*D_meters*Cc*dust.rho[f]/(3*Cd_g*constants.air_rho))
+                vnew[constants.Re_Limit[0]>=Re] = vg_high_re[constants.Re_Limit[0]>=Re]  # replace vg with vg_high_re for Re>Re_Limit[0]
                 if max(abs(vnew-vg)/vnew)<constants.tol:
                     vg = vnew
                     break
@@ -544,7 +548,7 @@ class SimulationInputs:
     air_temp: Dict[int, np.ndarray] = field(
         init=False,
         default_factory=dict,
-        metadata={'description': 'air temperature', 'units': 'C'}
+        metadata={'description': 'air temperature', 'units': 'degC'}
     )
     wind_speed: Dict[int, np.ndarray] = field(
         init=False,
@@ -564,12 +568,12 @@ class SimulationInputs:
     dust_concentration: Dict[int, np.ndarray] = field(
         init=False,
         default_factory=dict,
-        metadata={'description': 'PM10 or TSP concentration in air', 'units': 'µg/m3'}
+        metadata={'description': 'PM10 or TSP concentration in air', 'units': 'µg/m³'}
     )
     dust_conc_mov_avg: Dict[int, np.ndarray] = field(
         init=False,
         default_factory=dict,
-        metadata={'description': 'hourly moving average of dust concentration', 'units': 'µg/m3'}
+        metadata={'description': 'hourly moving average of dust concentration', 'units': 'µg/m³'}
     )
     rain_intensity: Dict[int, np.ndarray] = field(
         init=False,
@@ -679,8 +683,6 @@ class SimulationInputs:
         }
 
         for ii, file in enumerate(self.files):
-            if file.endswith('.csv'):
-                raise ValueError("Please use an excel file for data file")
             weather = pd.read_excel(file, sheet_name="Weather")
 
             # Identify time column
@@ -801,17 +803,17 @@ class Dust:
     pdfN: Dict[int, np.ndarray] = field(
         init=False,
         default_factory=dict,
-        metadata={'units': '[1/cm3]/log10([µm])', 'description': 'Number distribution dN/d(log10(D))'}
+        metadata={'units': '[1/m³]/log10([µm])', 'description': 'Number distribution dN/d(log10(D))'}
     )
     pdfM: Dict[int, np.ndarray] = field(
         init=False,
         default_factory=dict,
-        metadata={'units': '[µg/m3]/dLog10(D[µm])', 'description': 'Mass distribution dm/dLog10(D)'}
+        metadata={'units': '[µg/m³]/dLog10(D[µm])', 'description': 'Mass distribution dm/dLog10(D)'}
     )
     pdfA: Dict[int, np.ndarray] = field(
         init=False,
         default_factory=dict,
-        metadata={'units': '[m2/m3]/dLog10([µm])', 'description': 'Area distribution dA/dLog10(D)'}
+        metadata={'units': '[m2/m³]/dLog10([µm])', 'description': 'Area distribution dA/dLog10(D)'}
     )
     hamaker: Dict[int, float] = field(
         init=False,
@@ -1939,7 +1941,7 @@ class Constants:
     air_rho: float = field(
         init=False,
         metadata={
-            'units': 'kg/m3',
+            'units': 'kg/m³',
             'description': 'air density at T=293K and p=1 atm'
         }
     )
