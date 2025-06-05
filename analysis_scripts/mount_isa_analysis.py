@@ -14,6 +14,7 @@ from paper_specific_utilities import    plot_for_paper, daily_soiling_rate,\
                                         fit_quality_plots, summarize_fit_quality,\
                                         daily_soiling_tilt_all_data
 import scipy.stats as sps
+import copy
 
 pad = 0.05
 sp_save_file = f"{main_directory}/results/sp_fitting_results_mount_isa"
@@ -24,7 +25,8 @@ second_surf = True # True if using the second-surface model. Otherwise, use firs
 d = f"{main_directory}/data/mount_isa/"
 time_to_remove_at_end = [0,0,0,0,0,0]
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
-train_mirrors = ["ON_M1_T00"] # which mirrors within the experiments are used for 
+train_mirrors = ["ON_M1_T00"] # which mirrors within the experiments are used for
+test_mirrors = None# ["ON_M1_T00","ON_M3_T30","OE_M4_T30","OS_M2_T30","ON_M5_T85","OE_M2_T85"] # None will paradoxially yield all mirrors for testing
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
 dust_type = "TSP"
 
@@ -33,7 +35,12 @@ parameter_file = d+"parameters_mount_isa_experiments.xlsx"
 files,training_intervals,mirror_name_list,all_mirrors = \
     smu.get_training_data(  d,"MountIsa_Data_",
                             time_to_remove_at_end=time_to_remove_at_end)
-orientation = [ [s[1] for s in mirrors] for mirrors in mirror_name_list]
+
+if test_mirrors is None:
+    orientation = [ [s[1] for s in mirrors] for mirrors in mirror_name_list]
+else:
+    sublist = [ s[1] for s in test_mirrors]
+    orientation = [copy.deepcopy(sublist) for _ in range(len(files))]
 
 Nfiles = len(files)
 extract = lambda x,ind: [x[ii] for ii in ind]
@@ -81,7 +88,7 @@ ext_weights = imodel.helios.extinction_weighting[0].copy()
 
 imodel_constant.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
 file_inds = np.arange(len(files_train))
-imodel_constant = smu.set_extinction_coefficients(imodel_constant,ext_weights,file_inds)
+# imodel_constant = smu.set_extinction_coefficients(imodel_constant,ext_weights,file_inds)
 
 # %% Fit semi-physical model & plot on training data
 log_param_hat,log_param_cov = imodel.fit_mle(   sim_data_train,
@@ -150,7 +157,7 @@ reflect_data_total = smb.ReflectanceMeasurements(  files,
                                                     reflectometer_incidence_angle=reflectometer_incidence_angle,
                                                     reflectometer_acceptance_angle=reflectometer_acceptance_angle,
                                                     import_tilts=True,
-                                                    imported_column_names=None
+                                                    imported_column_names=test_mirrors
                                                     )
 
 # Trim data and plot                                                           
@@ -189,8 +196,10 @@ fig,ax,ref_output = plot_for_paper(    imodel_constant,
                             train_experiments,
                             train_mirrors,
                             orientation,
-                            legend_shift=(0.04,0),
-                            yticks=(0.92,0.94,0.96,0.98,1.0))
+                            legend_shift=(0,0.03),
+                            figsize=(16,9),
+                            yticks=(0.92,0.94,0.96,0.98,1.0),
+                            ci_alpha=0.25)
 
 fig.savefig(cm_save_file+".pdf",bbox_inches='tight')
 

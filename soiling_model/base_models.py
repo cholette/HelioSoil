@@ -91,7 +91,19 @@ class PhysicalBase(SoilingBase):
 
     def deposition_velocity(self,dust,wind_speed=None,air_temp=None,hrz0=None,verbose=True,Ra=True):
         dust = dust
+
+        # unpack constants
         constants = self.constants
+        κ = constants.k_von_Karman
+        A_slip = constants.A_slip
+        λ_air_p = constants.air_lambda_p
+        μ_air,ν_air = constants.air_mu, constants.air_nu
+        ρ_air = constants.air_rho
+        g = constants.g
+        Re_Limit = constants.Re_Limit
+        kB = constants.k_Boltzman
+        β_EIM = constants.beta_EIM
+
         if hrz0 == None: # hrz0 from constants file
             hrz0 = self.hrz0
             _print_if("No value for hrz0 supplied. Using value in self.hrz0 = "+str(self.hrz0)+".",verbose)
@@ -105,42 +117,42 @@ class PhysicalBase(SoilingBase):
         D_meters = dust.D[0]*1e-6  # µm --> m
         Ntimes = len(wind_speed) #.shape[0]
 
-        Cc = 1+2*(constants.air_lambda_p/D_meters)* \
-                (constants.A_slip[0]+constants.A_slip[1]*\
-                    np.exp(-constants.A_slip[2]*D_meters/constants.air_lambda_p)) # slip correction factor
+        Cc = 1+2*(λ_air_p/D_meters)* \
+                (A_slip[0]+A_slip[1]*\
+                    np.exp(-A_slip[2]*D_meters/λ_air_p)) # slip correction factor
                 
         # computation of the gravitational settling velocity
-        vg = (constants.g*(D_meters**2)*Cc*(dust.rho[0]))/(18*constants.air_mu);    # terminal velocity [m/s] if Re<0.1 
-        Re = constants.air_rho*vg*D_meters/constants.air_mu                      # Reynolds number for vg(Re<0.1)
+        vg = (g*(D_meters**2)*Cc*(dust.rho[0]))/(18*μ_air);    # terminal velocity [m/s] if Re<0.1 
+        Re = ρ_air*vg*D_meters/μ_air                      # Reynolds number for vg(Re<0.1)
         for ii in range(constants.N_iter):
             vnew = vg.copy()  # initialize vnew with vg
             Cd_g = 24/Re
-            Cd_g[Re>constants.Re_Limit[0]] = 24/Re[Re>constants.Re_Limit[0]] * \
-                (1 + 3/16*Re[Re>constants.Re_Limit[0]] + 9/160*(Re[Re>constants.Re_Limit[0]]**2)*\
-                    np.log(2*Re[Re>constants.Re_Limit[0]]))
-            Cd_g[Re>constants.Re_Limit[1]] = 24/Re[Re>constants.Re_Limit[1]] * (1 + 0.15*Re[Re>constants.Re_Limit[1]]**0.687)      
-            Cd_g[Re>constants.Re_Limit[2]] = 0.44;      
-            vg_high_re = np.sqrt(4*constants.g*D_meters*Cc*dust.rho[0]/(3*Cd_g*constants.air_rho))
-            vnew[constants.Re_Limit[0]>=Re] = vg_high_re[constants.Re_Limit[0]>=Re]  # replace vg with vg_high_re for Re>Re_Limit[0]
+            Cd_g[Re>Re_Limit[0]] = 24/Re[Re>Re_Limit[0]] * \
+                (1 + 3/16*Re[Re>Re_Limit[0]] + 9/160*(Re[Re>Re_Limit[0]]**2)*\
+                    np.log(2*Re[Re>Re_Limit[0]]))
+            Cd_g[Re>Re_Limit[1]] = 24/Re[Re>Re_Limit[1]] * (1 + 0.15*Re[Re>Re_Limit[1]]**0.687)      
+            Cd_g[Re>Re_Limit[2]] = 0.44;      
+            vg_high_re = np.sqrt(4*g*D_meters*Cc*dust.rho[0]/(3*Cd_g*ρ_air))
+            vnew[Re_Limit[0]>=Re] = vg_high_re[Re_Limit[0]>=Re]  # replace vg with vg_high_re for Re>Re_Limit[0]
             if max(abs(vnew-vg)/vnew)<constants.tol:
                 vg = vnew
                 break
             vg = vnew
-            Re = constants.air_rho*vg*D_meters/constants.air_mu
+            Re = ρ_air*vg*D_meters/μ_air
         if ii == constants.N_iter:
             _print_if('Max iter reached in Reynolds calculation for gravitational settling velocity',verbose)
             
         # computation of the settling velocity due to inertia and diffusion
-        u_friction = constants.k_von_Karman*wind_speed/np.log(hrz0)                                           # [m/s] friction velocity
-        diffusivity = constants.k_Boltzman/(3*np.pi*constants.air_mu)* \
+        u_friction = κ*wind_speed/np.log(hrz0)                                           # [m/s] friction velocity
+        diffusivity = kB/(3*np.pi*μ_air)* \
             np.transpose(matlib.repmat(air_temp+273.15,len(D_meters),1))* \
                 matlib.repmat(Cc/D_meters,Ntimes,1)                                                      # [m^2/s] brownian diffusivity (Stokes-Einstein expression)
-        Schmidt_number = constants.air_nu/diffusivity                                                               # Schmidt number
+        Schmidt_number = ν_air/diffusivity                                                               # Schmidt number
         Stokes_number = np.transpose(matlib.repmat((u_friction**2),len(D_meters),1))* \
-            vg/constants.air_nu/constants.g                                                                         # Stokes number
-        Cd_momentum = constants.k_von_Karman**2/((np.log(hrz0))**2)                                                # drag coefficient for momentum
+            vg/ν_air/g                                                                         # Stokes number
+        Cd_momentum = κ**2/((np.log(hrz0))**2)                                                # drag coefficient for momentum
         E_brownian = Schmidt_number**(-2/3)                                                                         # Brownian factor
-        E_impaction = (Stokes_number**constants.beta_EIM)/(constants.alpha_EIM+Stokes_number**constants.beta_EIM)   # Impaction factor (Giorgi, 1986)
+        E_impaction = (Stokes_number**β_EIM)/(constants.alpha_EIM+Stokes_number**β_EIM)   # Impaction factor (Giorgi, 1986)
         E_interception = 0                                                                                          # Interception factor (=0 in this model)
         R1 = np.exp(-np.sqrt(Stokes_number))                                                                        # 'stick' factor for boundary layer resistance computation
         R1[R1<=tol]=tol                                                                                             # to avoid division by 0
@@ -164,13 +176,25 @@ class PhysicalBase(SoilingBase):
 
         vz = (vg + vt).transpose() # [m/s]
 
-        return(aerodynamic_resistance,boundary_layer_resistance,vg,vt,vz)
+        return (aerodynamic_resistance,boundary_layer_resistance,vg,vt,vz)
 
     def deposition_flux(self,simulation_inputs,hrz0=None,verbose=True,Ra=True):
         sim_in = simulation_inputs
         helios = self.helios
         dust = sim_in.dust
+        
+        # unpack constants
         constants = self.constants
+        κ = constants.k_von_Karman
+        A_slip = constants.A_slip
+        λ_air_p = constants.air_lambda_p
+        μ_air,ν_air = constants.air_mu, constants.air_nu
+        ρ_air = constants.air_rho
+        g = constants.g
+        Re_Limit = constants.Re_Limit
+        kB = constants.k_Boltzman
+        β_EIM = constants.beta_EIM
+
         if hrz0 == None: # hrz0 from constants file
             hrz0 = self.hrz0
             _print_if("No value for hrz0 supplied. Using value in self.hrz0 = "+str(self.hrz0)+".",verbose)
@@ -187,42 +211,42 @@ class PhysicalBase(SoilingBase):
             Nhelios = helios.tilt[f].shape[0] 
             Nd = D_meters.shape[0]
 
-            Cc = 1+2*(constants.air_lambda_p/D_meters)* \
-                    (constants.A_slip[0]+constants.A_slip[1]*\
-                        np.exp(-constants.A_slip[2]*D_meters/constants.air_lambda_p)) # slip correction factor
+            Cc = 1+2*(λ_air_p/D_meters)* \
+                    (A_slip[0]+A_slip[1]*\
+                        np.exp(-A_slip[2]*D_meters/λ_air_p)) # slip correction factor
                     
             # computation of the gravitational settling velocity
-            vg = (constants.g*(D_meters**2)*Cc*(dust.rho[f]))/(18*constants.air_mu);    # terminal velocity [m/s] if Re<0.1 
-            Re = constants.air_rho*vg*D_meters/constants.air_mu                      # Reynolds number for vg(Re<0.1)
+            vg = (g*(D_meters**2)*Cc*(dust.rho[f]))/(18*μ_air);    # terminal velocity [m/s] if Re<0.1 
+            Re = ρ_air*vg*D_meters/μ_air                      # Reynolds number for vg(Re<0.1)
             for ii in range(constants.N_iter):
                 vnew = vg.copy()  # initialize vnew with vg
                 Cd_g = 24/Re
-                Cd_g[Re>constants.Re_Limit[0]] = 24/Re[Re>constants.Re_Limit[0]] * \
-                    (1 + 3/16*Re[Re>constants.Re_Limit[0]] + 9/160*(Re[Re>constants.Re_Limit[0]]**2)*\
-                        np.log(2*Re[Re>constants.Re_Limit[0]]))
-                Cd_g[Re>constants.Re_Limit[1]] = 24/Re[Re>constants.Re_Limit[1]] * (1 + 0.15*Re[Re>constants.Re_Limit[1]]**0.687)      
-                Cd_g[Re>constants.Re_Limit[2]] = 0.44;      
-                vg_high_re = np.sqrt(4*constants.g*D_meters*Cc*dust.rho[f]/(3*Cd_g*constants.air_rho))
-                vnew[constants.Re_Limit[0]>=Re] = vg_high_re[constants.Re_Limit[0]>=Re]  # replace vg with vg_high_re for Re>Re_Limit[0]
+                Cd_g[Re>Re_Limit[0]] = 24/Re[Re>Re_Limit[0]] * \
+                    (1 + 3/16*Re[Re>Re_Limit[0]] + 9/160*(Re[Re>Re_Limit[0]]**2)*\
+                        np.log(2*Re[Re>Re_Limit[0]]))
+                Cd_g[Re>Re_Limit[1]] = 24/Re[Re>Re_Limit[1]] * (1 + 0.15*Re[Re>Re_Limit[1]]**0.687)      
+                Cd_g[Re>Re_Limit[2]] = 0.44;      
+                vg_high_re = np.sqrt(4*g*D_meters*Cc*dust.rho[f]/(3*Cd_g*ρ_air))
+                vnew[Re_Limit[0]>=Re] = vg_high_re[Re_Limit[0]>=Re]  # replace vg with vg_high_re for Re>Re_Limit[0]
                 if max(abs(vnew-vg)/vnew)<constants.tol:
                     vg = vnew
                     break
                 vg = vnew
-                Re = constants.air_rho*vg*D_meters/constants.air_mu
+                Re = ρ_air*vg*D_meters/μ_air
             if ii == constants.N_iter:
                 _print_if('Max iter reached in Reynolds calculation for gravitational settling velocity',verbose)
                 
             # computation of the settling velocity due to inertia and diffusion
-            u_friction = constants.k_von_Karman*sim_in.wind_speed[f]/np.log(hrz0)                                           # [m/s] friction velocity
-            diffusivity = constants.k_Boltzman/(3*np.pi*constants.air_mu)* \
+            u_friction = κ*sim_in.wind_speed[f]/np.log(hrz0)                                           # [m/s] friction velocity
+            diffusivity = kB/(3*np.pi*μ_air)* \
                 np.transpose(matlib.repmat(sim_in.air_temp[f]+273.15,len(D_meters),1))* \
                     matlib.repmat(Cc/D_meters,Ntimes,1)                                                      # [m^2/s] brownian diffusivity (Stokes-Einstein expression)
-            Schmidt_number = constants.air_nu/diffusivity                                                               # Schmidt number
+            Schmidt_number = ν_air/diffusivity                                                               # Schmidt number
             Stokes_number = np.transpose(matlib.repmat((u_friction**2),len(D_meters),1))* \
-                vg/constants.air_nu/constants.g                                                                         # Stokes number
-            Cd_momentum = constants.k_von_Karman**2/((np.log(hrz0))**2)                                                # drag coefficient for momentum
+                vg/ν_air/g                                                                         # Stokes number
+            Cd_momentum = κ**2/((np.log(hrz0))**2)                                                # drag coefficient for momentum
             E_brownian = Schmidt_number**(-2/3)                                                                         # Brownian factor
-            E_impaction = (Stokes_number**constants.beta_EIM)/(constants.alpha_EIM+Stokes_number**constants.beta_EIM)   # Impaction factor (Giorgi, 1986)
+            E_impaction = (Stokes_number**β_EIM)/(constants.alpha_EIM+Stokes_number**β_EIM)   # Impaction factor (Giorgi, 1986)
             E_interception = 0                                                                                          # Interception factor (=0 in this model)
             R1 = np.exp(-np.sqrt(Stokes_number))                                                                        # 'stick' factor for boundary layer resistance computation
             R1[R1<=tol]=tol                                                                                             # to avoid division by 0
@@ -263,6 +287,7 @@ class PhysicalBase(SoilingBase):
         dust = simulation_inputs.dust
         dt = simulation_inputs.dt
         constants = self.constants
+        g = constants.g
         files = list(simulation_inputs.time.keys())
         
         for f in files:
@@ -273,7 +298,7 @@ class PhysicalBase(SoilingBase):
             work_adh = hamaker_system/(12*np.pi*constants.D0**2)                                # [J/m^2] work of adhesion
             radius_sep = ((3*np.pi*work_adh*D_meters**2)/(8*youngs_modulus_composite))**(1/3)   # [m] contact radius at separation (JKR model)
             F_adhesion = 3/4*np.pi*work_adh*D_meters                                            # [N] van der Waals adhesion force (JKR model)
-            F_gravity = dust.rho[f]*np.pi/6*constants.g*D_meters**3                             # [N] weight force   
+            F_gravity = dust.rho[f]*np.pi/6*g*D_meters**3                             # [N] weight force   
 
             if helios.stow_tilt == None: # No common stow angle supplied. Need to use raw tilts to compute removal moments
                 _print_if("  No common stow_tilt. Use values in helios.tilt to compute removal moments. This might take some time.",verbose)

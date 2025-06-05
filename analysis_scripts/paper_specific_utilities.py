@@ -14,7 +14,7 @@ plt.rc('axes',labelsize=18)
 
 def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                    rows_with_legend=[3],num_legend_cols=6,legend_shift=(0,0),plot_rh=True,
-                   yticks=None,figsize=(12,15),lgd_size=10):
+                   yticks=None,figsize=(12,15),lgd_size=10,ci_alpha=0.1):
     """
     Plot reflectance data and model predictions for a set of experiments and mirror tilts.
     
@@ -125,7 +125,7 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             Lp = ym - 1.96*sigma_predict
             Up = ym + 1.96*sigma_predict
             ax[jj,ii].plot(ts,ym,label='Prediction Mean',color='black')
-            ax[jj,ii].fill_between(ts,Lp,Up,color='black',alpha=0.1,label=r'Prediction Interval')
+            ax[jj,ii].fill_between(ts,Lp,Up,color='black',alpha=ci_alpha,label=r'Prediction Interval')
             ax[jj,ii].grid('on')
 
             if jj==0:

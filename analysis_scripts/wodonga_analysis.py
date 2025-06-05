@@ -28,6 +28,7 @@ d = f"{main_directory}/data/wodonga/"
 time_to_remove_at_end = [0,0,0,0,0,0]
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
 train_mirrors = ["OE_M1_T00"] # which mirrors within the experiments are used for 
+test_mirrors = ["OE_M1_T00","OE_M3_T30","OW_M4_T30","OW_M5_T60"] # ["ON_M1_T00","ON_M3_T30","OE_M4_T30","OS_M2_T30","ON_M5_T85","OE_M2_T85"] # None will paradoxially yield all mirrors for testing
 k_factor = None # None sets equal to 1.0, "import" imports from the file
 dust_type = "PM10"
 use_fitted_dust_distributions = False
@@ -40,7 +41,12 @@ if use_fitted_dust_distributions:
     d+="fitted/"
 
 files,all_intervals,exp_mirrors,all_mirrors = smu.get_training_data(d,"experiment_",time_to_remove_at_end=time_to_remove_at_end)
-orientation = [ [s[1] for s in mirrors] for mirrors in exp_mirrors]
+# orientation = [ [s[1] for s in mirrors] for mirrors in exp_mirrors]
+if test_mirrors is None:
+    orientation = [ [s[1] for s in mirrors] for mirrors in exp_mirrors]
+else:
+    sublist = [ s[1] for s in test_mirrors]
+    orientation = [deepcopy(sublist) for _ in range(len(files))]
 
 # Feb 2022 (first experiment --- remove last three days after rain started)
 all_intervals[0][0] = np.datetime64('2022-02-20T16:20:00')
@@ -103,7 +109,7 @@ ext_weights = imodel.helios.extinction_weighting[0].copy()
 
 imodel_constant.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
 file_inds = np.arange(len(files_train))
-imodel_constant = smu.set_extinction_coefficients(imodel_constant,ext_weights,file_inds)
+# imodel_constant = smu.set_extinction_coefficients(imodel_constant,ext_weights,file_inds)
 
 # %% Fit semi-physical model & plot on training data
 log_param_hat,log_param_cov = imodel.fit_mle(   sim_data_train,
@@ -175,7 +181,7 @@ reflect_data_total = smb.ReflectanceMeasurements(  files,
                                                     reflectometer_incidence_angle=reflectometer_incidence_angle,
                                                     reflectometer_acceptance_angle=reflectometer_acceptance_angle,
                                                     import_tilts=True,
-                                                    imported_column_names=None
+                                                    imported_column_names=test_mirrors
                                                     )
 sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
                                                                 reflect_data_total,
@@ -240,10 +246,13 @@ fig,ax,ref_output = plot_for_paper(    imodel_constant,
                             train_experiments,
                             train_mirrors,
                             orientation,
-                            legend_shift=(0,0),
+                            legend_shift=(-0.1,0.03),
                             rows_with_legend=[2],
                             num_legend_cols=4,
-                            yticks=(0.93,0.95,0.98,1.0))
+                            figsize=(16,9),
+                            yticks=(0.93,0.95,0.98,1.0),
+                            ci_alpha=0.2)
+
 
 if use_fitted_dust_distributions:
     fig.savefig(cm_save_file+figure_format,dpi=300,bbox_inches='tight',pad_inches=0.1)
