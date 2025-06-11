@@ -21,6 +21,8 @@ import copy
 from tqdm.notebook import tqdm
 import shutil
 import os
+from scipy.interpolate import RegularGridInterpolator
+
 
 tol = np.finfo(float).eps # machine floating point precision
 
@@ -1598,6 +1600,138 @@ class helios:
                 num_diameters = len(dust.D[f])
                 self.extinction_weighting[f] = np.ones((num_heliostats[f],num_diameters))
 
+    def compute_extinction_weights_new(self,simulation_data,loss_model=None,lookup_tables=True,verbose=True,show_plots=False,options={}):
+        """
+        Computes the extinction weights for the heliostat field based on the specified loss model.
+        
+        Parameters:
+            simulation_data (object): An object containing simulation data, including dust properties and source information.
+            loss_model (str, optional): The loss model to use for computing the extinction weights. Can be either 'mie' or 'geometry'. Defaults to None.
+            verbose (bool, optional): Whether to print progress messages. Defaults to True.
+            options (dict, optional): Additional options to pass to the extinction function.
+        
+        Returns:
+            None
+        """
+        sim_dat = simulation_data
+        dust = sim_dat.dust
+        files = list(sim_dat.file_name.keys())
+        num_diameters = [len(dust.D[f]) for f in files]
+        num_heliostats = [len(self.tilt[f]) for f in files]
+        phia = self.acceptance_angles
+
+        self.extinction_weighting = {f:np.zeros((num_heliostats[f],num_diameters[f])) for f in files}
+        if loss_model == 'mie':
+            assert ( (phia is not None) and all( [len(phia[f])==num_heliostats[f] for f in files] ) ),\
+                 "When loss_model == ""mie"", please set helios.acceptance_angles as a list with a value for each heliostat"
+            _print_if("Loss Model is ""mie"". Computing extinction coefficients ... ",verbose)
+
+            if lookup_tables:
+                print("Reading values from lookup tables...")
+                for f in files:
+                    dia = sim_dat.dust.D[f]
+                    angles = phia[f]
+                    df = pd.read_csv(f'extinction_weights_lookup_table_{f}.csv', index_col=0)
+                    diameters = df.columns.astype(float)  # asse colonne
+                    acc_angles = df.index.astype(float)    # asse righe
+                    ew = df.values                 # matrice dei valori
+                    
+                    interpolator = RegularGridInterpolator((acc_angles, diameters), ew)
+
+                    # Crea mesh di tutti i punti da interpolare (shape: len(angles) * len(dia), 2)
+                    grid_angles, grid_dia = np.meshgrid(angles, dia, indexing='ij')  # shape (M,N)
+                    points = np.stack([grid_angles.ravel(), grid_dia.ravel()], axis=1)
+
+                    # Interpolazione in blocco
+                    interpolated_values = interpolator(points).reshape(len(angles), len(dia))
+
+                    # Salva direttamente nella struttura dati
+                    self.extinction_weighting[f][:, :] = interpolated_values
+            else:
+                same_ext = _same_ext_coeff(self,sim_dat)
+                computed = []
+                for f in files:
+                    dia = sim_dat.dust.D[f]
+                    refractive_index = sim_dat.dust.m[f]
+                    lam = sim_dat.source_wavelength[f]
+                    intensities = sim_dat.source_normalized_intensity[f]
+                    h=0
+                    for h in tqdm(range(num_heliostats[f]), 
+                                desc=f"File {f}", 
+                                postfix=f"acceptance angle {phia[f][h]*1e3:.2f} mrad"):
+                        already_computed = [e in computed for _,e in enumerate(same_ext[f][h])]
+                        if any(already_computed):
+                            idx = already_computed.index(True)
+                            fe,he = same_ext[f][h][idx]                        
+                            self.extinction_weighting[f][h,:] = self.extinction_weighting[fe][he,:]
+                        else:
+                            ext_weight = _extinction_function(dia,lam,intensities,phia[f][h],
+                                                            refractive_index,verbose=verbose,
+                                                            **options)
+                            self.extinction_weighting[f][h,:] = ext_weight
+                            computed.append((f,h))
+                    
+                    if show_plots:
+                        fig,ax = plt.subplots()
+                        ax.semilogx(sim_dat.dust.D[f],self.extinction_weighting[f][h,:])
+                        ax.set_title(f'Heliostat {h}, acceptance angle {phia[f][h]*1e3:.2f} mrad')
+                        plt.show()
+
+            _print_if("... Done!",verbose)
+
+        else: #self.loss_model == 'geometry'
+            _print_if(f"Loss Model is ""geometry"". Setting extinction coefficients to unity for all heliostats in all files.",verbose)
+            for f in files:
+                num_diameters = len(dust.D[f])
+                self.extinction_weighting[f] = np.ones((num_heliostats[f],num_diameters))
+
+    def compute_extinction_weights_lookup_table(self,simulation_data,acceptance_angles_range=None,verbose=True,save=True,options={}):
+        """
+        Computes the extinction weights for the heliostat field based on the specified loss model.
+        
+        Parameters:
+            simulation_data (object): An object containing simulation data, including dust properties and source information.
+            verbose (bool, optional): Whether to print progress messages. Defaults to True.
+            options (dict, optional): Additional options to pass to the extinction function.
+        
+        Returns:
+            None
+        """
+        sim_dat = simulation_data
+        dust = sim_dat.dust
+        files = list(sim_dat.file_name.keys())
+        num_diameters = [len(dust.D[f]) for f in files]
+        phia = acceptance_angles_range
+
+        extinction_weighting = {f:np.zeros((len(acceptance_angles_range[f]),num_diameters[f])) for f in files}
+        assert (phia is not None),\
+                "When computing the lookup table, please set acceptance_angles_range as a list of values"
+        _print_if("Loss Model is ""mie"". Computing extinction coefficients ... ",verbose)
+
+        computed = []
+        for f in files:
+            dia = sim_dat.dust.D[f]
+            refractive_index = sim_dat.dust.m[f]
+            lam = sim_dat.source_wavelength[f]
+            intensities = sim_dat.source_normalized_intensity[f]
+            h=0
+            for h in tqdm(range(len(acceptance_angles_range[f])), 
+                desc=f"File {f}", 
+                postfix=f"acceptance angle {phia[f][h]*1e3:.2f} mrad"):
+                
+                ext_weight = _extinction_function(dia,lam,intensities,phia[f][h],
+                                                    refractive_index,verbose=verbose,
+                                                    **options)
+                extinction_weighting[f][h,:] = ext_weight
+
+            if save:
+                df = pd.DataFrame(extinction_weighting[f], index=acceptance_angles_range[f], columns=dia)
+                df.index.name = 'Acceptance angles'
+                df.to_csv(f'extinction_weights_lookup_table_{f}.csv')
+                
+        _print_if("... Done!",verbose)
+
+
     def plot_extinction_weights(self,simulation_data,fig_kwargs={},plot_kwargs={}):
         """
         Plot the extinction weights for each heliostat and file in the simulation data.
@@ -1652,11 +1786,11 @@ class helios:
             for idx in range(len(self.full_field['x'])): # Allocating the SF to each heliostat
                 soiling_factor_helios.append(soiling_factor_sector[int(self.full_field['sector_id'][idx])])
 
-        df = pd.read_csv(file_SF, na_values='NULL',  header=[0, 1])
-        shutil.copy(file_SF, file_SF[:file_SF.rfind(".")] + "_new" + file_SF[file_SF.rfind("."):])  # questo crea una copia uguale
-        df['Soiling factor'] = soiling_factor_helios
+            df = pd.read_csv(file_SF, na_values='NULL',  header=[0, 1])
+            shutil.copy(file_SF, file_SF[:file_SF.rfind(".")] + f"_{tt}" + file_SF[file_SF.rfind("."):])  
+            df['Soiling factor'] = soiling_factor_helios
 
-        df.to_csv(file_SF[:file_SF.rfind(".")] + "_new" + file_SF[file_SF.rfind("."):], index=False, na_rep='NULL')
+            df.to_csv(file_SF[:file_SF.rfind(".")] + f"_{tt}" + file_SF[file_SF.rfind("."):], index=False, na_rep='NULL')
         
 class constants:
     def __init__(self):
