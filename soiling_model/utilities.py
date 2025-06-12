@@ -11,6 +11,18 @@ os.environ["MIEPYTHON_USE_JIT"] = "1"  # Must be set before importing
 import miepython
 from collections import defaultdict
 
+def _to_dict_of_lists(data):
+    """
+    Convert a dictionary of arrays to a dictionary of lists.
+    
+    Args:
+        data (dict): Dictionary with arrays as values.
+    
+    Returns:
+        dict: Dictionary with lists as values.
+    """
+    return {k: np.ndarray.tolist(v) for k, v in data.items() if isinstance(v, np.ndarray)}
+
 def _print_if(s,verbose):
     # Helper function to control level of output display.
     if verbose:

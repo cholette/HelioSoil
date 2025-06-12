@@ -180,8 +180,9 @@ class FieldCommonMethods:
     
     def helios_angles(self,plant,verbose=True,second_surface=True):
         sun = self.sun  
+        assert len(sun.elevation)>0, "You need to call sun_angles() before helios_angles()"
+        
         helios = self.helios
-
         files = list(sun.elevation.keys())
         N_sims = len(files)
         _print_if("Calculating heliostat movement and angles for "+str(N_sims)+" simulations",verbose)

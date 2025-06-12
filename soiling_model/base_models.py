@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Union, Tuple
 from soiling_model.utilities import _print_if,_ensure_list,\
                                     _extinction_function,_same_ext_coeff,\
-                                    _import_option_helper,_parse_dust_str
+                                    _import_option_helper,_parse_dust_str, _to_dict_of_lists
 from textwrap import dedent
 from scipy.integrate import cumulative_trapezoid
 from scipy.spatial.distance import cdist
@@ -19,7 +19,7 @@ import copy
 from tqdm.notebook import tqdm
 import pytz
 from pysolar import solar, radiation
-import shutil
+import json
 import os
 from scipy.interpolate import RegularGridInterpolator
 
@@ -1856,20 +1856,42 @@ class Heliostats:
         plt.tight_layout()
         return fig, ax
 
-
-    def compute_extinction_weights(self,simulation_data,loss_model=None,lookup_tables=True,verbose=True,show_plots=False,options={}):
+    def compute_extinction_weights(self,
+                                   simulation_data: SimulationInputs,
+                                   loss_model: str,
+                                   num_acceptance_steps: int | None = None,
+                                   lookup_table_file_folder: str | None = None,
+                                   verbose: bool = True,
+                                   show_plots: bool = False,
+                                   options: dict = {}) -> None:
         """
-        Computes the extinction weights for the heliostat field based on the specified loss model.
-        
-        Parameters:
-            simulation_data (object): An object containing simulation data, including dust properties and source information.
-            loss_model (str, optional): The loss model to use for computing the extinction weights. Can be either 'mie' or 'geometry'. Defaults to None.
-            verbose (bool, optional): Whether to print progress messages. Defaults to True.
-            options (dict, optional): Additional options to pass to the extinction function.
-        
+        Compute extinction weighting factors for each heliostat based on the specified loss model.
+
+        This method supports both 'mie' and 'geometry' models. In the 'mie' case, extinction weights are computed
+        using Mie theory and heliostat acceptance angles, with the option to read or write to a lookup table. 
+        In the 'geometry' case, extinction is assumed to be unity.
+
+        Args:
+            simulation_data (SimulationInputs): Object containing input parameters for the simulation,
+                including dust characteristics, source spectrum, and file identifiers.
+            loss_model (str, optional): The model used to compute extinction weights. Must be either
+                'mie' (for Mie-theory-based extinction) or 'geometry' (unity extinction). Defaults to None.
+            num_acceptance_steps (int, optional): Number of discrete acceptance angles to use when creating 
+                lookup tables. Required if lookup_table_file_folder is set but does not exist.
+            lookup_table_file_folder (str, optional): Directory path to read or store precomputed extinction 
+                weights and angle/diameter lookup tables.
+            verbose (bool, optional): If True, prints detailed progress information to stdout. Defaults to True.
+            show_plots (bool, optional): If True, plots extinction curves for each heliostat after computation. Defaults to False.
+            options (dict, optional): Additional keyword arguments to pass to the extinction function used for Mie computations.
+
+        Raises:
+            ValueError: If `loss_model` is not one of 'mie' or 'geometry'.
+            AssertionError: If required inputs for 'mie' model are missing or incorrectly configured.
+
         Returns:
             None
         """
+        
         sim_dat = simulation_data
         dust = sim_dat.dust
         files = range(len(sim_dat.files))
@@ -1879,31 +1901,73 @@ class Heliostats:
 
         self.extinction_weighting = {f:np.zeros((num_heliostats[f],num_diameters[f])) for f in files}
         if loss_model == 'mie':
+            assert len(phia)>0, "When loss_model == ""mie"", please set helios.acceptance_angles by calling the compute_acceptance_angles method"
             assert ( (phia is not None) and all( [len(phia[f])==num_heliostats[f] for f in files] ) ),\
-                 "When loss_model == ""mie"", please set helios.acceptance_angles as a list with a value for each heliostat"
+                 "When loss_model == ""mie"", please set helios.acceptance_angles by calling the compute_acceptance_angles method"
             _print_if("Loss Model is ""mie"". Computing extinction coefficients ... ",verbose)
 
-            if lookup_tables:
-                print("Reading values from lookup tables...")
-                for f in files:
-                    dia = sim_dat.dust.D[f]
-                    angles = phia[f]
-                    df = pd.read_csv(f'extinction_weights_lookup_table_{f}.csv', index_col=0)
-                    diameters = df.columns.astype(float)  # asse colonne
-                    acc_angles = df.index.astype(float)    # asse righe
-                    ew = df.values                 # matrice dei valori
+            if lookup_table_file_folder is not None:
+                if lookup_table_file_folder[-1] != '/':
+                    lookup_table_file_folder += '/'
+
+                if os.path.isdir(lookup_table_file_folder): # check if directory exists
+
+                    # import lookup table files and return error if files are not properly named
+                    _print_if(f"Reading values from lookup tables from {lookup_table_file_folder}...",verbose) # need to add check that the acceptance angle range and refractive index is correct for these files
+                    _print_if(f"Warning: supplied num_acceptance_steps value is not used.",(num_acceptance_steps is not None) and verbose)
+                    try:
+                        with open(f'{lookup_table_file_folder}extinction_weights_lookup_table.json', 'r') as lookup_file:
+                            ext_weight_dfs = json.load(lookup_file)
+                            ext_weight_dfs = {int(k): v for k, v in ext_weight_dfs.items()} # convert keys to back to integers
+
+                        with open(f'{lookup_table_file_folder}acceptance_angles.json', 'r') as lookup_file:
+                            acc_angles = json.load(lookup_file)
+                            acc_angles = {int(k): v for k, v in acc_angles.items()}
+
+                        with open(f'{lookup_table_file_folder}diameters.json', 'r') as lookup_file:
+                            diameters = json.load(lookup_file)
+
+                    except:
+                        print(f"""Error: {lookup_table_file_folder} does not contain the required lookup table files. You can specify a
+                              not-yet-existing folder and call again with the num_acceptance_steps keyword arg set compute the lookup tables.""")
+                                            
+                    for f in files:
+                        dia = sim_dat.dust.D[f]
+                        angles = phia[f]
+                        # df = pd.read_csv(f'{lookup_table_file_folder}extinction_weights_lookup_table_{f}.csv', index_col=0)
+                        # df = ext_weight_dfs[f]
+                        # diameters = df.columns.astype(float)  # asse colonne
+                        # acc_angles = df.index.astype(float)    # asse righe
+                        # ew = df.values                 # matrice dei valori
+                        ew = np.array(ext_weight_dfs[f])  # convert to numpy array
+                        
+                        interpolator = RegularGridInterpolator((acc_angles[f], diameters), ew, bounds_error=False, fill_value=None) # extrapolation needed for points ON boundary.
+
+                        # Crea mesh di tutti i punti da interpolare (shape: len(angles) * len(dia), 2)
+                        grid_angles, grid_dia = np.meshgrid(angles, dia, indexing='ij')  # shape (M,N)
+                        points = np.stack([grid_angles.ravel(), grid_dia.ravel()], axis=1)
+
+                        # Interpolazione in blocco
+                        interpolated_values = interpolator(points).reshape(len(angles), len(dia))
+
+                        # Salva direttamente nella struttura dati
+                        self.extinction_weighting[f][:, :] = interpolated_values
+                        
+                else: # non-existant directory triggers lookup table creation
+                    print(f"Creating lookup table in {lookup_table_file_folder} for mie weights...")
+                    assert num_acceptance_steps is not None, "When creating a lookup table, please set num_acceptance_steps as an integer value"
+                    os.mkdir(lookup_table_file_folder)
+                    for f in files:
+                        acceptance_angles_range = {f : np.linspace(min(phia[f]),max(phia[f]), num_acceptance_steps)}
+
+                    self._compute_extinction_weights_lookup_table(sim_dat,acceptance_angles_range,verbose=True,
+                                                                        save_folder=lookup_table_file_folder,options=options)
                     
-                    interpolator = RegularGridInterpolator((acc_angles, diameters), ew)
+                    # Call again now that extinction weights are computed
+                    self.compute_extinction_weights(sim_dat,loss_model=loss_model,
+                                                    lookup_table_file_folder=lookup_table_file_folder,
+                                                    verbose=verbose,show_plots=show_plots,options=options)
 
-                    # Crea mesh di tutti i punti da interpolare (shape: len(angles) * len(dia), 2)
-                    grid_angles, grid_dia = np.meshgrid(angles, dia, indexing='ij')  # shape (M,N)
-                    points = np.stack([grid_angles.ravel(), grid_dia.ravel()], axis=1)
-
-                    # Interpolazione in blocco
-                    interpolated_values = interpolator(points).reshape(len(angles), len(dia))
-
-                    # Salva direttamente nella struttura dati
-                    self.extinction_weighting[f][:, :] = interpolated_values
             else:
                 same_ext = _same_ext_coeff(self,sim_dat)
                 computed = []
@@ -1936,13 +2000,17 @@ class Heliostats:
 
             _print_if("... Done!",verbose)
 
-        else: #self.loss_model == 'geometry'
+        elif self.loss_model == 'geometry':
             _print_if(f"Loss Model is ""geometry"". Setting extinction coefficients to unity for all heliostats in all files.",verbose)
             for f in files:
                 num_diameters = len(dust.D[f])
                 self.extinction_weighting[f] = np.ones((num_heliostats[f],num_diameters))
+        
+        else:
+            raise ValueError("Loss model not recognized.")
 
-    def compute_extinction_weights_lookup_table(self,simulation_data,acceptance_angles_range=None,verbose=True,save=True,options={}):
+    def _compute_extinction_weights_lookup_table(self,simulation_data,acceptance_angle_grid=None,
+                                                verbose=True,save_folder="./",options={}):
         """
         Computes the extinction weights for the heliostat field based on the specified loss model.
         
@@ -1958,21 +2026,20 @@ class Heliostats:
         dust = sim_dat.dust
         files = range(len(sim_dat.files))
         num_diameters = [len(dust.D[f]) for f in files]
-        phia = acceptance_angles_range
+        phia = acceptance_angle_grid
 
-        extinction_weighting = {f:np.zeros((len(acceptance_angles_range[f]),num_diameters[f])) for f in files}
+        extinction_weighting = {f:np.zeros((len(phia[f]),num_diameters[f])) for f in files}
         assert (phia is not None),\
                 "When computing the lookup table, please set acceptance_angles_range as a list of values"
-        _print_if("Loss Model is ""mie"". Computing extinction coefficients ... ",verbose)
+        # _print_if("Loss Model is ""mie"". Computing extinction coefficients ... ",verbose)
 
-        computed = []
         for f in files:
             dia = sim_dat.dust.D[f]
             refractive_index = sim_dat.dust.m[f]
             lam = sim_dat.source_wavelength[f]
             intensities = sim_dat.source_normalized_intensity[f]
             h=0
-            for h in tqdm(range(len(acceptance_angles_range[f])), 
+            for h in tqdm(range(len(phia[f])), 
                 desc=f"File {f}", 
                 postfix=f"Acceptance angle between {phia[f][0]*1e3:.0f} and {phia[f][-1]*1e3:.0f} mrad"):
                 
@@ -1981,12 +2048,34 @@ class Heliostats:
                                                     **options)
                 extinction_weighting[f][h,:] = ext_weight
 
-            if save:
-                df = pd.DataFrame(extinction_weighting[f], index=acceptance_angles_range[f], columns=dia)
-                df.index.name = 'Acceptance angles'
-                df.to_csv(f'extinction_weights_lookup_table_{f}.csv')
-                
-        _print_if("... Done!",verbose)
+            # df = pd.DataFrame(extinction_weighting[f], index=phia[f], columns=dia)
+            # df.index.name = 'Acceptance angles'
+
+        if save_folder[-1] != '/':
+            save_folder += '/'
+            # df.to_csv(save_folder+f'extinction_weights_lookup_table_{f}.csv')
+
+        with open(save_folder + 'extinction_weights_lookup_table.json', 'w') as sf:
+            json.dump(_to_dict_of_lists(extinction_weighting), sf, ensure_ascii=False, indent=4)
+
+        with open(save_folder + 'acceptance_angles.json', 'w') as sf:
+            json.dump(_to_dict_of_lists(phia), sf, ensure_ascii=False, indent=4) 
+
+        with open(save_folder + 'diameters.json', 'w') as sf:
+            json.dump(dia.tolist(), sf, ensure_ascii=False, indent=4) 
+
+        with open(save_folder + 'metadata.json', 'w') as sf:
+            metadata = {
+                'options': options,
+                'num_acceptance_steps': len(phia[f]),
+                'refractive_index_real': [s.real for s in sim_dat.dust.m.values()],
+                'refractive_index_imag': [s.imag for s in sim_dat.dust.m.values()],
+                'source_wavelength': _to_dict_of_lists(sim_dat.source_wavelength),
+                'source_normalized_intensity': _to_dict_of_lists(sim_dat.source_normalized_intensity)
+            }
+            json.dump(metadata, sf, ensure_ascii=False, indent=4)
+
+        _print_if("... Lookup done!",verbose)
 
     def plot_extinction_weights(self,simulation_data,fig_kwargs={},plot_kwargs={}):
         """
@@ -2030,7 +2119,7 @@ class Heliostats:
         plt.tight_layout()
         
         return fig,ax
-        
+
 @dataclass
 class Constants:
     """
