@@ -1713,23 +1713,6 @@ class helios:
         
         return fig,ax
 
-    def export_SolarPILOT(self, time, f, file_SF, sim_data):
-        t = sim_data.time[f]
-        timestamp_idx = (np.where(np.isin(t, time))[0])
-
-        for tt in timestamp_idx:
-            soiling_factor_sector = np.nan_to_num(self.soiling_factor[f][:, tt], nan=1)
-            soiling_factor_helios = []
-        
-            for idx in range(len(self.full_field['x'])): # Allocating the SF to each heliostat
-                soiling_factor_helios.append(soiling_factor_sector[int(self.full_field['sector_id'][idx])])
-
-            df = pd.read_csv(file_SF, na_values='NULL',  header=[0, 1])
-            shutil.copy(file_SF, file_SF[:file_SF.rfind(".")] + f"_{tt}" + file_SF[file_SF.rfind("."):])  
-            df['Soiling factor'] = soiling_factor_helios
-
-            df.to_csv(file_SF[:file_SF.rfind(".")] + f"_{tt}" + file_SF[file_SF.rfind("."):], index=False, na_rep='NULL')
-        
 class constants:
     def __init__(self):
         self.air_rho = []
