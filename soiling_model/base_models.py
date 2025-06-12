@@ -1537,70 +1537,8 @@ class helios:
         plt.tight_layout()
         return fig, ax
 
-    def compute_extinction_weights(self,simulation_data,loss_model=None,verbose=True,show_plots=False,options={}):
-        """
-        Computes the extinction weights for the heliostat field based on the specified loss model.
-        
-        Parameters:
-            simulation_data (object): An object containing simulation data, including dust properties and source information.
-            loss_model (str, optional): The loss model to use for computing the extinction weights. Can be either 'mie' or 'geometry'. Defaults to None.
-            verbose (bool, optional): Whether to print progress messages. Defaults to True.
-            options (dict, optional): Additional options to pass to the extinction function.
-        
-        Returns:
-            None
-        """
-        sim_dat = simulation_data
-        dust = sim_dat.dust
-        files = list(sim_dat.file_name.keys())
-        num_diameters = [len(dust.D[f]) for f in files]
-        num_heliostats = [len(self.tilt[f]) for f in files]
-        phia = self.acceptance_angles
 
-        self.extinction_weighting = {f:np.zeros((num_heliostats[f],num_diameters[f])) for f in files}
-        if loss_model == 'mie':
-            assert ( (phia is not None) and all( [len(phia[f])==num_heliostats[f] for f in files] ) ),\
-                 "When loss_model == ""mie"", please set helios.acceptance_angles as a list with a value for each heliostat"
-            _print_if("Loss Model is ""mie"". Computing extinction coefficients ... ",verbose)
-
-            same_ext = _same_ext_coeff(self,sim_dat)
-            computed = []
-            for f in files:
-                dia = sim_dat.dust.D[f]
-                refractive_index = sim_dat.dust.m[f]
-                lam = sim_dat.source_wavelength[f]
-                intensities = sim_dat.source_normalized_intensity[f]
-                h=0
-                for h in tqdm(range(num_heliostats[f]), 
-                            desc=f"File {f}", 
-                            postfix=f"acceptance angle {phia[f][h]*1e3:.2f} mrad"):
-                    already_computed = [e in computed for _,e in enumerate(same_ext[f][h])]
-                    if any(already_computed):
-                        idx = already_computed.index(True)
-                        fe,he = same_ext[f][h][idx]                        
-                        self.extinction_weighting[f][h,:] = self.extinction_weighting[fe][he,:]
-                    else:
-                        ext_weight = _extinction_function(dia,lam,intensities,phia[f][h],
-                                                        refractive_index,verbose=verbose,
-                                                        **options)
-                        self.extinction_weighting[f][h,:] = ext_weight
-                        computed.append((f,h))
-                    
-                    if show_plots:
-                        fig,ax = plt.subplots()
-                        ax.semilogx(sim_dat.dust.D[f],self.extinction_weighting[f][h,:])
-                        ax.set_title(f'Heliostat {h}, acceptance angle {phia[f][h]*1e3:.2f} mrad')
-                        plt.show()
-
-            _print_if("... Done!",verbose)
-
-        else: #self.loss_model == 'geometry'
-            _print_if(f"Loss Model is ""geometry"". Setting extinction coefficients to unity for all heliostats in all files.",verbose)
-            for f in files:
-                num_diameters = len(dust.D[f])
-                self.extinction_weighting[f] = np.ones((num_heliostats[f],num_diameters))
-
-    def compute_extinction_weights_new(self,simulation_data,loss_model=None,lookup_tables=True,verbose=True,show_plots=False,options={}):
+    def compute_extinction_weights(self,simulation_data,loss_model=None,lookup_tables=True,verbose=True,show_plots=False,options={}):
         """
         Computes the extinction weights for the heliostat field based on the specified loss model.
         
