@@ -370,7 +370,7 @@ class FieldCommonMethods:
         ff = helios.full_field
         N_helios = ff['id'].shape[0]
         zz = [0 for ii in range(N_helios)]
-        layout = [[ff['id'][ii],ff['x'][ii],ff['y'][ii],zz[ii]] for ii in range(N_helios)] #[list(id),list(ff['x']),list(ff['y']),list(zz)]
+        layout = [[0,ff['x'][ii],ff['y'][ii],zz[ii]] for ii in range(N_helios)] #[list(id),list(ff['x']),list(ff['y']),list(zz)]
         assert cp.assign_layout(r,layout)
         field = cp.get_layout_info(r)
         
