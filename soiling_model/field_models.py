@@ -4,7 +4,7 @@ from numpy.linalg import inv
 import pandas as pd
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from typing import Optional, Union, Tuple
 import copy
 from tqdm.auto import tqdm
 from scipy.interpolate import RectBivariateSpline
@@ -433,14 +433,14 @@ class FieldCommonMethods:
         self.helios = helios
 
 class FieldModel(PhysicalBase,FieldCommonMethods):
-    def __init__(self,file_params,file_SF,cleaning_rate:float=None):
+    def __init__(self,file_params,file_SF,cleaning_rate:Optional[float]=None,num_sectors:Optional[Union[int, Tuple[int, int], str]]=None):
         super().__init__()
         super().import_site_data_and_constants(file_params)
 
         self.sun = Sun()
         self.sun.import_sun(file_params)
         
-        self.helios.import_helios(file_params,file_SF,cleaning_rate=cleaning_rate)
+        self.helios.import_helios(file_params,file_SF,cleaning_rate=cleaning_rate,num_sectors=num_sectors)
         if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
             self.helios.stow_tilt = None
                
@@ -472,13 +472,13 @@ class FieldModel(PhysicalBase,FieldCommonMethods):
         _print_if(f"Acceptance angle range: ({min_accept*1e3:.1f}, {max_accept*1e3:.1f}) [mrad]",verbose)
           
 class SimplifiedFieldModel(ConstantMeanBase,FieldCommonMethods):
-    def __init__(self,file_params,file_SF,cleaning_rate:float=None):
+    def __init__(self,file_params,file_SF,cleaning_rate:float=None,num_sectors:Optional[Union[int, Tuple[int, int], str]]=None):
         super().__init__()
         super().import_site_data_and_constants(file_params)
 
         self.sun = Sun()
         self.sun.import_sun(file_params)
         
-        self.helios.import_helios(file_params,file_SF,cleaning_rate=cleaning_rate)
+        self.helios.import_helios(file_params,file_SF,cleaning_rate=cleaning_rate,num_sectors=num_sectors)
         if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
             self.helios.stow_tilt = None
