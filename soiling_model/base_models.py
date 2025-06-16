@@ -1226,7 +1226,7 @@ class Truck:
             print(f"Error loading truck properties: {e}")
             print("Using default parameters")
         
-    def calculate_cleaning_rate(self, solar_field, cleaning_rate:float=None, tolerance:float=0.05) -> tuple:
+    def calculate_cleaning_rate(self, solar_field, cleaning_rate:float=None,num_sectors:Optional[Union[int,Tuple[int,int],str]]=None, tolerance:float=0.05) -> tuple:
         """Calculate cleaning rate based on truck parameters or use provided rate.
         
         Args:
@@ -1238,7 +1238,7 @@ class Truck:
             tuple: (cleaning_rate, (n_rad, n_az), n_sectors_per_truck)
         """
         # Calculate or use provided cleaning rate
-        if cleaning_rate is None and self._sectors is None:
+        if cleaning_rate is None and (self._sectors or num_sectors) is None:
             hour_per_reload = self._hour_per_reload_consumables()
             spacing = self._heliostat_spacing(solar_field[:,1], solar_field[:,2])
             hour_per_clean = self._hour_per_heliostat_cleaning(heliostat_spacing=spacing,
@@ -1255,6 +1255,19 @@ class Truck:
         elif cleaning_rate is not None:
             target_rate = cleaning_rate
             print(f'Using config specified cleaning rate: {target_rate:.1f} heliostats/shift')
+        elif num_sectors is not None:
+            if isinstance(num_sectors, int):
+                n_rad = int(np.sqrt(num_sectors))
+                n_az = int(np.ceil(num_sectors / n_rad))
+                self._sectors = (n_rad, n_az)
+                target_rate = len(solar_field) / (n_rad * n_az)
+                print(f'Using manual sector configuration: {n_rad} x {n_az} sectors')
+            elif isinstance(num_sectors, tuple) and len(num_sectors) == 2:
+                self._sectors = num_sectors
+                target_rate = len(solar_field) / (num_sectors[0] * num_sectors[1])
+                print(f'Using manual sector configuration: {num_sectors[0]} x {num_sectors[1]} sectors')
+            else:
+                raise ValueError("num_sectors must be an int or a tuple of two ints")
         else:
             raise ValueError("Must provide either:\n1. Manual cleaning rate: cleaning_rate only,\n2. Auto cleaning rate calculation: no num_sectors and no cleaning_rate.\n3. Manual sector configuration: num_sectors")
         
@@ -1530,7 +1543,7 @@ class Heliostats:
         self.delta_soiled_area_variance = {}
         self.soiling_factor_prediction_variance = {}
 
-    def import_helios(self,file_params,file_solar_field=None,cleaning_rate:float=None,verbose=True):
+    def import_helios(self,file_params,file_solar_field=None,cleaning_rate:float=None,num_sectors:Optional[Union[int,Tuple[int,int],str]]=None,verbose=True):
         
         table = pd.read_excel(file_params,index_col="Parameter")
         # self.h_tower = float(table.loc['h_tower'].Value)
@@ -1544,7 +1557,7 @@ class Heliostats:
         solar_field = self.read_solarfield(file_solar_field)
         
         self.truck = Truck(config_path=file_params)
-        self.truck.calculate_cleaning_rate(solar_field=solar_field, cleaning_rate=cleaning_rate)
+        self.truck.calculate_cleaning_rate(solar_field=solar_field, cleaning_rate=cleaning_rate, num_sectors=num_sectors, tolerance=0.05)
             
         if isinstance(self.truck.sectors,str) and self.truck.sectors.lower() == 'manual': # Manual importing of solar field respresentatives
             self.x = solar_field[:,1] # x cartesian coordinate of each heliostat (E>0)
