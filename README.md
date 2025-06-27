@@ -7,18 +7,67 @@ A library for soiling analysis and mirror washing for Concentrating Solar Power 
 This library provides tools developed for predicting soling reflectance losses for Solar Tower CSP plants using weather and plant design data. Two models are provided (and are detailed in [9]):
 
 * A physics-based deposition. This model includes both full-field simulations (via the `base_models.field_model` class) and methods for fitting parameters based on experimental data via the `fitting.semi_physical` class.
-* A constant-mean deposition velocity model. Currently, this model can be fit to experimental data via the `fitting.constant_mean_deposition_velocity` class , but full field simulation is not yet supported.
+* A constant-mean deposition velocity model. Currently, this model can be fit to experimental data via the `fitting.constant_mean_deposition_velocity` class, but full field simulation is not yet supported.
 
 This version includes the following new features:
 
 * A Mie scattering loss model to better represent the reflectance losses due to small particles
 * Stochastic soiling model for the inclusion of uncertainty in the predictions
 
-The details of the physics-based soiling model (including the sectorization and fitting procedure) can be found in [1-3] and a demo of soiling loss predictions can be found in `demo_hrz0_fitting.ipynb`. The fitting of hrz0 using experimental data is demonstrated in `demo_hrz0_fitting.ipynb` using experimental data collected at the Queensland University of Technology (QUT), which are discussed in [1]. The data from these experiments (and others) are provided in a separate [mirror_soiling_data](https://github.com/cholette/mirror_soiling_data) repository and should be placed in the a `data/` folder for the fitting demo to work.
+The details of the physics-based soiling model (including the sectorization and fitting procedure) can be found in [1-3] and a demo of soiling loss predictions can be found in `demo_hrz0_fitting.ipynb`. The fitting of hrz0 using experimental data is demonstrated in `demo_hrz0_fitting.ipynb` using experimental data collected at the Queensland University of Technology (QUT), which are discussed in [1]. The data from these experiments (and others) are provided in a separate [mirror_soiling_data](https://github.com/cholette/mirror_soiling_data) repository and should be placed in the `data/` folder for the fitting demo to work.
 
-In addition to a soiling model, this library provides a basic economic and cleaning schedule modules[^1] to 1) understand the economic losses due to soiling given a certain number of cleaning crews, and 2) enable optimization of the cleaning trucks and washing frequency. A demonstration  of this capability is available in `demo_cleaning_optimization.ipynb` and discussion on the economic and cleaning models can be found in [3,4].
+In addition to a soiling model, this library provides a basic economic and cleaning schedule modules[^1] to 1) understand the economic losses due to soiling given a certain number of cleaning crews, and 2) enable optimization of the cleaning trucks and washing frequency. A demonstration of this capability is available in `demo_cleaning_optimization.ipynb` and discussion on the economic and cleaning models can be found in [3,4,10].
 
-[^1]: The optimization requires a full field simulation, so only the semi-physical model is suppored at this time. Later releases are expected to support the use of the constant-mean model and more sophisticated cleaning schedules.
+[^1]: The optimization requires a full field simulation, so only the semi-physical model is supported at this time. Later releases are expected to support the use of the constant-mean model and more sophisticated cleaning schedules.
+
+## Installation
+
+This project uses [Conda](https://docs.conda.io/en/latest/miniconda.html) for environment management, but can also be set up with `venv`.
+
+### 1. Environment Setup
+
+**Using Conda (Recommended):**
+
+First, create and activate a new conda environment. We recommend using Python 3.9 or newer.
+
+```bash
+conda create --name heliosoil_env python=3.12.9
+conda activate heliosoil_env
+```
+
+Once the environment is activated, `pip` will handle the installation of all required Python packages.
+
+**Using `venv` (Alternative):**
+
+If you prefer not to use Conda, you can use Python's built-in `venv` module. Ensure you have Python 3.9+ installed.
+
+```bash
+# Create a virtual environment
+python -m venv .venv
+
+# Activate the environment
+# On macOS/Linux:
+source .venv/bin/activate
+# On Windows:
+.venv\Scripts\activate
+```
+
+### 2. Package Installation
+
+Once your environment is activated, install the `HelioSoil` package in editable mode.
+
+```bash
+# Install the package with core dependencies
+pip install -e .
+
+# To include development tools (black, flake8, pytest), install with the [dev] extra
+pip install -e .[dev]
+```
+
+The repository also includes a `Makefile` that simplifies this process for development installation:
+```bash
+make install
+```
 
 ## Input Files
 
@@ -27,11 +76,11 @@ The model takes as inputs three `.xlsx` files: one for the basic model parameter
 The input data workbook has the following sheets:
 
 * *Dust* which has at least two columns with the Parameter name in the first column and the parameter value in the second column. The following parameters must be defined:
-  * `D`, three element vector (separated  by semi-colons) describing the diameter grid for the dust size distribution
+  * `D`, three element vector (separated by semicolons) describing the diameter grid for the dust size distribution
   * `N_size`, integer, number of modes in the airborne dust distribution
-  * `N_d`, `N_size` element vector (separated  by semi-colons) describing the number parameters (heights) for each of the lognormal modes of the airborne dust distribution
-  * `mu`, `N_size` element vector (separated  by semi-colons) describing the mean parameters for each of the lognormal modes of the airborne dust distribution
-  * `sigma`, `N_size` element vector (separated  by semi-colons) describing the sigma parameters for each of the lognormal modes of the airborne dust distribution
+  * `N_d`, `N_size` element vector (separated by semicolons) describing the number parameters (heights) for each of the lognormal modes of the airborne dust distribution
+  * `mu`, `N_size` element vector (separated by semicolons) describing the mean parameters for each of the lognormal modes of the airborne dust distribution
+  * `sigma`, `N_size` element vector (separated by semicolons) describing the sigma parameters for each of the lognormal modes of the airborne dust distribution
   * `rho`, integer, dust density in kg/m^3
   * `hamaker_dust`, Hamaker constant of dust in J
   * `poisson`, Poisson ration of dust
@@ -58,7 +107,13 @@ For the fitting classes, if the `loss_model = 'mie'`, the *Source_Intensity* she
 
 ## External dependencies
 
-The details of the required python packages can be found in the environment.yml file. Aside from these requirements, the average optical efficiencies of each sector are computed using [CoPylot](https://www.nrel.gov/docs/fy21osti/78774.pdf). To use CoPylot, install [SolarPILOT](https://www2.nrel.gov/csp/solarpilot) following the instructions in Section 2.1 of [5] and place the files `copylot.py` and `solarpilot.dll` into the main directory.
+The Python package dependencies are managed by the `pyproject.toml` file.
+
+This library also requires NREL's [SolarPILOT](https://www2.nrel.gov/csp/solarpilot) for calculating optical efficiencies. After installing `HelioSoil`, you must manually add the SolarPILOT library files:
+
+1.  **Install SolarPILOT**: Follow the official instructions to install SolarPILOT on your system.
+2.  **Locate `copylot.py` and `solarpilot.dll`**: Find these two files in your SolarPILOT installation directory.
+3.  **Place files**: Copy `copylot.py` and `solarpilot.dll` into the `soiling_model/lib/` directory within this project. The package is configured to find them there.
 
 The data available from the [mirror_soiling_data](https://github.com/cholette/mirror_soiling_data) should be placed in the `data/` subfolder for the fitting scripts and notebooks to work.
 
@@ -66,7 +121,7 @@ The data available from the [mirror_soiling_data](https://github.com/cholette/mi
 
 The field simulation class `base_models.field_model`  assumes a Solar Tower plant. For the semi-physical deposition model, the dust size distribution is known (e.g. from literature [6]). This distribution is scaled according to the airborne dust concentration measurements in the input data. See [1] for details.
 
-Either a first- or second-surface geometry model is used to evaluate reflectance losses from the deposited dust. The second surface model is default and is likely closer to reality for most heliostats.
+Either a first- or second-surface geometry model is used to evaluate reflectance losses from the deposited dust. The second surface model [10] is default and is likely closer to reality for most heliostats.
 
 The current cleaning optimization is quite simple: a number of trucks clean the field a certain number of times annually. More sophisticated policies may be added in future releases (e.g. the mixed-integer linear program from [3] or the condition-based policies from [7,8]).
 
@@ -142,3 +197,5 @@ For the cleaning costs and optimization, please cite
 [8] H. Truong Ba, M. E. Cholette, R. Wang, P. Borghesani, L. Ma, and T. A. Steinberg, “Optimal condition-based cleaning of solar power collectors,” Solar Energy, vol. 157, pp. 762–777, Nov. 2017. [link](https://eprints.qut.edu.au/111078/)
 
 [9] G. Picotti, M. E. Cholette, C. B. Anderson, T. A. Steinberg, and G. Manzolini, “Stochastic Soiling Loss Models for Heliostats in Concentrating Solar Power Plants.” arXiv, Apr. 24, 2023. doi: 10.48550/arXiv.2304.11814. [link](https://arxiv.org/abs/2304.11814)
+
+[10] C. B. Anderson, G. Picotti, M. E. Cholette, B. Leslie, T. A. Steinberg, and G. Manzolini, “Heliostat-field soiling predictions and cleaning resource optimization for solar tower plants,” Applied Energy, vol. 352, p. 121963, Dec. 2023, doi: 10.1016/j.apenergy.2023.121963. [link](https://linkinghub.elsevier.com/retrieve/pii/S0306261923013272)

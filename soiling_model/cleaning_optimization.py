@@ -1,13 +1,11 @@
 import numpy as np
 import pandas as pd
 import copy
-
+from typing import Optional
 from functools import lru_cache
 from tqdm.notebook import tqdm
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
 from matplotlib.dates import DateFormatter
-
 from soiling_model.base_models import SimulationInputs
 from soiling_model.field_models import (
     FieldModel,
@@ -18,6 +16,7 @@ from soiling_model.utilities import _print_if, simple_annual_cleaning_schedule
 
 tol = np.finfo(float).eps  # machine floating point precision
 
+
 class OptimizationProblem:
     def __init__(
         self,
@@ -25,35 +24,43 @@ class OptimizationProblem:
         solar_field,
         weather_files,
         climate_file,
-        num_sectors=None,
-        cleaning_rate: float = None,
+        num_sectors: Optional[tuple[int, int]] = None,
+        cleaning_rate: Optional[float] = None,
         dust_type=None,
-        n_az=10,
-        n_el=10,
-        second_surface=True,
-        verbose=True,
-        model_type="semi-physical",
-        ext_options={"grid_size_x": 100},
+        n_az: int = 10,
+        n_el: int = 10,
+        num_acceptance_steps: int = 100,
+        extinction_table_folder: str = None,
+        second_surface: bool = True,
+        verbose: bool = True,
+        model_type: str = "semi-physical",
+        extinction_options: Optional[dict] = None,
     ):
-        self.electricity_price = []
-        self.plant_other_maintenace = []
-
         pl = CentralTowerPlant()
         pl.import_plant(params)
         sd = SimulationInputs(weather_files, dust_type=dust_type)
         if model_type.lower() == "semi-physical":
-            fm = FieldModel(params, solar_field, cleaning_rate=cleaning_rate, num_sectors=num_sectors)
+            fm = FieldModel(
+                params, solar_field, cleaning_rate=cleaning_rate, num_sectors=num_sectors
+            )
             fm.sun_angles(sd)
             fm.helios_angles(pl, second_surface=second_surface)
             fm.compute_acceptance_angles(pl)
             fm.helios.compute_extinction_weights(
-                sd, fm.loss_model, verbose=False, options=ext_options
+                sd,
+                fm.loss_model,
+                verbose=False,
+                options=extinction_options,
+                num_acceptance_steps=num_acceptance_steps,
+                lookup_table_file_folder=extinction_table_folder,
             )
             fm.deposition_flux(sd)
             fm.adhesion_removal(sd)
             fm.calculate_delta_soiled_area(sd)
         elif model_type.lower() == "simplified":
-            fm = SimplifiedFieldModel(params, solar_field, cleaning_rate=cleaning_rate, num_sectors=num_sectors)
+            fm = SimplifiedFieldModel(
+                params, solar_field, cleaning_rate=cleaning_rate, num_sectors=num_sectors
+            )
             fm.sun_angles(sd)
             fm.helios_angles(pl, second_surface=second_surface)
             fm.calculate_delta_soiled_area(sd)
@@ -62,16 +69,14 @@ class OptimizationProblem:
                 "Model type not recognized. Must be either semi-physical or simplified."
             )
 
-        fm.optical_efficiency(
-            pl, sd, climate_file, n_az=n_az, n_el=n_el, verbose=verbose
-        )
+        fm.optical_efficiency(pl, sd, climate_file, n_az=n_az, n_el=n_el, verbose=verbose)
 
         self.field_model = fm
         self.simulation_data = sd
         self.plant = pl
 
 
-def find_truck_bounds(opt, verbose=True):
+def find_truck_bounds(opt, verbose: bool = True):
     """Find optimal truck bounds by analyzing cost trends.
 
     Args:
@@ -83,8 +88,7 @@ def find_truck_bounds(opt, verbose=True):
     """
     print("Finding truck search bounds...")
     total_sectors = (
-        opt.field_model.helios.truck.sectors[0]
-        * opt.field_model.helios.truck.sectors[1]
+        opt.field_model.helios.truck.sectors[0] * opt.field_model.helios.truck.sectors[1]
     )
     sectors_per_truck = opt.field_model.helios.truck.n_sectors_per_truck
 
@@ -96,9 +100,7 @@ def find_truck_bounds(opt, verbose=True):
 
     while True:
         # Calculate maximum cleanings possible with these trucks
-        max_cleans = int(
-            np.min([365 / (total_sectors / (n_trucks * sectors_per_truck)), 365.0])
-        )
+        max_cleans = int(np.min([365 / (total_sectors / (n_trucks * sectors_per_truck)), 365.0]))
 
         # Simulate with maximum cleaning rate
         schedule = periodic_schedule_tcc(opt, n_trucks, max_cleans, verbose=False)
@@ -135,13 +137,13 @@ def find_truck_bounds(opt, verbose=True):
     return min_trucks, max_trucks, {"trucks": trucks, "costs": costs}
 
 
-def optimize_periodic_schedule(opt, file=0, verbose=True):
+def optimize_periodic_schedule(opt, file: int = 0, verbose: bool = True):
     """Optimizes the periodic cleaning schedule for a solar field optimization problem.
 
     This function performs a coarse grid search to find the optimal number of cleaning trucks and cleanings per year that minimize the total cleaning costs, including both degradation costs and direct cleaning costs.
 
     Args:
-        opt (optimization_problem): An instance of the `soiling_model.cleaning_optimization.optimization_problem` class, containing the field model, plant, and simulation data.
+        opt (optimization_problem): An instance of the `heliosoil.cleaning_optimization.optimization_problem` class, containing the field model, plant, and simulation data.
         file (int, optional): The index of the simulation file to optimize for. Defaults to 0.
         verbose (bool, optional): Whether to print detailed output. Defaults to True.
 
@@ -164,22 +166,17 @@ def optimize_periodic_schedule(opt, file=0, verbose=True):
 
     # Calculate remaining bounds
     total_sectors = (
-        opt.field_model.helios.truck.sectors[0]
-        * opt.field_model.helios.truck.sectors[1]
+        opt.field_model.helios.truck.sectors[0] * opt.field_model.helios.truck.sectors[1]
     )
     sectors_per_truck = opt.field_model.helios.truck.n_sectors_per_truck
     days_per_year = 365
 
     # Calculate cleaning frequency bounds
-    min_cleans = int(
-        np.ceil(total_sectors / (max_trucks * sectors_per_truck * days_per_year))
-    )
-    max_cleans = int(
-        np.min([365 / (total_sectors / (max_trucks * sectors_per_truck)), 365.0])
-    )
+    min_cleans = int(np.ceil(total_sectors / (max_trucks * sectors_per_truck * days_per_year)))
+    max_cleans = int(np.min([365 / (total_sectors / (max_trucks * sectors_per_truck)), 365.0]))
 
     if verbose:
-        print(f"Periodic Schedule Simulations Running Between:")
+        print("Periodic Schedule Simulations Running Between:")
         print(f"Trucks: {min_trucks} to {max_trucks}")
         print(f"Cleanings per year: {min_cleans} to {max_cleans}\n")
 
@@ -187,17 +184,14 @@ def optimize_periodic_schedule(opt, file=0, verbose=True):
     best_cost = np.inf
     best_trucks = None
     best_cleans = None
-    best_schedule = None
     Nt = np.arange(min_trucks, max_trucks + 1)
-    Nc = np.arange(min_cleans, max_cleans + 1)
 
     # Initialize results storage
     results = {}
 
     # Calculate total iterations for progress tracking
     total_iterations = sum(
-        int(365 / (total_sectors / (n * sectors_per_truck))) - min_cleans + 1
-        for n in Nt
+        int(365 / (total_sectors / (n * sectors_per_truck))) - min_cleans + 1 for n in Nt
     )
     current_iteration = 0
     remaining_progress = 90  # Remaining progress percentage for optimization loop
@@ -227,13 +221,11 @@ def optimize_periodic_schedule(opt, file=0, verbose=True):
     progress_bar.close()
 
     if verbose:
-        print(f"\nOptimal solution found:")
+        print("\nOptimal solution found:")
         print(f"Number of trucks: {best_trucks}")
         print(f"Cleanings per year: {best_cleans}")
         print(f"Total cleaning cost: ${best_cost:,.2f}/year")
-        print(
-            f"Direct cleaning cost: ${best_results['direct_cleaning_costs'][file]:,.2f}/year"
-        )
+        print(f"Direct cleaning cost: ${best_results['direct_cleaning_costs'][file]:,.2f}/year")
         print(f"Degradation cost: ${best_results['degradation_costs'][file]:,.2f}/year")
 
     return {
@@ -246,10 +238,10 @@ def optimize_periodic_schedule(opt, file=0, verbose=True):
 
 
 def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
-    """Computes the total cleaning costs (TCC) for a solar field optimization problem, including both degradation costs and direct cleaning costs.
+    """Computes the total cleaning costs for a solar field optimization problem, including both degradation costs and direct cleaning costs.
 
     Args:
-        opt (optimization_problem): An instance of the `soiling_model.cleaning_optimization.optimization_problem` class, containing the field model, plant, and simulation data.
+        opt (optimization_problem): An instance of the `heliosoil.cleaning_optimization.optimization_problem` class, containing the field model, plant, and simulation data.
         n_trucks (int): The number of cleaning trucks to use.
         n_cleans (int, optional): The number of cleanings to perform per year. If None or too high,
                                 uses maximum possible cleanings for given trucks
@@ -257,7 +249,7 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
 
     Returns:
         dict: A dictionary containing the following keys:
-            - 'total_cleaning_costs': The total cleaning costs (TCC)
+            - 'total_cleaning_costs': The total cleaning costs
             - 'degradation_costs': The degradation costs (C_deg)
             - 'direct_cleaning_costs': The direct cleaning costs (C_cl)
             - 'soiling_factor': The soiling factor for each heliostat
@@ -267,15 +259,14 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
     """
     assert isinstance(
         opt, OptimizationProblem
-    ), "First input must be a soiling_model.cleaning_optimization.optimization_problem instance. "
+    ), "First input must be a heliosoil.cleaning_optimization.optimization_problem instance. "
     field = opt.field_model
     plant = opt.plant
     files = list(opt.simulation_data.time.keys())
     N_files = len(files)
     # Calculate maximum possible cleanings
     total_sectors = (
-        opt.field_model.helios.truck.sectors[0]
-        * opt.field_model.helios.truck.sectors[1]
+        opt.field_model.helios.truck.sectors[0] * opt.field_model.helios.truck.sectors[1]
     )
     sectors_per_truck = opt.field_model.helios.truck.n_sectors_per_truck
     max_cleans = int(365 / (total_sectors / (n_trucks * sectors_per_truck)))
@@ -288,9 +279,7 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
                     f"No cleaning frequency provided. Using maximum: {max_cleans} cleanings/year"
                 )
             else:
-                print(
-                    f"Requested cleanings ({n_cleans}) exceeds maximum possible ({max_cleans})"
-                )
+                print(f"Requested cleanings ({n_cleans}) exceeds maximum possible ({max_cleans})")
                 print(f"Adjusting to maximum: {max_cleans} cleanings/year")
         n_cleans = max_cleans
 
@@ -310,7 +299,7 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
 
     C_deg = np.zeros(N_files)
     C_cl = np.zeros(N_files)
-    TCC = np.zeros(N_files)
+    total_cleaning_cost = np.zeros(N_files)
     Aj = field.helios.sector_area
     Aj = Aj.reshape((len(Aj), 1))
     eta_pb = plant.plant["power_block_efficiency"]
@@ -335,9 +324,7 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
         if np.any(sf <= 0):
             ind = np.where(sf <= 0)[0]
             _print_if(
-                "Warning: soiling factor is <= zero for {0:d} heliostats.".format(
-                    len(ind)
-                )
+                "Warning: soiling factor is <= zero for {0:d} heliostats.".format(len(ind))
                 + "\n Setting these soiling factors equal to zero.",
                 verbose,
             )
@@ -356,19 +343,17 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
             sf, clean_sector_reflected_power, Qmax * 1e6, Qmin * 1e6, Qloss * 1e6
         )
 
-        stow_elevation = field.sun.stow_angle
-        sun_above_stow_elevation = field.sun.elevation[f] >= stow_elevation
+        # stow_elevation = field.sun.stow_angle
+        # sun_above_stow_elevation = field.sun.elevation[f] >= stow_elevation
 
-        TCC[fi], C_cl[fi], C_deg[fi] = _cleaning_cost(
+        total_cleaning_cost[fi], C_cl[fi], C_deg[fi] = _cleaning_cost(
             lost_power, alpha, opt, cleans[f], n_trucks
         )
 
         # compute direct costs
-        _print_if(
-            fmt_str.format(fi, C_deg[fi] + C_cl[fi], C_deg[fi], C_cl[fi]), verbose
-        )
+        _print_if(fmt_str.format(fi, C_deg[fi] + C_cl[fi], C_deg[fi], C_cl[fi]), verbose)
 
-    # [!] Day TCC
+    # [!] Day total_cleaning_cost
     night_idx = np.where(opt.simulation_data.time[f].dt.hour == 23)[0]
     tcc_days = np.zeros_like(night_idx)
     ccl_days = np.zeros_like(night_idx)
@@ -385,7 +370,7 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
     results = {
         "n_trucks": n_trucks,
         "n_cleans": n_cleans,
-        "total_cleaning_costs": TCC,
+        "total_cleaning_costs": total_cleaning_cost,
         "degradation_costs": C_deg,
         "direct_cleaning_costs": C_cl,
         "soiling_factor": field.helios.soiling_factor.copy(),
@@ -400,13 +385,11 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
         "day_tcc": tcc_days,
         "day_cdeg": cdeg_days,
         "day_ccl": ccl_days,
-    }  #'day_tcc', day_tcc
+    }
     return results
 
 
-def optimize_rollout_schedule(
-    opt, file=0, verbose=True, max_trucks=20, initial_arealoss=None
-):
+def optimize_rollout_schedule(opt, file=0, verbose=True, max_trucks=20, initial_arealoss=None):
     """Optimizes the rollout cleaning schedule by finding optimal number of trucks.
 
     Args:
@@ -431,7 +414,7 @@ def optimize_rollout_schedule(
     min_trucks, max_trucks, bounds_data = find_truck_bounds(opt, verbose)
     progress_bar.update(5)
     if verbose:
-        print(f"Periodic Schedule Simulations Running Between:")
+        print("Periodic Schedule Simulations Running Between:")
         print(f"Trucks: {min_trucks} to {max_trucks}")
     # Initialize results storage
     results = {}
@@ -461,9 +444,7 @@ def optimize_rollout_schedule(
                     best_results = schedule
 
                 if verbose:
-                    print(
-                        f"Trucks: {n_trucks}, Total cleaning cost: ${total_cost:,.2f}"
-                    )
+                    print(f"Trucks: {n_trucks}, Total cleaning cost: ${total_cost:,.2f}")
 
             # Update progress
             current_iteration += 1
@@ -493,12 +474,10 @@ def optimize_rollout_schedule(
     progress_bar.close()
 
     if verbose:
-        print(f"\nOptimal solution found:")
+        print("\nOptimal solution found:")
         print(f"Number of trucks: {best_trucks}")
         print(f"Total cleaning cost: ${best_cost:,.2f}/year")
-        print(
-            f"Direct cleaning cost: ${best_results['direct_cleaning_costs'][file]:,.2f}/year"
-        )
+        print(f"Direct cleaning cost: ${best_results['direct_cleaning_costs'][file]:,.2f}/year")
         print(f"Degradation cost: ${best_results['degradation_costs'][file]:,.2f}/year")
 
     return {
@@ -565,18 +544,12 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method: str = "g
         idx["current"] = np.nonzero(day_of_year == current_day)[0]
         idx["horizon"] = np.nonzero(
             (day_of_year >= np.mod(current_day, np.max(day_of_year) + 1) + 1)
-            & (
-                day_of_year
-                <= np.mod(current_day + n_day_horizon, np.max(day_of_year) + 1) + 1
-            )
+            & (day_of_year <= np.mod(current_day + n_day_horizon, np.max(day_of_year) + 1) + 1)
         )[0]
         if len(idx["horizon"]) == 0:
             idx["horizon"] = np.nonzero(
                 (day_of_year >= np.mod(current_day, np.max(day_of_year) + 1) + 1)
-                | (
-                    day_of_year
-                    <= np.mod(current_day + n_day_horizon, np.max(day_of_year) + 1) + 1
-                )
+                | (day_of_year <= np.mod(current_day + n_day_horizon, np.max(day_of_year) + 1) + 1)
             )[0]
         idx["cleaning"] = idx["current"][-1]
         return idx
@@ -719,20 +692,13 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method: str = "g
                 max_revenue_index = np.unravel_index(
                     np.argmax(valid_sector_revenue), sector_revenue.shape
                 )
-                best_sector_revenue[max_revenue_index] = sector_revenue[
-                    max_revenue_index
-                ]
+                best_sector_revenue[max_revenue_index] = sector_revenue[max_revenue_index]
 
                 cleaning_schedule_horizon[max_revenue_index] = 1
-                cleaning_schedule_horizon_day[
-                    max_revenue_index[0], max_revenue_index[1] * 24
-                ] = 1
+                cleaning_schedule_horizon_day[max_revenue_index[0], max_revenue_index[1] * 24] = 1
 
                 cleaned_heliostat = max_revenue_index[0]
                 cleaned_day = max_revenue_index[1]
-                cleaned_days = np.where(
-                    cleaning_schedule_horizon[cleaned_heliostat, :] == 1
-                )[0]
                 sector_revenue[cleaned_heliostat, cleaned_day] = 0
                 # Recalculate revenues for all future days for this heliostat
                 for future_day in range(cleaned_day + 1, int(n_day_horizon)):
@@ -757,12 +723,11 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method: str = "g
                     cleaning_schedule_horizon[cleaned_heliostat, :]
                 ) == n_day_horizon
                 available_days[
-                    np.sum(cleaning_schedule_horizon, axis=0)
-                    >= n_trucks * n_sectors_per_truck
+                    np.sum(cleaning_schedule_horizon, axis=0) >= n_trucks * n_sectors_per_truck
                 ] = False
 
                 if (
-                    available_days[0] == False
+                    available_days[0] is False
                 ):  # Break the greedy algoirmth once we have the schedule for the current day filled.
                     break
             else:
@@ -775,7 +740,9 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method: str = "g
     N_files = len(files)
 
     results = {
-        "total_cleaning_costs": np.zeros(N_files),  # [$/yr] TCC: Total cleaning cost
+        "total_cleaning_costs": np.zeros(
+            N_files
+        ),  # [$/yr] total_cleaning_cost: Total cleaning cost
         "n_trucks": np.zeros(N_files),  # [-] Number of trucks
         "degradation_costs": np.zeros(N_files),  # [$/yr] DC: Degradation cost
         "direct_cleaning_costs": np.zeros(N_files),  # [$/yr] CC: Cleaning cost
@@ -818,9 +785,7 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method: str = "g
             n_sectors / (opt.field_model.helios.truck.n_sectors_per_truck * n_trucks)
         )
         incidence_factor = opt.field_model.helios.inc_ref_factor[f].copy()
-        soil_rate = opt.field_model.helios.delta_soiled_area[
-            f
-        ].copy()  # Actual soiling rate
+        soil_rate = opt.field_model.helios.delta_soiled_area[f].copy()  # Actual soiling rate
 
         arealoss = np.zeros_like(soil_rate)  # Actual area loss after rollout heuristic
         if initial_arealoss is None:
@@ -948,9 +913,7 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method: str = "g
             results["total_cleaning_costs"][f],
             results["direct_cleaning_costs"][f],
             results["degradation_costs"][f],
-        ) = _cleaning_cost(
-            lost_power, production_profit, opt, cleaning_schedule, n_trucks
-        )
+        ) = _cleaning_cost(lost_power, production_profit, opt, cleaning_schedule, n_trucks)
 
         if hasattr(opt, "record_daily_costs") and opt.record_daily_costs == 1:
             day_costs = {
@@ -999,9 +962,7 @@ def _get_arealoss(soil_rate, cleaning_schedule=None):
         cumulative = 0
         for j in range(soil_rate.shape[1]):  # Loop through each time step
             if cleaning_schedule[i, j] == 1:
-                cumulative = (
-                    0  # Reset the cumulative area loss if a cleaning event occurs
-                )
+                cumulative = 0  # Reset the cumulative area loss if a cleaning event occurs
             else:
                 cumulative += soil_rate[i, j]
             area_loss[i, j] = cumulative
@@ -1059,10 +1020,7 @@ def _sector_revenue(
     delta_soilingfactor[np.isnan(delta_soilingfactor) | (delta_soilingfactor < 0)] = 0
     # Revenue
     delta_sector_irradiance = clean_reflected_irradiance * delta_soilingfactor
-    return (
-        np.sum(delta_sector_irradiance, axis=1) * production_profit
-        - sector_cleaningcost
-    )
+    return np.sum(delta_sector_irradiance, axis=1) * production_profit - sector_cleaningcost
 
 
 def _simulate_receiver_power(
@@ -1071,7 +1029,6 @@ def _simulate_receiver_power(
     receiver_max,
     receiver_min,
     receiver_losses,
-    verbose=False,
 ):
     """Calculates the power output of a receiver given the soiling factor and clean sector power.
 
@@ -1121,7 +1078,7 @@ def _simulate_receiver_power(
 
     lost_power = clean_receiver_power - dirty_receiver_power
     lost_power[
-        dirty_receiver_off & (clean_receiver_off == False)
+        dirty_receiver_off & (clean_receiver_off is False)
     ] -= receiver_losses  # subtract losses so we lose only net power
 
     return lost_power, receiver_saturation
@@ -1151,12 +1108,8 @@ def _cleaning_cost(lost_power, production_profit, opt, cleaning_schedule, n_truc
         opt.field_model.helios.truck._params.cost_purchase
         / opt.field_model.helios.truck._params.useful_life
     )  # [$/truck/year]
-    operator_cost = (
-        opt.field_model.helios.truck._params.salary_operator
-    )  # [$/truck/year]
-    maintenance_cost = (
-        opt.field_model.helios.truck._params.cost_maintenance
-    )  # [$/truck/year]
+    operator_cost = opt.field_model.helios.truck._params.salary_operator  # [$/truck/year]
+    maintenance_cost = opt.field_model.helios.truck._params.cost_maintenance  # [$/truck/year]
     cost_cleaning_fix = (
         depreciation_cost + operator_cost + maintenance_cost
     ) * n_trucks  # [$/year]
@@ -1174,9 +1127,7 @@ def _cleaning_cost(lost_power, production_profit, opt, cleaning_schedule, n_truc
     return total_cleaning_cost, cost_cleaning, cost_degradation
 
 
-def plot_optimization_results(
-    results: dict, file: int = 0, save_path: str = None
-) -> tuple:
+def plot_optimization_results(results: dict, file: int = 0, save_path: str = None) -> tuple:
     """Plot optimization results showing cost surface for truck and cleaning combinations."""
     # Create figure
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -1186,34 +1137,34 @@ def plot_optimization_results(
     cleans = sorted(list(set(k[1] for k in results["all_results"].keys())))
 
     # Create cost matrix
-    TCC = np.full((len(trucks), len(cleans)), np.nan)
+    total_cleaning_cost = np.full((len(trucks), len(cleans)), np.nan)
     for (n_truck, n_clean), result in results["all_results"].items():
         i = trucks.index(n_truck)
         j = cleans.index(n_clean)
-        TCC[i, j] = result["total_cleaning_costs"][file]
+        total_cleaning_cost[i, j] = result["total_cleaning_costs"][file]
 
     # Generate colors for each truck count
     colors = plt.cm.viridis(np.linspace(0, 1, len(trucks)))
 
     # Plot cost curves for each truck count and their optimal points
     for i, n_trucks in enumerate(trucks):
-        valid_costs = ~np.isnan(TCC[i, :])
+        valid_costs = ~np.isnan(total_cleaning_cost[i, :])
         if np.any(valid_costs):
             # Plot line
             ax.plot(
                 np.array(cleans)[valid_costs],
-                TCC[i, valid_costs] / 1e6,
+                total_cleaning_cost[i, valid_costs] / 1e6,
                 color=colors[i],
                 label=f"{n_trucks} Trucks",
                 linewidth=2,
             )
 
             # Plot optimal point for this truck count with matching color
-            opt_idx = np.nanargmin(TCC[i, :])
-            if not np.isnan(TCC[i, opt_idx]):
+            opt_idx = np.nanargmin(total_cleaning_cost[i, :])
+            if not np.isnan(total_cleaning_cost[i, opt_idx]):
                 ax.plot(
                     cleans[opt_idx],
-                    TCC[i, opt_idx] / 1e6,
+                    total_cleaning_cost[i, opt_idx] / 1e6,
                     marker="*",
                     markersize=15,
                     color=colors[i],
@@ -1221,12 +1172,12 @@ def plot_optimization_results(
                 )
 
     # Plot overall optimal point
-    opt_idx = np.nanargmin(TCC)
-    opt_row, opt_col = np.unravel_index(opt_idx, TCC.shape)
+    opt_idx = np.nanargmin(total_cleaning_cost)
+    opt_row, opt_col = np.unravel_index(opt_idx, total_cleaning_cost.shape)
     label_str = f"Optimal ({trucks[opt_row]} trucks, {cleans[opt_col]} cleans)"
     ax.plot(
         cleans[opt_col],
-        TCC[opt_row, opt_col] / 1e6,
+        total_cleaning_cost[opt_row, opt_col] / 1e6,
         color=colors[opt_row],
         marker="*",
         markersize=20,
@@ -1247,11 +1198,11 @@ def plot_optimization_results(
     # Add cost breakdown text box
     textstr = "\n".join(
         (
-            f"Optimal Configuration:",
+            "Optimal Configuration:",
             f"Trucks: {trucks[opt_row]}, Cleanings/year: {cleans[opt_col]}",
-            f"Total Cleaning Cost: ${TCC[opt_row,opt_col]/1e6:.2f}M/year",
-            f'Direct Cleaning: ${results["optimal_results"]["direct_cleaning_costs"][file]/1e6:.2f}M/year',
-            f'Degradation: ${results["optimal_results"]["degradation_costs"][file]/1e6:.2f}M/year',
+            f"Total Cleaning Cost: ${total_cleaning_cost[opt_row, opt_col] / 1e6:.2f}M/year",
+            f'Direct Cleaning: ${results["optimal_results"]["direct_cleaning_costs"][file] / 1e6:.2f}M/year',
+            f'Degradation: ${results["optimal_results"]["degradation_costs"][file] / 1e6:.2f}M/year',
         )
     )
     props = dict(boxstyle="round", facecolor="wheat", alpha=0.5)
@@ -1266,7 +1217,7 @@ def plot_optimization_results(
         bbox=props,
     )
 
-    max_cost = np.nanmax(TCC) / 1e6  # Convert to millions
+    max_cost = np.nanmax(total_cleaning_cost) / 1e6  # Convert to millions
     ax.set_ylim(0, max_cost * 0.5)
 
     # Customize plot
@@ -1286,9 +1237,7 @@ def plot_optimization_results(
     return fig, ax
 
 
-def plot_soiling_factor(
-    results_schedule: dict, file: int = 0, save_path: str = None
-) -> tuple:
+def plot_soiling_factor(results_schedule: dict, file: int = 0, save_path: str = None) -> tuple:
     """Plot soiling factor evolution and cleaning schedule results.
 
     Args:
@@ -1373,9 +1322,7 @@ def plot_cleaning_schedule(
     n_sectors, n_timesteps = cleaning_actions.shape
     time_daily = pd.to_datetime(opt.simulation_data.time[file]).dt.floor("D")
 
-    df_cleaning_actions = (
-        pd.DataFrame(cleaning_actions.T, index=time_daily).resample("D").max()
-    )
+    df_cleaning_actions = pd.DataFrame(cleaning_actions.T, index=time_daily).resample("D").max()
 
     # Calculate cleaning statistics
     cleanings_per_sector = cleaning_actions.sum(axis=1)
@@ -1432,24 +1379,20 @@ def plot_soiled_optical_efficiency(
         xloc = xl[0] + 0.0 * (xl[1] - xl[0])
         for ii in range(len(ulim)):
             if ii == 0:
-                ax.axhline(
-                    y=ulim[ii], color="gray", ls="--", label="Receiver capacity limit"
-                )
+                ax.axhline(y=ulim[ii], color="gray", ls="--", label="Receiver capacity limit")
             else:
                 ax.axhline(y=ulim[ii], color="gray", ls="--", label=None)
 
             if ulim[ii] < 1.0:
-                ax.text(xloc, ulim[ii], f"DNI={DMW[ii]*1e6:.0f}", va="bottom")
+                ax.text(xloc, ulim[ii], f"DNI={DMW[ii] * 1e6:.0f}", va="bottom")
 
             if ii == 0:
-                ax.axhline(
-                    y=llim[ii], color="gray", ls=":", label="Receiver lower limit"
-                )
+                ax.axhline(y=llim[ii], color="gray", ls=":", label="Receiver lower limit")
             else:
                 ax.axhline(y=llim[ii], color="gray", ls=":", label=None)
 
             if llim[ii] > 0.2:
-                ax.text(xloc, llim[ii], f"DNI={DMW[ii]*1e6:.0f}", va="bottom")
+                ax.text(xloc, llim[ii], f"DNI={DMW[ii] * 1e6:.0f}", va="bottom")
 
     # Create figure
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -1485,7 +1428,7 @@ def plot_soiled_optical_efficiency(
     # Add info text box
     textstr = "\n".join(
         (
-            f"Configuration:",
+            "Configuration:",
             f'Trucks: {results_schedule["n_trucks"]}',
             f'Field Cleans: {results_schedule["n_cleans"]}',
             f"Average Soiling Factor: {np.nanmean(sf):.3f}",

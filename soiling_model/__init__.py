@@ -1,7 +1,15 @@
 """
 HelioSoil - Soiling Model and Cleaning Optimization for Solar Power Plants
 """
-__version__ = "0.3"
+
+from importlib import metadata
+
+try:
+    # Read the version from the installed package's metadata
+    __version__ = metadata.version("heliosoil")
+except metadata.PackageNotFoundError:
+    # Fallback for when the package is not installed, e.g., during development
+    __version__ = "0.3"
 
 # Import key classes and functions to make them available at the package level
 # From base_models
@@ -16,7 +24,7 @@ from .base_models import (
     TruckParameters,
     SoilingBase,
     PhysicalBase,
-    ConstantMeanBase
+    ConstantMeanBase,
 )
 
 # From field_models
@@ -25,14 +33,11 @@ from .field_models import (
     FieldModel,
     SimplifiedFieldModel,
     ReceiverParameters,
-    PlantParameters
+    PlantParameters,
 )
 
 # From fitting
-from .fitting import (
-    SemiPhysical,
-    ConstantMeanDeposition
-)
+from .fitting import SemiPhysical, ConstantMeanDeposition
 
 # From cleaning_optimization
 from .cleaning_optimization import (
@@ -44,11 +49,12 @@ from .cleaning_optimization import (
     plot_optimization_results,
     plot_soiling_factor,
     plot_cleaning_schedule,
-    plot_soiled_optical_efficiency
+    plot_soiled_optical_efficiency,
 )
 
 # From utilities
 from .utilities import (
+    get_project_root,
     simple_annual_cleaning_schedule,
     plot_experiment_data,
     trim_experiment_data,
@@ -63,11 +69,22 @@ from .utilities import (
     _print_if,
     _ensure_list,
     _check_keys,
-    _import_option_helper
+    _import_option_helper,
+)
+
+from .paper_specific_utilities import (
+    plot_for_paper,
+    plot_for_heliostats,
+    soiling_rate,
+    daily_soiling_rate,
+    fit_quality_plots,
+    summarize_fit_quality,
+    daily_soiling_tilt_all_data,
+    plot_experiment_PA,
 )
 
 __all__ = [
-    # base_models
+    "get_project_root",
     "SimulationInputs",
     "Dust",
     "Truck",
@@ -115,5 +132,14 @@ __all__ = [
     "_check_keys",
     "_import_option_helper",
     # Version
-    "__version__"
+    "__version__",
+    # paper_specific_utilities
+    "plot_for_paper",
+    "plot_for_heliostats",
+    "soiling_rate",
+    "daily_soiling_rate",
+    "fit_quality_plots",
+    "summarize_fit_quality",
+    "daily_soiling_tilt_all_data",
+    "plot_experiment_PA",
 ]
