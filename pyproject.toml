@@ -82,7 +82,7 @@ Documentation = "https://github.com/cholette/HelioSoil#readme"
 # Package discovery configuration
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["soiling_model*"]
+include = ["heliosoil*"]
 exclude = ["tests*", "docs*", "*.tests*"]
 
 # Include additional files in the package

@@ -5,10 +5,10 @@ import matplotlib.pyplot as plt
 from matplotlib import rcParams
 from copy import deepcopy
 import scipy.stats as sps
-import soiling_model.base_models as smb
-import soiling_model.fitting as smf
-import soiling_model.utilities as smu
-from soiling_model.paper_specific_utilities import (
+import heliosoil.base_models as smb
+import heliosoil.fitting as smf
+import heliosoil.utilities as smu
+from heliosoil.paper_specific_utilities import (
     plot_for_paper,
     daily_soiling_rate,
     fit_quality_plots,

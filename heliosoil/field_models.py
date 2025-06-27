@@ -10,8 +10,8 @@ import copy
 import contextlib
 from tqdm.auto import tqdm
 from scipy.interpolate import RectBivariateSpline
-from soiling_model.utilities import _print_if, get_project_root
-from soiling_model.base_models import PhysicalBase, ConstantMeanBase, Sun, SimulationInputs
+from heliosoil.utilities import _print_if, get_project_root
+from heliosoil.base_models import PhysicalBase, ConstantMeanBase, Sun, SimulationInputs
 
 
 @contextlib.contextmanager

@@ -6,13 +6,13 @@ from functools import lru_cache
 from tqdm.notebook import tqdm
 import matplotlib.pyplot as plt
 from matplotlib.dates import DateFormatter
-from soiling_model.base_models import SimulationInputs
-from soiling_model.field_models import (
+from heliosoil.base_models import SimulationInputs
+from heliosoil.field_models import (
     FieldModel,
     SimplifiedFieldModel,
     CentralTowerPlant,
 )
-from soiling_model.utilities import _print_if, simple_annual_cleaning_schedule
+from heliosoil.utilities import _print_if, simple_annual_cleaning_schedule
 
 tol = np.finfo(float).eps  # machine floating point precision
 

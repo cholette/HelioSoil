@@ -4,16 +4,16 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import scipy.stats as sps
-from soiling_model.paper_specific_utilities import (
+from heliosoil.paper_specific_utilities import (
     plot_for_paper,
     plot_for_heliostats,
     daily_soiling_rate,
     fit_quality_plots,
     summarize_fit_quality,
 )
-import soiling_model.base_models as smb
-import soiling_model.fitting as smf
-import soiling_model.utilities as smu
+import heliosoil.base_models as smb
+import heliosoil.fitting as smf
+import heliosoil.utilities as smu
 
 # CHOOSE WHETHER TO USE DAILY AVERAGE OF REFLECTANCE VALUES OR NOT
 DAILY_AVERAGE = True

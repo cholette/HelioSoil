@@ -4,8 +4,8 @@ from matplotlib.ticker import FormatStrFormatter
 import pandas as pd
 import pickle
 from typing import Union
-import soiling_model.base_models as smb
-import soiling_model.fitting as smf
+import heliosoil.base_models as smb
+import heliosoil.fitting as smf
 
 # %% Plot for the paper
 plt.rc("xtick", labelsize=16)

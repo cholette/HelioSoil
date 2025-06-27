@@ -17,7 +17,7 @@ import pytz
 from pysolar import solar, radiation
 import json
 from scipy.interpolate import RegularGridInterpolator
-from soiling_model.utilities import (
+from heliosoil.utilities import (
     _print_if,
     _ensure_list,
     _extinction_function,

@@ -1,5 +1,5 @@
-import soiling_model.base_models as smb
-from soiling_model.utilities import _print_if, _check_keys, _parse_dust_str
+import heliosoil.base_models as smb
+from heliosoil.utilities import _print_if, _check_keys, _parse_dust_str
 import numpy as np
 from numpy import radians as rad
 from numpy.linalg import inv
