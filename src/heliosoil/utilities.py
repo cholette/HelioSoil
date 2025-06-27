@@ -13,14 +13,18 @@ os.environ["MIEPYTHON_USE_JIT"] = "1"
 import miepython  # noqa: E402
 
 
-def get_project_root() -> Path:
+def get_project_root(subdir: str = None) -> Path:
     """
     Get the root directory of the project.
 
     Returns:
         str: The absolute path to the project root directory.
     """
-    return Path(__file__).resolve().parents[1]
+    project_root = Path(__file__).resolve().parents[2]
+    if subdir is not None:
+        project_subdir = project_root / subdir
+        return project_subdir
+    return project_root
 
 
 def _to_dict_of_lists(data):

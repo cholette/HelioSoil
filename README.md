@@ -26,18 +26,7 @@ This project uses [Conda](https://docs.conda.io/en/latest/miniconda.html) for en
 
 ### 1. Environment Setup
 
-**Using Conda (Recommended):**
-
-First, create and activate a new conda environment. We recommend using Python 3.9 or newer.
-
-```bash
-conda create --name heliosoil_env python=3.12.9
-conda activate heliosoil_env
-```
-
-Once the environment is activated, `pip` will handle the installation of all required Python packages.
-
-**Using `venv` (Alternative):**
+**Using `venv`:**
 
 If you prefer not to use Conda, you can use Python's built-in `venv` module. Ensure you have Python 3.9+ installed.
 
@@ -51,6 +40,17 @@ source .venv/bin/activate
 # On Windows:
 .venv\Scripts\activate
 ```
+
+**Using Conda (Alternative):**
+
+First, create and activate a new conda environment. We recommend using Python 3.9+ installed.
+
+```bash
+conda create --name heliosoil_env python=3.12.9
+conda activate heliosoil_env
+```
+
+Once the environment is activated, `pip` will handle the installation of all required Python packages.
 
 ### 2. Package Installation
 
@@ -68,6 +68,14 @@ The repository also includes a `Makefile` that simplifies this process for devel
 ```bash
 make install
 ```
+
+**Note for Windows Users:** The `make` command is not included with Windows by default. You can install it using a package manager like [Chocolatey](https://chocolatey.org/):
+
+```bash
+choco install make
+```
+
+Once `make` is installed, you can run the `make install` command from a terminal like Command Prompt or PowerShell.
 
 ## Input Files
 
@@ -113,7 +121,7 @@ This library also requires NREL's [SolarPILOT](https://www2.nrel.gov/csp/solarpi
 
 1.  **Install SolarPILOT**: Follow the official instructions to install SolarPILOT on your system.
 2.  **Locate `copylot.py` and `solarpilot.dll`**: Find these two files in your SolarPILOT installation directory.
-3.  **Place files**: Copy `copylot.py` and `solarpilot.dll` into the `soiling_model/lib/` directory within this project. The package is configured to find them there.
+3.  **Place files**: Copy `copylot.py` and `solarpilot.dll` into the `lib/` directory at the root of this project. The package is configured to find them there.
 
 The data available from the [mirror_soiling_data](https://github.com/cholette/mirror_soiling_data) should be placed in the `data/` subfolder for the fitting scripts and notebooks to work.
 

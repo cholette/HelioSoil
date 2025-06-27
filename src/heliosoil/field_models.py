@@ -13,6 +13,9 @@ from scipy.interpolate import RectBivariateSpline
 from heliosoil.utilities import _print_if, get_project_root
 from heliosoil.base_models import PhysicalBase, ConstantMeanBase, Sun, SimulationInputs
 
+FILE_COPYLOT = "copylot.py"
+FILE_SOLARPILOTDLL = "solarpilot.dll"
+
 
 @contextlib.contextmanager
 def working_directory(path):
@@ -30,15 +33,15 @@ def _import_copylot():
     Dynamically imports copylot from the project root and checks for dependencies.
     """
     project_root = get_project_root()
-    copylot_path = project_root / "copylot.py"
-    dll_path = project_root / "solarpilot.dll"
+    copylot_path = project_root / FILE_COPYLOT
+    dll_path = project_root / FILE_SOLARPILOTDLL
 
     # Check if both required files exist in the project root
     if not copylot_path.is_file() or not dll_path.is_file():
         raise FileNotFoundError(
-            f"Could not find 'copylot.py' and/or 'solarpilot.dll' in the project root directory: {project_root}\n"
-            "Please download these required files from the HelioSoil GitHub repository "
-            "(https://github.com/NREL/SolarPILOT) and place them in the root folder."
+            f"Could not find {FILE_COPYLOT} and/or {FILE_SOLARPILOTDLL} in the project root directory: {project_root}\n"
+            "Please download these required files from the SolarPILOT GitHub repository "
+            "(https://github.com/NREL/SolarPILOT) and place them in the HELIOSOIL/lib folder."
         )
 
     # Add project root to path to allow for dynamic import
@@ -46,7 +49,7 @@ def _import_copylot():
         sys.path.insert(0, str(project_root))
 
     try:
-        import copylot
+        import copylot as copylot
 
         return copylot, project_root
     except ImportError as e:

@@ -17,4 +17,5 @@ exclude =
     examples/woomera_demo,
     docs,
     heliosoil.egg-info,
-    copylot.py
+    copylot.py,
+    solarpilot.dll
