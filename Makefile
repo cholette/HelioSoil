@@ -12,16 +12,22 @@ endif
 # Phony targets don't represent actual files
 .PHONY: help install test format hooks clean
 
+# Default extras to install. Can be overridden from the command line.
+# Example: make install EXTRAS=docs
+EXTRAS ?= dev
+
 help:
 	@echo "Available commands:"
-	@echo "  install   - Install the package in editable mode with all dev dependencies."
+	@echo "  install   - Install the package in editable mode. Defaults to [dev] extras."
+	@echo "              Usage: make install EXTRAS=docs,dev"
 	@echo "  test      - Run all tests with pytest."
 	@echo "  format    - Format code with black and check style with flake8."
 	@echo "  clean     - Remove build artifacts and pycache files."
+	@echo "  html      - Build HTML documentation using Sphinx."
 
 install:
-	@echo "--> Installing package in editable mode with dev dependencies..."
-	pip install -e .[dev]
+	@echo "--> Installing package in editable mode with [$(EXTRAS)] dependencies..."
+	pip install -e .[$(EXTRAS)]
 	@echo "--> Installing pre-commit hooks..."
 	pre-commit install
 
@@ -36,4 +42,12 @@ format:
 
 clean:
 	@echo "--> Cleaning up build artifacts and pycache..."
-	$(CLEAN_CMD)
+ifeq ($(OS),Windows_NT)
+	powershell -ExecutionPolicy Bypass -Command "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -Path 'build', 'dist', '.pytest_cache'; Get-ChildItem -Path . -Include '__pycache__', '*.egg-info' -Recurse | Remove-Item -Recurse -Force"
+else
+	rm -rf build dist .pytest_cache; find . -type d \( -name "__pycache__" -o -name "*.egg-info" \) -exec rm -rf {} +
+endif
+
+html:
+	@echo "--> Building HTML documentation..."
+	sphinx-build -E -b html docs/source docs/_build/html

@@ -12,7 +12,7 @@ authors = [
     { name = "Cody B. Anderson" }
 ]
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { text = "LGPL-2.1-or-later" }
 keywords = ["solar", "csp", "soiling", "heliostat", "cleaning", "optimization"]
 classifiers = [
@@ -21,7 +21,6 @@ classifiers = [
     "License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -50,12 +49,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "ipython",
-    "jupyterlab",
-    "ipywidgets",
     "pytest",
     "nbstripout",
     "nbconvert",
-    "black",
     "black[jupyter]",
     "pre-commit",
     "flake8",
@@ -64,26 +60,18 @@ docs = [
     "sphinx",
     "sphinx-rtd-theme",
 ]
-full = [
-    "asttokens==2.4.1",
-    "attrs==25.3.0",
-    "beautifulsoup4==4.13.4",
-    "joblib==1.5.0",
-    "pillow>=10.0.0",
-    "requests>=2.25.0",
-]
 
 [project.urls]
 Homepage = "https://github.com/cholette/HelioSoil"
 Repository = "https://github.com/cholette/HelioSoil"
 Documentation = "https://github.com/cholette/HelioSoil#readme"
-"Bug Tracker" = "https://github.com/cholette/HelioSoil/issues"
+Issues = "https://github.com/cholette/HelioSoil/issues"
 
 # Package discovery configuration
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["heliosoil*"]
-exclude = ["tests*", "docs*", "*.tests*"]
+exclude = ["tests*", "docs*"]
 
 # Include additional files in the package
 [tool.setuptools.package-data]
@@ -107,10 +95,9 @@ exclude = '''
   | dist
   | data
   | results
-  | examples/woomera_demo
+  | examples\woomera_demo
   | docs
   | heliosoil.egg-info
-  | copylot\.py
 )/
 '''
 

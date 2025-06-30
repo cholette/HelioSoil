@@ -12,7 +12,7 @@ from typing import List, Optional, Dict, Any, Union, Tuple
 from textwrap import dedent
 from scipy.integrate import cumulative_trapezoid
 from scipy.spatial.distance import cdist
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
 import pytz
 from pysolar import solar, radiation
 import json
@@ -757,7 +757,7 @@ class SimulationInputs:
         verbose (bool): Whether to display progress messages.
     """
 
-    files: Optional[List[str]] = field(default=None)
+    files: List[Union[str, Path]] = field(default=None)
     k_factors: Optional[List[float]] = field(default=None)
     dust_type: Optional[List[str]] = field(
         default=None,
@@ -1076,7 +1076,7 @@ class Dust:
     Attributes are keyed by experiment index.
     """
 
-    files: List[str] = field(default=None)
+    files: Optional[List[Union[str, Path]]] = field(default=None)
 
     D: Dict[int, np.ndarray] = field(
         init=False,
@@ -2765,7 +2765,7 @@ class ReflectanceMeasurements:
     Data class for managing reflectance measurement data.
     """
 
-    files: List[str] = field(
+    files: List[Union[str, Path]] = field(
         default_factory=list,
         metadata={"description": "Files from which reflectance data was imported."},
     )
@@ -2819,34 +2819,33 @@ class ReflectanceMeasurements:
 
     def __post_init__(self):
         # Ensure file list
-        source_files = _ensure_list(self.files)
-        n = len(source_files)
+        self.files = _ensure_list(self.files)
+        n = len(self.files)
 
         # Set up defaults or import lists
         if self.number_of_measurements is None:
             self.number_of_measurements = [1.0] * n
         else:
             self.number_of_measurements = _import_option_helper(
-                source_files, self.number_of_measurements
+                self.files, self.number_of_measurements
             )
 
         if self.reflectometer_incidence_angle is None:
             self.reflectometer_incidence_angle = [0.0] * n
         else:
             self.reflectometer_incidence_angle = _import_option_helper(
-                source_files, self.reflectometer_incidence_angle
+                self.files, self.reflectometer_incidence_angle
             )
 
         if self.reflectometer_acceptance_angle is None:
             self.reflectometer_acceptance_angle = [0.0] * n
         else:
             self.reflectometer_acceptance_angle = _import_option_helper(
-                source_files, self.reflectometer_acceptance_angle
+                self.files, self.reflectometer_acceptance_angle
             )
 
         # Finally, import the data
         self.import_reflectance_data(
-            source_files,
             self.time_grids,
             self.reflectometer_incidence_angle,
             self.reflectometer_acceptance_angle,
@@ -2856,7 +2855,6 @@ class ReflectanceMeasurements:
 
     def import_reflectance_data(
         self,
-        source_files: List[str],
         time_grids: List[Any],
         incidence_angles: List[float],
         acceptance_angles: List[float],
@@ -2866,11 +2864,11 @@ class ReflectanceMeasurements:
         """
         Imports reflectance data from Excel source_files into the object's dictionaries.
         """
-        for ii, fpath in enumerate(source_files):
-            self.files[ii] = source_files[ii]
+        for ii, fpath in enumerate(self.files):
+            self.files[ii] = fpath
             reflectance_data = {
-                "Average": pd.read_excel(source_files[ii], sheet_name="Reflectance_Average"),
-                "Sigma": pd.read_excel(source_files[ii], sheet_name="Reflectance_Sigma"),
+                "Average": pd.read_excel(fpath, sheet_name="Reflectance_Average"),
+                "Sigma": pd.read_excel(fpath, sheet_name="Reflectance_Sigma"),
             }
 
             # Extract timestamps
@@ -2932,9 +2930,7 @@ class ReflectanceMeasurements:
 
             # Import tilts if requested
             if import_tilts:
-                tilt_data = pd.read_excel(source_files[ii], sheet_name="Tilts")[
-                    self.mirror_names[ii]
-                ].values
+                tilt_data = pd.read_excel(fpath, sheet_name="Tilts")[self.mirror_names[ii]].values
                 if tilt_data.ndim == 1:
                     self.tilts[ii] = tilt_data.reshape(1, -1)  # Single row becomes (1, n_times)
                 else:

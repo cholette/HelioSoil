@@ -1,9 +1,37 @@
+"""Provides tools for optimizing solar field cleaning schedules.
+
+This module contains the core logic for determining cost-effective cleaning
+strategies for concentrated solar power (CSP) plants. It balances the cost of
+cleaning operations (e.g., trucks, labor) against the revenue lost due to
+soiling-induced performance degradation.
+
+Two primary optimization heuristics are provided:
+1.  A periodic schedule optimization based on a coarse grid search.
+2.  A more complex rollout (dynamic) heuristic where cleaning decisions are
+made sequentially.
+
+The module also includes functions for setting up the optimization problem,
+simulating total cleaning costs, and plotting the results for analysis.
+
+Key Components:
+- OptimizationProblem: A class to define and configure the problem.
+- optimize_periodic_schedule: Finds the optimal number of trucks and cleaning
+frequency for a fixed, repeating schedule.
+- optimize_rollout_schedule: Optimizes the number of trucks for a dynamic
+cleaning schedule.
+- periodic_schedule_tcc: Simulates and calculates the total cleaning cost for
+a given periodic schedule.
+- rollout_heuristic_tcc: Simulates and calculates the total cleaning cost
+using a rollout heuristic.
+- Plotting functions: A suite of functions to visualize optimization outcomes.
+"""
+
 import numpy as np
 import pandas as pd
 import copy
 from typing import Optional
 from functools import lru_cache
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 from matplotlib.dates import DateFormatter
 from heliosoil.base_models import SimulationInputs
@@ -18,6 +46,13 @@ tol = np.finfo(float).eps  # machine floating point precision
 
 
 class OptimizationProblem:
+    """Sets up and configures a solar field cleaning optimization problem.
+
+    This class integrates plant parameters, solar field layout, weather data,
+    and a soiling model to prepare for an optimization analysis of cleaning
+    strategies.
+    """
+
     def __init__(
         self,
         params,
@@ -36,6 +71,48 @@ class OptimizationProblem:
         model_type: str = "semi-physical",
         extinction_options: Optional[dict] = None,
     ):
+        """Initializes the OptimizationProblem.
+
+        Args:
+            params: Configuration parameters for the central tower plant.
+            solar_field: Data representing the layout and properties of the solar field.
+            weather_files: Path(s) to the weather data files for the simulation.
+            climate_file: Path to the climate data file.
+            num_sectors (Optional[tuple[int, int]]): The number of sectors the solar
+                field is divided into, specified as a tuple of (azimuthal, radial).
+                Defaults to None.
+            cleaning_rate (Optional[float]): The rate at which heliostats are cleaned.
+                Defaults to None.
+            dust_type (Optional[any]): The type of dust to be used in the soiling model.
+                Defaults to None.
+            n_az (int): Number of discretization steps for the azimuth angle.
+                Defaults to 10.
+            n_el (int): Number of discretization steps for the elevation angle.
+                Defaults to 10.
+            num_acceptance_steps (int): Number of steps for computing acceptance angles
+                in the extinction model. Defaults to 100.
+            extinction_table_folder (str): Path to the folder containing or to store
+                extinction lookup tables. Defaults to None.
+            second_surface (bool): If True, considers soiling on the second surface
+                of the heliostats. Defaults to True.
+            verbose (bool): If True, enables verbose output during calculations.
+                Defaults to True.
+            model_type (str): The type of soiling model to use. Can be either
+                "semi-physical" or "simplified". Defaults to "semi-physical".
+            extinction_options (Optional[dict]): A dictionary of options for the
+                extinction model. Defaults to None.
+
+        Attributes:
+            field_model (Union[FieldModel, SimplifiedFieldModel]): The instantiated field
+                model (either semi-physical or simplified) used for the simulation.
+            simulation_data (SimulationInputs): An object containing the processed
+                weather and simulation input data.
+            plant (CentralTowerPlant): An object representing the central tower plant's
+                specifications.
+
+        Raises:
+            ValueError: If `model_type` is not "semi-physical" or "simplified".
+        """
         pl = CentralTowerPlant()
         pl.import_plant(params)
         sd = SimulationInputs(weather_files, dust_type=dust_type)
@@ -149,11 +226,11 @@ def optimize_periodic_schedule(opt, file: int = 0, verbose: bool = True):
 
     Returns:
         dict: A dictionary containing the following keys:
-            - 'optimal_trucks': The optimal number of cleaning trucks.
-            - 'optimal_cleans': The optimal number of cleanings per year.
-            - 'optimal_results': The results of the optimal cleaning schedule.
-            - 'bounds_data': The data used to determine the search bounds.
-            - 'all_results'[nTrucks,nCleans]: A dictionary of all the results from the grid search.
+            'optimal_trucks': The optimal number of cleaning trucks.
+            'optimal_cleans': The optimal number of cleanings per year.
+            'optimal_results': The results of the optimal cleaning schedule.
+            'bounds_data': The data used to determine the search bounds.
+            'all_results'[nTrucks,nCleans]: A dictionary of all the results from the grid search.
     """
     # Initialize progress bar first
     progress_bar = tqdm(total=100, desc="Optimizing periodic schedule", leave=True)
