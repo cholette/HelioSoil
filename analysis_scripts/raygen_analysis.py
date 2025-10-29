@@ -1,8 +1,11 @@
 # %% Analysis of Raygen data
 
+import sys
 import os
-main_directory = ".."
-os.sys.path.append(main_directory)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+main_directory = os.path.abspath(os.path.join(script_dir, ".."))
+for root, dirs, files in os.walk(main_directory):
+    sys.path.append(root)
 
 import numpy as np
 import pandas as pd
@@ -35,9 +38,11 @@ DAILY_AVERAGE = False
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
 
 # CHOOSE TRAIN MIRRORS (default = True, otherwise choose individual mirrors)
-train_mirror_default = True # Set the default train mirrors for Carwarp ["ON_M1_T00"] and Yadnarie ["ONE_M2_T00"] 
-# train_mirrors_custom = ["ONW_M2_T60"] # WORKS ONLY IF train_mirror_defaul is False
-train_mirrors_custom = ["OSE_M4_T00"] # WORKS ONLY IF train_mirror_defaul is False
+train_mirror_default = False # Set the default train mirrors for Carwarp ["ON_M1_T00"] and Yadnarie ["ONE_M2_T00"] 
+# train_mirrors_custom = ["OAV_M1_T00"] # WORKS ONLY IF train_mirror_defaul is False
+train_mirrors_custom = ["OAV_M2_T60"] # WORKS ONLY IF train_mirror_defaul is False
+# train_mirrors_custom = ["ONW_M4_T00","OSE_M4_T00","ONE_M2_T00"] # WORKS ONLY IF train_mirror_defaul is False
+# train_mirrors_custom = ["ONW_M2_T00","ONE_M2_T00","OSW_M2_T00"] # WORKS ONLY IF train_mirror_defaul is False
 
 # CHOOSE WHETHER TO WORK ON HELIOSTATS OR ON THE MIRROR RIG - it works only for Carwarp data
 hel_analysis = False
@@ -47,7 +52,7 @@ else:
     HELIOSTATS = False
 
 # default to False, set to True to save outputs (and override any previous saved output)
-save_output = True
+save_output = False
 
 # %% Set data input
 
@@ -246,12 +251,15 @@ for f in range(len(reflect_data_total.average)):
     std = reflect_data_total.sigma[f]
     lgd_label = [re.sub(r"_T\d{2,3}", "", lg.replace("O", "").replace("_M", "")) for lg in exp_mirrors[f]]      
     for ii in range(ave.shape[1]):
-        if lgd_label[ii]=='W1':
+        if lgd_label[ii]=='W1' or lgd_label[ii]=='NE1':
             ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
+        elif 'AV' in lgd_label[ii]:
+            continue        
         else:
             ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],marker='o',capsize=4.0)
     ax[0].grid(True) 
-    label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0]) 
+    # label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0]) 
+    label_str = "Measured Reflectance"
     ax[0].set_ylabel(label_str)
     ax[0].legend(fontsize=lgd_size,loc='center right',bbox_to_anchor=(1.15,0.5))
     month_plot = datetime.fromisoformat(str(reflect_data_total.times[f][0])).strftime('%B')
@@ -413,7 +421,7 @@ print(f'hrz0: {hrz0_mle:.2e} [{lower_ci[0]:.2e},{upper_ci[0]:.2e}]')
 print(f'\sigma_dep: {sigma_dep_mle:.2e} [{lower_ci[1]:.2e},{upper_ci[1]:.2e}] [p.p./day]')
 
 imodel.update_model_parameters(param_hat)
-imodel.save(sp_save_file,
+imodel.save(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}",
             log_p_hat=log_param_hat,
             log_p_hat_cov=log_param_cov,
             training_simulation_data=sim_data_train,
@@ -433,7 +441,7 @@ print(f'mu_tilde: {mu_tilde:.2e} [{lower_ci_con[0]:.2e},{upper_ci_con[0]:.2e}] [
 print(f'\sigma_dep (constant mean model): {sigma_dep_con:.2e} [{lower_ci_con[1]:.2e},{upper_ci_con[1]:.2e}] [p.p./day]')
 
 imodel_constant.update_model_parameters(param_hat_con)
-imodel_constant.save(cm_save_file,
+imodel_constant.save(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}",
                      log_p_hat=log_param_hat_con,
                      log_p_hat_cov=log_param_cov_con,
                      training_simulation_data=sim_data_train,
@@ -452,13 +460,13 @@ if DAILY_AVERAGE:
     imodel_constant.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
     file_inds = np.arange(len(files_train))
     imodel_constant = smu.set_extinction_coefficients(imodel_constant,ext_weights,file_inds)
+    imodel_constant.save(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_update_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}")
 
-
-# %% plot SM on training data
+# %% plot SP on training data
 _,_,_ = imodel.plot_soiling_factor( sim_data_train,
                             reflectance_data=reflect_data_train,
                             reflectance_std='mean',
-                            save_path=sp_save_file,
+                            save_path=f"{sp_save_file}_TRAINING_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}",
                             # fig_title="On Training Data (semi-physical)",
                             orientation_strings=orientation,
                             figsize=[12,8])
@@ -467,7 +475,7 @@ _,_,_ = imodel.plot_soiling_factor( sim_data_train,
 _,_,_ = imodel_constant.plot_soiling_factor(    sim_data_train,
                                                 reflectance_data=reflect_data_train,
                                                 reflectance_std='mean',
-                                                save_path=cm_save_file,
+                                                save_path=f"{cm_save_file}_TRAINING_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}",
                                                 # fig_title="On Training Data",
                                                 orientation_strings=orientation,
                                                 figsize = [12,8]  )
@@ -487,7 +495,7 @@ if DAILY_AVERAGE:
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
 file_inds = np.arange(len(reflect_data_total.file_name))
-imodel = smu.set_extinction_coefficients(imodel,ext_weights,file_inds)
+imodel = smu.set_extinction_coefficients(imodel,ext_weights[0].reshape(1, -1),file_inds)
 #%% Plot semi-physical model results
 if HELIOSTATS==True:
     fig,ax,ref_hel_sp = plot_for_heliostats(   imodel,
@@ -512,7 +520,8 @@ else:
                                 train_mirrors,
                                 orientation,
                                 legend_shift=(0.04,0),
-                                yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) # 
+                                yticks=(0.75,0.80,0.85,0.90,0.95,1.00))
+                                # yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) # 
 
     df_sim_sp = smu.loss_table_from_sim(ref_simulation_sp,sim_data_total)
     if save_output:
@@ -554,7 +563,8 @@ else:
                                 train_mirrors,
                                 orientation,
                                 legend_shift=(0.04,0),
-                                yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00))
+                                yticks=(0.75,0.80,0.85,0.90,0.95,1.00))
+                                # yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) # 
     
     df_sim_cm = smu.loss_table_from_sim(ref_simulation_cm,sim_data_total)
     if save_output:
@@ -865,3 +875,96 @@ plt.show()
 # # ax.set_xlabel(r"Measured $\Delta$loss",fontsize=16)
 # # ax.set_ylabel(r"Predicted $\Delta$loss",fontsize=16)
 # # # %%
+
+# %%
+#%% Trim data
+from copy import deepcopy
+AA = deepcopy(reflect_data_total)
+AA.average[1] = AA.average[1][:,:-2]
+AA.sigma[1] = AA.sigma[1][:,:-2]
+AA.mirror_names[1] = AA.mirror_names[1][:-2]
+AA.tilts[1] = AA.tilts[1][:-2,:]
+
+#%% Plot semi-physical model results
+
+if HELIOSTATS==True:
+    fig,ax,ref_hel_sp = plot_for_heliostats(   imodel,
+                                    reflect_data_total,
+                                    sim_data_total,
+                                    train_experiments,
+                                    train_mirrors,
+                                    orientation,
+                                    legend_shift=(0.04,0),
+                                    yticks=(0.97,0.98,0.99,1.0))#0.97,0.98,
+    fig.set_size_inches(10, 20) 
+    
+    df_hel_sp = smu.loss_hel_table_from_sim(ref_hel_sp,sim_data_total)
+    if save_output:
+        df_hel_sp.to_csv(f"{sp_save_file}_HEL_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
+
+else:
+    fig,ax,ref_simulation_sp = plot_for_paper(    imodel,
+                                AA,
+                                sim_data_total,
+                                train_experiments,
+                                train_mirrors,
+                                orientation,
+                                legend_shift=(0.04,0),
+                                yticks=(0.75,0.80,0.85,0.90,0.95,1.00))
+                                # yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) # 
+
+    df_sim_sp = smu.loss_table_from_sim(ref_simulation_sp,sim_data_total)
+    if save_output:
+        df_sim_sp.to_csv(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
+
+if save_output:
+    fig.suptitle('Semi-Physical Model', fontsize=16, fontweight='bold', y=1.045)
+    fig.savefig(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.pdf", bbox_inches='tight')
+    fig.savefig(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.png", bbox_inches='tight')
+
+plt.show()
+
+# %% 
+
+# df_plot_sp =smu.loss_table_from_fig(ref_simulation_sp,sim_data_total) # NEED TO BE FIXED
+
+
+# %% Performance of constant-mean model on total data
+imodel_constant.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
+
+if HELIOSTATS:
+    fig,ax,ref_hel_cm = plot_for_heliostats(   imodel_constant,
+                                    reflect_data_total,
+                                    sim_data_total,
+                                    train_experiments,
+                                    train_mirrors,
+                                    orientation,
+                                    legend_shift=(0.04,0),
+                                    yticks=(0.97,0.98,0.99,1.02))   
+    df_hel_cm = smu.loss_hel_table_from_sim(ref_hel_cm,sim_data_total)
+    if save_output:
+        df_hel_cm.to_csv(f"{cm_save_file}_HEL_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
+
+else:
+    fig,ax,ref_simulation_cm = plot_for_paper(    imodel_constant,
+                                AA,
+                                sim_data_total,
+                                train_experiments,
+                                train_mirrors,
+                                orientation,
+                                legend_shift=(0.04,0),
+                                yticks=(0.75,0.80,0.85,0.90,0.95,1.00))
+                                # yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) # 
+    
+    df_sim_cm = smu.loss_table_from_sim(ref_simulation_cm,sim_data_total)
+    if save_output:
+        df_sim_cm.to_csv(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
+
+if save_output:
+    fig.suptitle('Constant-Mean Model', fontsize=16, fontweight='bold', y=1.045)
+    fig.savefig(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.pdf", bbox_inches='tight')
+    fig.savefig(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.png", bbox_inches='tight')
+
+plt.show()
+
+# %%

@@ -49,6 +49,7 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
     
     # shift schedule
     cleans = np.zeros((n_sectors,n_hours))
+    idx0 = None  # Initialize idx0
     for ii in range(n_trucks*n_sectors_per_truck,n_sectors,n_trucks*n_sectors_per_truck):
         idx0 = n_sectors-ii
         idx1 = n_sectors-(ii-n_trucks*n_sectors_per_truck)
@@ -61,7 +62,9 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
                 cleans[idx0:idx1,jj] = 1
 
     # take care of remainder (first day of a field clean)
-    if idx0 != 0:
+    if idx0 is None:  # If the loop was skipped --> the available trucks would clean more than all the sectors in one cleaning event (probably not a very smart sector/trucks/sector_per_truck choice but it happens in the for loop)
+        idx0 = n_sectors  # all sectors are cleaned, does not consider what extra trucks/cleaning capacity will do
+    elif idx0 != 0:
         idx_col = clean_ends-(24/dt)*int(ii/n_trucks/n_sectors_per_truck)
         for jj in idx_col.astype(int):
             if jj<0:
@@ -478,7 +481,7 @@ def set_extinction_coefficients(destination_model,extinction_weights,file_inds):
 
     This function sets the extinction weights directly. The input extinction_weights
     is an H-by-D numpy.array, where H is the number of heliostats and D is the number of 
-    diameter bins. It primary use is to save time, since computation of the Mie 
+    diameter bins. Its primary use is to save time, since computation of the Mie 
     extinction weights can be time-consuming. 
     
     The required argument file_inds is a list, and the extinction weights of those 
