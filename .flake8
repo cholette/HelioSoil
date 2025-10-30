@@ -1,0 +1,21 @@
+[flake8]
+# Ignore errors that are incompatible with black
+# E501: line too long (handled by black)
+ignore = E203, W503, E501
+# Set line length to match black's configuration
+max-line-length = 99
+# Exclude directories that don't need linting
+exclude =
+    .git,
+    __pycache__,
+    build,
+    dist,
+    .tox,
+    .venv,
+    data,
+    results,
+    examples/woomera_demo,
+    docs,
+    heliosoil.egg-info,
+    copylot.py,
+    solarpilot.dll

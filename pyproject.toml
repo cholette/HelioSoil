@@ -1,0 +1,111 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "heliosoil"
+version = "0.3.0"
+description = "Soiling Model and Cleaning Optimization for Solar Power Plants"
+authors = [
+    { name = "Giovanni Picotti" },
+    { name = "Michael E. Cholette" },
+    { name = "Cody B. Anderson" }
+]
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "LGPL-2.1-or-later" }
+keywords = ["solar", "csp", "soiling", "heliostat", "cleaning", "optimization"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+# Core dependencies
+dependencies = [
+    "numpy>=1.20.0",
+    "pandas>=1.3.0",
+    "matplotlib>=3.5.0",
+    "scipy>=1.7.0",
+    "miepython>=2.5.0",
+    "openpyxl>=3.0.0",
+    "pysolar>=0.10",
+    "tqdm>=4.60.0",
+    "numba>=0.56.0",
+    "numdifftools>=0.9.40",
+    "windrose>=1.6.0",
+    "pytz>=2021.1",
+    "scikit-learn>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ipython",
+    "pytest",
+    "nbstripout",
+    "nbconvert",
+    "black[jupyter]",
+    "pre-commit",
+    "flake8",
+]
+docs = [
+    "sphinx",
+    "sphinx-rtd-theme",
+]
+
+[project.urls]
+Homepage = "https://github.com/cholette/HelioSoil"
+Repository = "https://github.com/cholette/HelioSoil"
+Documentation = "https://github.com/cholette/HelioSoil#readme"
+Issues = "https://github.com/cholette/HelioSoil/issues"
+
+# Package discovery configuration
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["heliosoil*"]
+exclude = ["tests*", "docs*"]
+
+# Include additional files in the package
+[tool.setuptools.package-data]
+heliosoil = ["*.txt", "*.md"]
+
+# Add black configuration
+[tool.black]
+line-length = 99
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+  | data
+  | results
+  | examples\woomera_demo
+  | docs
+  | heliosoil.egg-info
+)/
+'''
+
+# Development tools configuration
+[tool.nbstripout]
+keep_output = false
+keep_count = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
