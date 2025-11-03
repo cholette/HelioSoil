@@ -12,7 +12,6 @@ import pickle
 
 
 class CommonFittingMethods:
-
     def compute_soiling_factor(self, rho0=None):
         # Converts helios.delta_soiled_area into an accumulated area loss and
         # populates helios.soiling_factor.
@@ -878,6 +877,17 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
             sim_in, mu_tilde=mu_tilde, sigma_dep=sigma_dep, verbose=verbose
         )
         self.compute_soiling_factor(rho0=rho0)
+
+        # prediction variance
+        if self.sigma_dep is not None:
+            for f in self.helios.soiling_factor.keys():
+                inc_factor = self.helios.inc_ref_factor[f]
+                dsav = self.helios.delta_soiled_area_variance[f]
+                self.helios.soiling_factor_prediction_variance[f] = np.cumsum(
+                    inc_factor**2 * dsav, axis=1
+                )
+        else:
+            self.helios.soiling_factor_prediction_variance = {}
 
     def fit_map(
         self,

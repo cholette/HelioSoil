@@ -22,10 +22,12 @@ fig, ax = plt.subplots(
     nrows=len(normal_cleanliness), figsize=(5, 8 / 3.0 * len(normal_cleanliness))
 )
 for ii, nc in enumerate(normal_cleanliness):
+    AR = (1 - nc) / 2
     for jj, dd in enumerate(d):
         μ = 1.0 * (-np.log(nc)) ** (1 / dd) / 2
         heimsath = np.exp(-((2.0 * μ / cosd(θ)) ** dd))  # from [1]
         ax[ii].plot(θ, heimsath, label=f"Heimsath et al. 2019, d={dd}")
+        ax[ii].plot(θ, nc ** (cosd(θ) ** (-dd)), "--", label=f"Heimsath et al. 2019, d={dd} (alt)")
 
     b = (1 - np.sqrt(nc)) * cosd(0)
     heimsath_2 = (1 - b / cosd(θ)) ** 2  # Eq. (2) in [2]
@@ -35,10 +37,9 @@ for ii, nc in enumerate(normal_cleanliness):
         heimsath_3 = heimsath_2 + (nc - heimsath_2) / aa / cosd(θ)  # Eq. (3) in [2]
         ax[ii].plot(θ, heimsath_3, label=f"Heimsath  et al. 2016, Eq. (3) in [2] , a ={a}")
 
-    AR = (1 - nc) / 2
     ax[ii].plot(θ, (1 - 2 * AR / cosd(θ)), label="Eq. (1)")
 
-    AR = 1 - np.sqrt(nc)
+    # AR = 1 - np.sqrt(nc)
     # ax[ii].plot(θ,(1-AR/cosd(θ))**2,label="Blocking and shading")
     ax[ii].set_title(f"Normal incidence cleanliness = {nc * 100:.0f}%")
     ax[ii].legend()

@@ -29,6 +29,7 @@ train_experiments = [0]  # indices for training experiments from 0 to len(files)
 train_mirrors = ["OE_M1_T00"]  # which mirrors within the experiments are used for
 test_mirrors = [
     "OE_M1_T00",
+    "OE_M2_T05",
     "OE_M3_T30",
     "OW_M4_T30",
     "OW_M5_T60",
@@ -47,12 +48,12 @@ if use_fitted_dust_distributions:
 files, all_intervals, exp_mirrors, all_mirrors = smu.get_training_data(
     d, "experiment_", time_to_remove_at_end=time_to_remove_at_end
 )
-# orientation = [ [s[1] for s in mirrors] for mirrors in exp_mirrors]
-if test_mirrors is None:
-    orientation = [[s[1] for s in mirrors] for mirrors in exp_mirrors]
-else:
-    sublist = [s[1] for s in test_mirrors]
-    orientation = [deepcopy(sublist) for _ in range(len(files))]
+orientation = [[s[1] for s in mirrors] for mirrors in exp_mirrors]
+# if test_mirrors is None:
+#     orientation = [[s[1] for s in mirrors] for mirrors in exp_mirrors]
+# else:
+#     sublist = [s[1] for s in test_mirrors]
+#     orientation = [deepcopy(sublist) for _ in range(len(files))]
 
 # Feb 2022 (first experiment --- remove last three days after rain started)
 all_intervals[0][0] = np.datetime64("2022-02-20T16:20:00")
@@ -199,7 +200,7 @@ reflect_data_total = smb.ReflectanceMeasurements(
     reflectometer_incidence_angle=reflectometer_incidence_angle,
     reflectometer_acceptance_angle=reflectometer_acceptance_angle,
     import_tilts=True,
-    imported_column_names=test_mirrors,
+    imported_column_names=all_mirrors,
 )
 sim_data_total, reflect_data_total = smu.trim_experiment_data(
     sim_data_total, reflect_data_total, testing_intervals
@@ -314,16 +315,12 @@ fig.savefig(
     f"{main_directory}/results/losses_wodonga.pdf", dpi=300, bbox_inches="tight", pad_inches=0
 )
 
-mirror_idxs = list(range(len(all_mirrors)))
-test_experiments = [f for f in list(range(len(files))) if f not in train_experiments]
-train_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] in train_mirrors]
-test_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] not in train_mirrors]
 
 # %% Fit quality plots (semi-physical)
-mirror_idxs = list(range(len(all_mirrors)))
+mirror_idxs = list(range(len(test_mirrors)))
 test_experiments = [f for f in list(range(len(files))) if f not in train_experiments]
 train_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] in train_mirrors]
-test_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] not in train_mirrors]
+test_mirror_idx = [m for m in mirror_idxs if all_mirrors[m] in test_mirrors]
 
 fig, ax = summarize_fit_quality(
     imodel,

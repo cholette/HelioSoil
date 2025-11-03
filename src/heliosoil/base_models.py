@@ -732,13 +732,8 @@ class ConstantMeanBase(SoilingBase):
             # Predict confidence interval if sigma_dep is defined. Fixed tilt assumed in this class.
             if sigma_dep is not None:
                 theta = np.radians(self.helios.tilt[f])
-                inc_factor = self.helios.inc_ref_factor[f]
                 dsav = sigma_dep**2 * (alpha**2 * np.cos(theta) ** 2)
-
                 helios.delta_soiled_area_variance[f] = dsav
-                self.helios.soiling_factor_prediction_variance[f] = np.cumsum(
-                    inc_factor**2 * dsav, axis=1
-                )
 
         self.helios = helios
 
