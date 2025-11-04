@@ -237,9 +237,13 @@ class FieldCommonMethods:
             print("No DNI in weather data file using clear sky DNI")
             sim_in.dni[f] = self.sun.DNI[f]
 
-    def helios_angles(self, plant, verbose=True, second_surface=True):
+    def helios_angles(
+        self, plant, verbose: bool = True, aoi_model: str = "second_surface", d: float = None
+    ):
         sun = self.sun
+        aoi_models = ["first_surface", "second_surface", "heimsath"]
         assert len(sun.elevation) > 0, "You need to call sun_angles() before helios_angles()"
+        assert aoi_model in aoi_models, f"aoi_model model must be one of {aoi_models}"
 
         helios = self.helios
         files = list(sun.elevation.keys())
@@ -310,18 +314,24 @@ class FieldCommonMethods:
                 np.arctan2(E, N)
             )  # [deg] azimuth angle of the heliostat
 
-            if second_surface is False:
+            if aoi_model.lower() == "first_surface":
                 helios.inc_ref_factor[f] = (1 + np.sin(rad(helios.incidence_angle[f]))) / np.cos(
                     rad(helios.incidence_angle[f])
                 )  # first surface
+                helios.aoi_model = "first_surface"
                 _print_if("First surface model", verbose)
-            elif second_surface is True:
+            elif aoi_model.lower() == "second_surface":
                 helios.inc_ref_factor[f] = 2 / np.cos(
                     rad(helios.incidence_angle[f])
                 )  # second surface model
+                helios.aoi_model = "second_surface"
                 _print_if("Second surface model", verbose)
-            else:
-                _print_if("Choose either first or second surface model", verbose)
+            elif aoi_model.lower() == "heimsath":
+                assert d is not None, "For aoi_model==heimsath, you must provide a value for d."
+                _print_if("Heimsath model", verbose)
+                helios.aoi_model = "heimsath"
+                helios.inc_ref_factor[f] = None
+                helios.aoi_parameter[f] = d
 
         self.helios = helios
 
@@ -388,11 +398,18 @@ class FieldCommonMethods:
                     temp_soil2[hh, clean_idx[cc] : clean_idx[cc + 1]] = np.cumsum(
                         sra[clean_idx[cc] : clean_idx[cc + 1]]
                     )
-
-            helios.arealoss = temp_soil2
-            helios.soiling_factor[f] = (
-                1 - temp_soil2 * helios.inc_ref_factor[f]
-            )  # hourly soiling factor for each sector of the solar field
+            # helios.area_loss = temp_soil2
+            if helios.aoi_model == "heimsath":
+                ξ = 1.0 - 2.0 * temp_soil2
+                d = self.helios.aoi_parameter[f]
+                φ = np.deg2rad(helios.incidence_angle[f])
+                helios.soiling_factor[f] = ξ ** (np.cos(φ) ** (-d))
+            elif helios.aoi_model in ["first_surface", "second_surface"]:
+                helios.soiling_factor[f] = (
+                    1 - temp_soil2 * helios.inc_ref_factor[f]
+                )  # hourly soiling factor for each sector of the solar field
+            else:
+                raise ValueError("helios.aoi_model not recognized. ")
 
         self.helios = helios
 
@@ -606,6 +623,29 @@ class FieldModel(PhysicalBase, FieldCommonMethods):
 
 
 class SimplifiedFieldModel(ConstantMeanBase, FieldCommonMethods):
+    def __init__(
+        self,
+        file_params,
+        file_SF,
+        cleaning_rate: float = None,
+        num_sectors: Optional[Union[int, Tuple[int, int], str]] = None,
+    ):
+        super().__init__()
+        super().import_site_data_and_constants(file_params)
+
+        self.sun = Sun()
+        self.sun.import_sun(file_params)
+
+        self.helios.import_helios(
+            file_params, file_SF, cleaning_rate=cleaning_rate, num_sectors=num_sectors
+        )
+        if not (isinstance(self.helios.stow_tilt, float)) and not (
+            isinstance(self.helios.stow_tilt, int)
+        ):
+            self.helios.stow_tilt = None
+
+
+class FieldModelHeimsath(ConstantMeanBase, FieldCommonMethods):
     def __init__(
         self,
         file_params,

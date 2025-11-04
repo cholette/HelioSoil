@@ -641,11 +641,13 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
                 helios.inc_ref_factor[f] = (1 + np.sin(rad(helios.incidence_angle[f]))) / np.cos(
                     rad(helios.incidence_angle[f])
                 )  # first surface
+                helios.aoi_model = "first_surface"
                 _print_if("First surface model", verbose)
             elif second_surface:
                 helios.inc_ref_factor[f] = 2 / np.cos(
                     rad(helios.incidence_angle[f])
                 )  # second surface model
+                helios.aoi_model = "second_surface"
                 _print_if("Second surface model", verbose)
             else:
                 _print_if("Choose either first or second surface model", verbose)
@@ -811,6 +813,7 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
         verbose=True,
         second_surface=True,
     ):
+
         sim_in = simulation_inputs
         ref_dat = reflectance_data
         files = list(sim_in.time.keys())
@@ -852,11 +855,13 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
                 helios.inc_ref_factor[f] = (1 + np.sin(rad(helios.incidence_angle[f]))) / np.cos(
                     rad(helios.incidence_angle[f])
                 )  # first surface
+                helios.aoi_model = "first_surface"
                 _print_if("First surface model", verbose)
             elif second_surface:
                 helios.inc_ref_factor[f] = 2 / np.cos(
                     rad(helios.incidence_angle[f])
                 )  # second surface model
+                helios.aoi_model = "second_surface"
                 _print_if("Second surface model", verbose)
             else:
                 _print_if("Choose either first or second surface model", verbose)

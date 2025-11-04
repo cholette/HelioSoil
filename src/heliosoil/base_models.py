@@ -544,7 +544,7 @@ class PhysicalBase(SoilingBase):
                 helios.delta_soiled_area_variance[f] = sigma_dep**2 * (
                     alpha**2 * np.cos(theta) ** 2
                 )
-                # sigma_dep**2*helios.inc_ref_factor[f]*np.cumsum(alpha**2*np.cos(theta)**2,axis=1)
+
             elif self.sigma_dep is not None:
                 theta = np.radians(self.helios.tilt[f])
                 helios.delta_soiled_area_variance[f] = self.sigma_dep**2 * (
@@ -1876,6 +1876,8 @@ class Heliostats:
         self.inc_ref_factor = (
             {}
         )  # [ - ] incidence factor for reflectance computation (1st or second surface)
+        self.aoi_model = None  # Angle of incidence model is one of ['first_surface','second_surface','heimsath']
+        self.aoi_parameter = {}  # parameter of the Angle of Incidence model (e.g. d for Heimsath)
         self.stow_tilt = {}  # [deg] tilt at which heliostats are stowed at night
         self.optical_efficiency = (
             {}
