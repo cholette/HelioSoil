@@ -655,7 +655,7 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
     def predict_soiling_factor(
         self, simulation_inputs, rho0=None, hrz0=None, sigma_dep=None, verbose=True
     ) -> None:
-        # Uses simulation inputs and fitted model to predict the soiling
+        # Uses simulation inputs and model parameters to predict the soiling
         # factor and the prediction variance (stored in
         # helios.soiling_factor and helios.soiling_factor_prediction_variance,
         # respectively).
@@ -670,8 +670,8 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
             for f in self.helios.soiling_factor.keys():
                 inc_factor = self.helios.inc_ref_factor[f]
                 dsav = self.helios.delta_soiled_area_variance[f]
-                self.helios.soiling_factor_prediction_variance[f] = np.cumsum(
-                    inc_factor**2 * dsav, axis=1
+                self.helios.soiling_factor_prediction_variance[f] = inc_factor**2 * np.cumsum(
+                    dsav, axis=1
                 )
         else:
             self.helios.soiling_factor_prediction_variance = {}
@@ -883,8 +883,8 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
             for f in self.helios.soiling_factor.keys():
                 inc_factor = self.helios.inc_ref_factor[f]
                 dsav = self.helios.delta_soiled_area_variance[f]
-                self.helios.soiling_factor_prediction_variance[f] = np.cumsum(
-                    inc_factor**2 * dsav, axis=1
+                self.helios.soiling_factor_prediction_variance[f] = inc_factor**2 * np.cumsum(
+                    dsav, axis=1
                 )
         else:
             self.helios.soiling_factor_prediction_variance = {}
