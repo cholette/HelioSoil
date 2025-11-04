@@ -319,16 +319,16 @@ class FieldCommonMethods:
                     rad(helios.incidence_angle[f])
                 )  # first surface
                 helios.aoi_model = "first_surface"
-                _print_if("First surface model", verbose)
+                _print_if("First surface loss model", verbose)
             elif aoi_model.lower() == "second_surface":
                 helios.inc_ref_factor[f] = 2 / np.cos(
                     rad(helios.incidence_angle[f])
                 )  # second surface model
                 helios.aoi_model = "second_surface"
-                _print_if("Second surface model", verbose)
+                _print_if("Second surface loss model", verbose)
             elif aoi_model.lower() == "heimsath":
                 assert d is not None, "For aoi_model==heimsath, you must provide a value for d."
-                _print_if("Heimsath model", verbose)
+                _print_if("Heimsath loss model", verbose)
                 helios.aoi_model = "heimsath"
                 helios.inc_ref_factor[f] = None
                 helios.aoi_parameter[f] = d
@@ -623,29 +623,6 @@ class FieldModel(PhysicalBase, FieldCommonMethods):
 
 
 class SimplifiedFieldModel(ConstantMeanBase, FieldCommonMethods):
-    def __init__(
-        self,
-        file_params,
-        file_SF,
-        cleaning_rate: float = None,
-        num_sectors: Optional[Union[int, Tuple[int, int], str]] = None,
-    ):
-        super().__init__()
-        super().import_site_data_and_constants(file_params)
-
-        self.sun = Sun()
-        self.sun.import_sun(file_params)
-
-        self.helios.import_helios(
-            file_params, file_SF, cleaning_rate=cleaning_rate, num_sectors=num_sectors
-        )
-        if not (isinstance(self.helios.stow_tilt, float)) and not (
-            isinstance(self.helios.stow_tilt, int)
-        ):
-            self.helios.stow_tilt = None
-
-
-class FieldModelHeimsath(ConstantMeanBase, FieldCommonMethods):
     def __init__(
         self,
         file_params,
