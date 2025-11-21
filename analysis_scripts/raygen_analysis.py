@@ -25,11 +25,12 @@ import re
 # %% Analysis setup
 
 # CHOOSE RAYGEN LOCATION (Carwarp or Yadnarie)
-# raygen_site = "Carwarp"
-raygen_site = "Yadnarie"
+raygen_site = "Carwarp"
+# raygen_site = "Yadnarie"
 
 # CHOOSE PM FRACTION TO USE FOR FITTING
-dust_type = "PM10" # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
+# dust_type = "PM10" # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
+dust_type = "PM2.5" # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
 
 # CHOOSE WHETHER TO USE DAILY AVERAGE OF REFLECTANCE VALUES OR NOT
 DAILY_AVERAGE = False
@@ -38,7 +39,7 @@ DAILY_AVERAGE = False
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
 
 # CHOOSE TRAIN MIRRORS (default = True, otherwise choose individual mirrors)
-train_mirror_default = False # Set the default train mirrors for Carwarp ["ON_M1_T00"] and Yadnarie ["ONE_M2_T00"] 
+train_mirror_default = True # Set the default train mirrors for Carwarp ["ON_M1_T00"] and Yadnarie ["ONE_M2_T00"] 
 # train_mirrors_custom = ["OAV_M1_T00"] # WORKS ONLY IF train_mirror_defaul is False
 train_mirrors_custom = ["OAV_M2_T60"] # WORKS ONLY IF train_mirror_defaul is False
 # train_mirrors_custom = ["ONW_M4_T00","OSE_M4_T00","ONE_M2_T00"] # WORKS ONLY IF train_mirror_defaul is False

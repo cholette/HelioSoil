@@ -1,0 +1,16 @@
+LICENSE
+README.md
+pyproject.toml
+src/heliosoil/__init__.py
+src/heliosoil/base_models.py
+src/heliosoil/cleaning_optimization.py
+src/heliosoil/field_models.py
+src/heliosoil/fitting.py
+src/heliosoil/paper_specific_utilities.py
+src/heliosoil/utilities.py
+src/heliosoil.egg-info/PKG-INFO
+src/heliosoil.egg-info/SOURCES.txt
+src/heliosoil.egg-info/dependency_links.txt
+src/heliosoil.egg-info/requires.txt
+src/heliosoil.egg-info/top_level.txt
+tests/test_run_examples.py
