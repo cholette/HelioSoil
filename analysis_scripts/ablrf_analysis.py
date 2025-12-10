@@ -26,10 +26,10 @@ reflectometer_acceptance_angle = 12.5e-3 # half acceptance angle of reflectance 
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
 d = f"{main_directory}/data/ablrf/"
 time_to_remove_at_end = [0,0,0,0,0,0]
-train_experiments = [2] # indices for training experiments from 0 to len(files)-1
+train_experiments = [0] # indices for training experiments from 0 to len(files)-1
 train_mirrors = ["OW_M1_T00"] # which mirrors within the experiments are used for 
 k_factor = None # None sets equal to 1.0, "import" imports from the file
-dust_type = "PM10"
+dust_type = "PM2.5"
 use_fitted_dust_distributions = False
 epsilon = 1e-3
 M = 100 # number of Monte Carlo simulations for deposition rate histogram
@@ -42,15 +42,15 @@ if use_fitted_dust_distributions:
 files,all_intervals,exp_mirrors,all_mirrors = smu.get_training_data(d,"experiment_",time_to_remove_at_end=time_to_remove_at_end)
 orientation = [ [s[1] for s in mirrors] for mirrors in exp_mirrors]
 
-# Feb 2022 (first experiment --- remove last three days after rain started)
+# April 2023 (first experiment --- remove after dew and birs)
 all_intervals[0][0] = np.datetime64('2023-04-19T11:30:00')
-all_intervals[0][1] = np.datetime64('2023-04-23T09:30:00')
+all_intervals[0][1] = np.datetime64('2023-04-20T17:45:00')
 
-# April 2022 (remove nothing, first/last measurement)
+# April 2023 (remove nothing, first/last measurement)
 all_intervals[1][0] = np.datetime64('2023-04-21T17:00:00')
 all_intervals[1][1] = np.datetime64('2023-04-23T09:30:00')
 
-# Nov 2023 (remove nothing, first/last measurement)
+# November 2023 (remove nothing, first/last measurement)
 all_intervals[2][0] = np.datetime64('2023-11-07T19:00:00')
 all_intervals[2][1] = np.datetime64('2023-11-11T11:15:00')
 
@@ -182,15 +182,15 @@ sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
                                                                 testing_intervals 
                                                             )
 
-sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
-                                                                reflect_data_total,
-                                                                "reflectance_data" 
-                                                            )
+# sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
+#                                                                 reflect_data_total,
+#                                                                 "reflectance_data" 
+#                                                             )
 
-sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
-                                                                reflect_data_total,
-                                                                "simulation_inputs" 
-                                                            )
+# sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
+#                                                                 reflect_data_total,
+#                                                                 "simulation_inputs" 
+#                                                             )
 
 # %% Plot Experiments
 for ii,experiment in enumerate(sim_data_total.dt.keys()):
