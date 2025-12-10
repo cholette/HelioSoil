@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "heliosoil"
-version = "0.3.0"
+version = "0.4.0"
 description = "Soiling Model and Cleaning Optimization for Solar Power Plants"
 authors = [
     { name = "Giovanni Picotti" },
@@ -13,12 +13,12 @@ authors = [
 ]
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "LGPL-2.1-or-later" }
+license = { file = "LICENSE" }
 keywords = ["solar", "csp", "soiling", "heliostat", "cleaning", "optimization"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
