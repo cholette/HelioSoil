@@ -133,6 +133,9 @@ Either a first- or second-surface geometry model is used to evaluate reflectance
 
 The current cleaning optimization is quite simple: a number of trucks clean the field a certain number of times annually. More sophisticated policies may be added in future releases (e.g. the mixed-integer linear program from [3] or the condition-based policies from [7,8]).
 
+## License
+As of version 0.4.0, this project is licensed under the MIT License. Earlier versions (tagged < v0.4.0) were licensed under the LGPL.
+
 ## Acknowledgements
 
 <img style="float: left;background-color: white;margin-bottom:10px;margin-right:10px" src="docs/astri_logo.png" width="88" height="113">

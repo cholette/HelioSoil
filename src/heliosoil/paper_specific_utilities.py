@@ -172,11 +172,12 @@ def plot_for_paper(
             if jj == 0:
                 ax[jj, ii].set_title(f"Campaign {e + 1}, Tilt: {t:.0f}" + r"$^{\circ}$")
             else:
-                ax[jj, ii].set_title(r"Tilt: {t:.0f}" + r"$^{\circ}$")
+                ax[jj, ii].set_title(rf"Tilt: {t:.0f}" + r"$^{\circ}$")
 
         new_var = sdat.dust_concentration[e][0 : rdat.prediction_indices[e][-1] + 1]
         dust_conc = new_var
-        # ws = sdat.wind_speed[e][0 : rdat.prediction_indices[e][-1] + 1]
+        ws = sdat.wind_speed[e][0 : rdat.prediction_indices[e][-1] + 1]
+        ws_max = np.max(ws)
         dust_type = sdat.dust_type[e][0 : rdat.prediction_indices[e][-1] + 1]
         if plot_rh:
             a2 = ax[-2, ii]
@@ -188,11 +189,11 @@ def plot_for_paper(
         a2.set_ylim((0, 1.01 * dust_max))
 
         a2a = a2.twinx()
-        # p = a2a.plot(ts, ws, color="green")
+        a2a.plot(ts, ws, color="green")
         a2a.tick_params(axis="y", labelcolor="green")
-        # a2a.set_ylim((0,1.01*ws_max))
-        a2a.set_ylim((0, 30))
-        # a2a.set_yticks((0,ws_max/2,ws_max))
+        a2a.set_ylim((0, 1.01 * ws_max))
+        # a2a.set_ylim((0, 30))
+        a2a.set_yticks((0, ws_max / 2, ws_max))
         a2a.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
 
         if plot_rh:

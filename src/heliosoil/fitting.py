@@ -12,7 +12,6 @@ import pickle
 
 
 class CommonFittingMethods:
-
     def compute_soiling_factor(self, rho0=None):
         # Converts helios.delta_soiled_area into an accumulated area loss and
         # populates helios.soiling_factor.
@@ -642,11 +641,13 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
                 helios.inc_ref_factor[f] = (1 + np.sin(rad(helios.incidence_angle[f]))) / np.cos(
                     rad(helios.incidence_angle[f])
                 )  # first surface
+                helios.aoi_model = "first_surface"
                 _print_if("First surface model", verbose)
             elif second_surface:
                 helios.inc_ref_factor[f] = 2 / np.cos(
                     rad(helios.incidence_angle[f])
                 )  # second surface model
+                helios.aoi_model = "second_surface"
                 _print_if("Second surface model", verbose)
             else:
                 _print_if("Choose either first or second surface model", verbose)
@@ -656,7 +657,7 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
     def predict_soiling_factor(
         self, simulation_inputs, rho0=None, hrz0=None, sigma_dep=None, verbose=True
     ) -> None:
-        # Uses simulation inputs and fitted model to predict the soiling
+        # Uses simulation inputs and model parameters to predict the soiling
         # factor and the prediction variance (stored in
         # helios.soiling_factor and helios.soiling_factor_prediction_variance,
         # respectively).
@@ -671,8 +672,8 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
             for f in self.helios.soiling_factor.keys():
                 inc_factor = self.helios.inc_ref_factor[f]
                 dsav = self.helios.delta_soiled_area_variance[f]
-                self.helios.soiling_factor_prediction_variance[f] = np.cumsum(
-                    inc_factor**2 * dsav, axis=1
+                self.helios.soiling_factor_prediction_variance[f] = inc_factor**2 * np.cumsum(
+                    dsav, axis=1
                 )
         else:
             self.helios.soiling_factor_prediction_variance = {}
@@ -812,6 +813,7 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
         verbose=True,
         second_surface=True,
     ):
+
         sim_in = simulation_inputs
         ref_dat = reflectance_data
         files = list(sim_in.time.keys())
@@ -853,11 +855,13 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
                 helios.inc_ref_factor[f] = (1 + np.sin(rad(helios.incidence_angle[f]))) / np.cos(
                     rad(helios.incidence_angle[f])
                 )  # first surface
+                helios.aoi_model = "first_surface"
                 _print_if("First surface model", verbose)
             elif second_surface:
                 helios.inc_ref_factor[f] = 2 / np.cos(
                     rad(helios.incidence_angle[f])
                 )  # second surface model
+                helios.aoi_model = "second_surface"
                 _print_if("Second surface model", verbose)
             else:
                 _print_if("Choose either first or second surface model", verbose)
@@ -878,6 +882,17 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
             sim_in, mu_tilde=mu_tilde, sigma_dep=sigma_dep, verbose=verbose
         )
         self.compute_soiling_factor(rho0=rho0)
+
+        # prediction variance
+        if self.sigma_dep is not None:
+            for f in self.helios.soiling_factor.keys():
+                inc_factor = self.helios.inc_ref_factor[f]
+                dsav = self.helios.delta_soiled_area_variance[f]
+                self.helios.soiling_factor_prediction_variance[f] = inc_factor**2 * np.cumsum(
+                    dsav, axis=1
+                )
+        else:
+            self.helios.soiling_factor_prediction_variance = {}
 
     def fit_map(
         self,

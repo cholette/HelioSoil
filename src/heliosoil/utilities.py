@@ -696,7 +696,7 @@ def get_training_data(d, file_start, time_to_remove_at_end=0, helios=False):
               the names of mirrors used in the corresponding training data file.
             - common (list[str]): The names of mirrors that are common to all training data files.
     """
-    files = [f for f in os.listdir(d) if f.startswith(file_start)]
+    files = [f for f in os.listdir(d) if f.startswith(file_start) if ("parameters" not in f)]
 
     # get training time intervals
     if np.isscalar(time_to_remove_at_end):
@@ -733,11 +733,11 @@ def get_training_data(d, file_start, time_to_remove_at_end=0, helios=False):
     if not helios:
         for ii, f in enumerate(files):
             mirror_names[ii] = list(
-                pd.read_excel(d + f, sheet_name="Reflectance_Average").columns[1::]
+                pd.read_excel(os.path.join(d,f), sheet_name="Reflectance_Average").columns[1::]
             )
     else:
         for ii, f in enumerate(files):
-            mirror_names[ii] = list(pd.read_excel(d + f, sheet_name="Heliostats_Ref").columns[1::])
+            mirror_names[ii] = list(pd.read_excel(os.path.join(d,f), sheet_name="Heliostats_Ref").columns[1::])
 
     # get mirror names that show up in all files
     common = []
@@ -746,7 +746,7 @@ def get_training_data(d, file_start, time_to_remove_at_end=0, helios=False):
             if all([(ele in S) and (ele not in common) for S in mirror_names]):
                 common.append(ele)
 
-    files = [d + f for f in files]
+    files = [os.path.join(d,f) for f in files]
 
     return files, training_intervals, mirror_names, common
 
