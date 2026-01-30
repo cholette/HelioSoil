@@ -66,7 +66,7 @@ class OptimizationProblem:
         n_el: int = 10,
         num_acceptance_steps: int = 100,
         extinction_table_folder: str = None,
-        second_surface: bool = True,
+        aoi_model: str = "second_surface",
         verbose: bool = True,
         model_type: str = "semi-physical",
         extinction_options: Optional[dict] = None,
@@ -93,8 +93,8 @@ class OptimizationProblem:
                 in the extinction model. Defaults to 100.
             extinction_table_folder (str): Path to the folder containing or to store
                 extinction lookup tables. Defaults to None.
-            second_surface (bool): If True, considers soiling on the second surface
-                of the heliostats. Defaults to True.
+            aoi_model (str): Angle of incidence model, one of first_surface, heimsath, 
+                second_surface. Defaults to second_surface.
             verbose (bool): If True, enables verbose output during calculations.
                 Defaults to True.
             model_type (str): The type of soiling model to use. Can be either
@@ -121,7 +121,7 @@ class OptimizationProblem:
                 params, solar_field, cleaning_rate=cleaning_rate, num_sectors=num_sectors
             )
             fm.sun_angles(sd)
-            fm.helios_angles(pl, second_surface=second_surface)
+            fm.helios_angles(pl, aoi_model=aoi_model)
             fm.compute_acceptance_angles(pl)
             fm.helios.compute_extinction_weights(
                 sd,
@@ -139,7 +139,7 @@ class OptimizationProblem:
                 params, solar_field, cleaning_rate=cleaning_rate, num_sectors=num_sectors
             )
             fm.sun_angles(sd)
-            fm.helios_angles(pl, second_surface=second_surface)
+            fm.helios_angles(pl, aoi_model=aoi_model)
             fm.calculate_delta_soiled_area(sd)
         else:
             raise ValueError(
@@ -214,14 +214,14 @@ def find_truck_bounds(opt, verbose: bool = True):
     return min_trucks, max_trucks, {"trucks": trucks, "costs": costs}
 
 
-def optimize_periodic_schedule(opt, file: int = 0, verbose: bool = True):
+def optimize_periodic_schedule(opt, file: int = None, verbose: bool = True):
     """Optimizes the periodic cleaning schedule for a solar field optimization problem.
 
     This function performs a coarse grid search to find the optimal number of cleaning trucks and cleanings per year that minimize the total cleaning costs, including both degradation costs and direct cleaning costs.
 
     Args:
         opt (optimization_problem): An instance of the `heliosoil.cleaning_optimization.optimization_problem` class, containing the field model, plant, and simulation data.
-        file (int, optional): The index of the simulation file to optimize for. Defaults to 0.
+        file (int, optional): The index of the simulation file to optimize for. If None, then optimizes the average. Defaults to None.
         verbose (bool, optional): Whether to print detailed output. Defaults to True.
 
     Returns:
@@ -236,7 +236,11 @@ def optimize_periodic_schedule(opt, file: int = 0, verbose: bool = True):
     progress_bar = tqdm(total=100, desc="Optimizing periodic schedule", leave=True)
     progress_bar.update(0)
 
-    print("Optimizing periodic schedule...")
+    if file is None:
+        files = list(opt.simulation_data.time.keys())
+        print(f"Optimizing periodic schedule for averge over all {len(files)} files")
+    else:
+        print(f"Optimizing periodic schedule for file {file}")
     # Find optimal truck bounds
     min_trucks, max_trucks, bounds_data = find_truck_bounds(opt, verbose)
     progress_bar.update(10)  # Update after finding bounds
@@ -279,7 +283,11 @@ def optimize_periodic_schedule(opt, file: int = 0, verbose: bool = True):
         nt_adjusted_nc = np.arange(min_cleans, nt_max_n_cleans + 1)
         for j, n_cleans in enumerate(nt_adjusted_nc):
             schedule = periodic_schedule_tcc(opt, n_trucks, n_cleans, verbose=False)
-            total_cost = schedule["total_cleaning_costs"][file]
+            if file is None:
+                total_cost = schedule["total_cleaning_costs"].mean()
+            else: 
+                total_cost = schedule["total_cleaning_costs"][file]
+            
             results[(n_trucks, n_cleans)] = schedule
 
             if total_cost < best_cost:
@@ -302,8 +310,12 @@ def optimize_periodic_schedule(opt, file: int = 0, verbose: bool = True):
         print(f"Number of trucks: {best_trucks}")
         print(f"Cleanings per year: {best_cleans}")
         print(f"Total cleaning cost: ${best_cost:,.2f}/year")
-        print(f"Direct cleaning cost: ${best_results['direct_cleaning_costs'][file]:,.2f}/year")
-        print(f"Degradation cost: ${best_results['degradation_costs'][file]:,.2f}/year")
+        if file is None:
+            print(f"Direct cleaning cost (avg over {len(files)} files): ${best_results['direct_cleaning_costs'].mean():,.2f}/year")
+            print(f"Degradation cost (avg over {len(files)} files): ${best_results['degradation_costs'].mean():,.2f}/year")
+        else:
+            print(f"Direct cleaning cost: ${best_results['direct_cleaning_costs'][file]:,.2f}/year")
+            print(f"Degradation cost: ${best_results['degradation_costs'][file]:,.2f}/year")
 
     return {
         "optimal_trucks": best_trucks,
@@ -315,7 +327,8 @@ def optimize_periodic_schedule(opt, file: int = 0, verbose: bool = True):
 
 
 def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
-    """Computes the total cleaning costs for a solar field optimization problem, including both degradation costs and direct cleaning costs.
+    """Computes the total cleaning costs for a solar field optimization problem, 
+    including both degradation costs and direct cleaning costs.
 
     Args:
         opt (optimization_problem): An instance of the `heliosoil.cleaning_optimization.optimization_problem` class, containing the field model, plant, and simulation data.
@@ -372,7 +385,7 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
         )
 
     # compute reflectance losses (updates field.helios.soiling_factor)
-    field.reflectance_loss(opt.simulation_data, cleans, verbose=verbose)
+    area_loss = field.reflectance_loss(opt.simulation_data, cleans, verbose=verbose)
 
     C_deg = np.zeros(N_files)
     C_cl = np.zeros(N_files)
@@ -451,7 +464,7 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
         "degradation_costs": C_deg,
         "direct_cleaning_costs": C_cl,
         "soiling_factor": field.helios.soiling_factor.copy(),
-        "arealoss": field.helios.arealoss,
+        "area_loss": area_loss,
         "cleaning_actions": cleans,
         "soiling_induced_off_times": np.sum(
             ~receiver_saturation["clean_field"] & receiver_saturation["soiled_field"]
@@ -1013,7 +1026,7 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method: str = "g
     return results
 
 
-# %% Cleaning optimization Utility Functions
+# Cleaning optimization Utility Functions
 def _get_arealoss(soil_rate, cleaning_schedule=None):
     """Calculates the cumulative area loss based on the area loss, cleaning schedule, and incidence factor.
 
@@ -1023,7 +1036,11 @@ def _get_arealoss(soil_rate, cleaning_schedule=None):
 
     Returns:
         numpy.ndarray: The cumulative area loss over time [heliostat_sector, time_step].
+
+    Notes:
+        Currently only supports first_surface or secon_surface incidence models.
     """
+    
     if cleaning_schedule is None:
         cleaning_schedule = np.zeros_like(soil_rate)
     if len(soil_rate.shape) == 1:

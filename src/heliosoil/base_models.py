@@ -737,6 +737,24 @@ class ConstantMeanBase(SoilingBase):
 
         self.helios = helios
 
+    def random_delta_soiled_area(self, simulation_inputs, mu_tilde=None, sigma_dep=None, verbose=True):
+        """
+            Simulates the delta soiled area with randomness in the deposition velocity. The airborne dust loading
+            is treated as a constant. 
+        """
+        self.calculate_delta_soiled_area(simulation_inputs,mu_tilde,sigma_dep,verbose)
+        mean_area_loss = self.helios.delta_soiled_area
+        var_area_loss = self.helios.delta_soiled_area_variance
+        files = list(mean_area_loss.keys())
+        sim = {f:[] for f in files}
+        for f in files:
+            μ = mean_area_loss[f]
+            σ = np.sqrt(var_area_loss[f])
+            sim[f] = μ + σ*np.random.standard_normal(size=μ.shape)
+
+        return sim
+            
+
 
 @dataclass
 class SimulationInputs:

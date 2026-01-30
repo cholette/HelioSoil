@@ -1100,7 +1100,7 @@ class DustDistribution:
 
         return np.sum((self.cdf(log_diameter_values) - pm_values) ** 2)
 
-    def fit(self, params0, log_diameter_values, pm_values, tol=1e-3):
+    def fit(self, params0, log_diameter_values, cumulative_values,values_type='mass', tol=1e-3):
 
         N = len(params0) / 3
         assert (
@@ -1109,7 +1109,7 @@ class DustDistribution:
         N = int(np.floor(N))
 
         def fun(x):
-            return self._sse(x, log_diameter_values, pm_values)
+            return self._sse(x, log_diameter_values, cumulative_values)
 
         # construct bounds
         lower_bound_w = [0] * N
@@ -1127,7 +1127,7 @@ class DustDistribution:
         self.n_components = N
         self.sub_dists = [sps.norm(loc=mu[ii], scale=sig[ii]) for ii in range(N)]
         self.weights = w
-        self.type = "mass"
+        self.type = values_type
         self._set_units()
 
         return res

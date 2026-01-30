@@ -12,6 +12,8 @@ from tqdm.auto import tqdm
 from scipy.interpolate import RectBivariateSpline
 from heliosoil.utilities import _print_if, get_project_root
 from heliosoil.base_models import PhysicalBase, ConstantMeanBase, Sun, SimulationInputs
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
 
 FILE_COPYLOT = "copylot.py"
 FILE_SOLARPILOTDLL = "solarpilot.dll"
@@ -398,20 +400,32 @@ class FieldCommonMethods:
                     temp_soil2[hh, clean_idx[cc] : clean_idx[cc + 1]] = np.cumsum(
                         sra[clean_idx[cc] : clean_idx[cc + 1]]
                     )
-            # helios.area_loss = temp_soil2
-            if helios.aoi_model == "heimsath":
-                ξ = 1.0 - 2.0 * temp_soil2
-                d = self.helios.aoi_parameter[f]
-                φ = np.deg2rad(helios.incidence_angle[f])
-                helios.soiling_factor[f] = ξ ** (np.cos(φ) ** (-d))
-            elif helios.aoi_model in ["first_surface", "second_surface"]:
-                helios.soiling_factor[f] = (
-                    1 - temp_soil2 * helios.inc_ref_factor[f]
-                )  # hourly soiling factor for each sector of the solar field
-            else:
-                raise ValueError("helios.aoi_model not recognized. ")
+
+            self.apply_aoi_model(temp_soil2, f)
 
         self.helios = helios
+        area_loss = temp_soil2
+
+        return area_loss
+
+    def apply_aoi_model(self,nn_area_loss,f:int,inplace:bool=True):
+        helios = self.helios
+        if helios.aoi_model == "heimsath":
+            ξ = 1.0 - 2.0 * nn_area_loss
+            d = self.helios.aoi_parameter[f]
+            φ = np.deg2rad(helios.incidence_angle[f])
+            sf = ξ ** (np.cos(φ) ** (-d))
+        elif helios.aoi_model in ["first_surface", "second_surface"]:
+            sf = (
+                1 - nn_area_loss * helios.inc_ref_factor[f]
+            )  # hourly soiling factor for each sector of the solar field
+        else:
+            raise ValueError("helios.aoi_model not recognized. ")
+        
+        if inplace:
+            helios.soiling_factor[f] = sf
+        else:
+            return helios.soiling_factor[f]
 
     def optical_efficiency(
         self, plant, simulation_inputs, climate_file, verbose=True, n_az=10, n_el=10
@@ -447,8 +461,19 @@ class FieldCommonMethods:
                 lat = line[6]
                 lon = line[7]
                 tz = line[-2]
+        elif climate_file.split(".")[-1] == "csv":
+            print('Processing weather data as a TMY .csv file...')
+            with open(climate_file) as f:
+                headers = f.readline()
+                headers = [h.lower() for h in headers.split(',')]
+                line = f.readline()
+                line = line.split(",")
+
+                lat = line[headers.index('latitude')]
+                lon = line[headers.index('longitude')]
+                tz = line[headers.index('time zone')]
         else:
-            raise ValueError("Climate file type must be .epw")
+            raise ValueError("Climate file type must be .epw or a TMY .csv")
 
         # check that parameter file and climate file have same location and timezone
         if self.latitude != float(lat) or self.longitude != float(lon):
@@ -568,6 +593,32 @@ class FieldCommonMethods:
             _print_if("Done!", verbose)
         self.helios = helios
 
+    def plot_soiling_factor(self,file:int=None,hour:int=None):
+        Ns = self.helios.x.shape[0]  # Number of sectors
+        sid = self.helios.full_field["sector_id"]
+        v = self.helios.soiling_factor[file][:,hour]
+        fig,ax = plt.subplots()
+        norm = Normalize(vmin=np.nanmin(v), vmax=1.0)
+        sf = np.ones_like(self.helios.full_field["x"])
+        for ii in range(Ns):
+            mask = (sid == ii)
+            xx,yy = self.helios.full_field["x"][mask],self.helios.full_field["y"][mask]
+            sf[mask] = v[ii]
+            sc = ax.scatter( xx,yy,c=v[ii]*np.ones_like(xx),cmap=plt.get_cmap('viridis'), norm=norm)
+
+        fig.colorbar(sc, ax=ax, label='Soiling Factor')
+
+        # Add plot styling
+        ax.set_xlabel("Distance from receiver - X [m]")
+        ax.set_ylabel("Distance from receiver - Y [m]")
+        ax.set_title("Solar Field Soiling Factor Snapshot")
+        ax.grid(True, linestyle="--", alpha=0.7)
+        ax.set_aspect("equal")
+        plt.tight_layout()
+
+        dat = self.helios.full_field.copy()
+        dat['soiling_factor'] = sf
+        return fig,ax,dat
 
 class FieldModel(PhysicalBase, FieldCommonMethods):
     def __init__(
