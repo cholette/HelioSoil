@@ -65,7 +65,6 @@ from .utilities import (
     soiling_rates_summary,
     loss_table_from_sim,
     loss_hel_table_from_sim,
-    DustDistribution,
     _print_if,
     _ensure_list,
     _check_keys,
@@ -82,6 +81,8 @@ from .paper_specific_utilities import (
     daily_soiling_tilt_all_data,
     plot_experiment_PA,
 )
+
+from .dust_distributions import DustDistribution
 
 __all__ = [
     # base_models
