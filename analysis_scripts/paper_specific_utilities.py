@@ -66,6 +66,8 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
         colors = {'NW':'blue','SE':'red'}
     elif any("yadnarie".lower() in value.lower() for value in sdat.file_name.values()):
         colors = {'NE':'blue','SE':'red','SW':'green','NW':'magenta','N/A':'blue'}
+    elif any("mildura".lower() in value.lower() for value in sdat.file_name.values()):
+        colors = {'N':'blue','S':'red','E':'green','W':'magenta','N/A':'blue'}
     else:
         colors = {'N':'blue','E':'red','S':'green','W':'magenta','N/A':'blue'}
     
