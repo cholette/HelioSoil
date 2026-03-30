@@ -48,7 +48,11 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
     r0 = mod.helios.nominal_reflectance
 
     exps = list(mod.helios.tilt.keys())
-    tilts = list(np.unique(mod.helios.tilt[ii]) for ii,e in enumerate(exps))
+    if any("imdea".lower() in value.lower() for value in sdat.file_name.values()):
+        tilts = list(np.unique(mod.helios.tilt[ii][:-1,:]) for ii,e in enumerate(exps))
+        tilts = [np.append(t, np.nan) for t in tilts]
+    else:
+        tilts = list(np.unique(mod.helios.tilt[ii]) for ii,e in enumerate(exps))
 
     if plot_rh:
         fig,ax = plt.subplots(nrows=max(len(item) for item in tilts)+2,ncols=len(exps),figsize=figsize,sharex='col')
@@ -78,12 +82,21 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             tr = rdat.times[e]
             tr = (tr-tr[0]).astype('timedelta64[s]').astype(np.float64)/3600/24
 
-            idx, = np.where(rdat.tilts[e][:,-1] == t)           # take the last element since in one dataset a mirror is initially "virtually" placed vertically to avoid soiling (data collection started later)
-            idxs, = np.where(mod.helios.tilt[e][:,-1] == t)     # take the last element since in one dataset a mirror is initially "virtually" placed vertically to avoid soiling (data collection started later)
 
-            if not any(rdat.tilts[e][:,-1] == t):               # take the last element since in one dataset a mirror is initially "virtually" placed vertically to avoid soiling (data collection started later)
-                print('Tilt Not Found')
+            if any("imdea".lower() in value.lower() for value in sdat.file_name.values()) and np.isnan(t):
+                # Use the last mirror index for both data and model
+                idx  = np.array([rdat.tilts[e].shape[0] - 1])
+                idxs = np.array([mod.helios.tilt[e].shape[0] - 1])
+            elif np.isnan(t):
+                # nan tilt but not IMDEA — skip
                 continue
+            else:
+                idx,  = np.where(rdat.tilts[e][:, -1] == t)         # take the last element since in one dataset a mirror is initially "virtually" placed vertically to avoid soiling (data collection started later)
+                idxs, = np.where(mod.helios.tilt[e][:, -1] == t)    # take the last element since in one dataset a mirror is initially "virtually" placed vertically to avoid soiling (data collection started later)
+
+                if not any(rdat.tilts[e][:, -1] == t):              # tilt is not in file nor the special case for IMDEA (i.e. heliostat)
+                    print('Tilt Not Found')
+                    continue
 
             if t==0 and any("augusta".lower() in value.lower() for value in sdat.file_name.values()):
                 idx = idx[1:]   # In the Port Augusta data the first mirror is cleaned every time and used as control reference
@@ -120,7 +133,11 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
 
             ym = r0*mod.helios.soiling_factor[e][idxs,0:rdat.prediction_indices[e][-1]+1] # ensure columns are time index # +1 is required to include the last time point (slicing would exclude it)
             # ref_output[e][jj] = ym
-            ref_output[(e, int(t))] = ym.copy()
+
+            key = (e, int(t) if not np.isnan(t) else 'heliostat')
+            ref_output[key] = ym.copy()
+
+            # ref_output[(e, int(t))] = ym.copy()
             if ym.ndim == 1:
                 ym += (1.0-ym[0])
             else:
@@ -133,11 +150,13 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
             ax[jj,ii].fill_between(ts,Lp,Up,color='black',alpha=0.1,label=r'Prediction Interval')
             ax[jj,ii].grid('on')
 
-
-            if jj==0:
-                ax[jj,ii].set_title(f"Campaign {e+1}, Tilt: {t:.0f}"+r"$^{\circ}$")
+            if any("imdea".lower() in value.lower() for value in sdat.file_name.values()) and np.isnan(t):
+                ax[jj,ii].set_title("Heliostat")
             else:
-                ax[jj,ii].set_title(f"Tilt: {t:.0f}"+r"$^{\circ}$")
+                if jj==0:
+                    ax[jj,ii].set_title(f"Campaign {e+1}, Tilt: {t:.0f}"+r"$^{\circ}$")
+                else:
+                    ax[jj,ii].set_title(f"Tilt: {t:.0f}"+r"$^{\circ}$")
 
 
         new_var = sdat.dust_concentration[e][0:rdat.prediction_indices[e][-1]+1]
