@@ -22,10 +22,10 @@ class soiling_base:
     def __init__(self):
         """
         Initializes the base model class with parameters from a file.
-        
+
         Args:
             file_params (str): Path to the Excel file containing the model parameters.
-        
+
         Attributes:
             latitude (float): Latitude of the site in degrees.
             longitude (float): Longitude of the site in degrees.
@@ -46,7 +46,7 @@ class soiling_base:
         self.loss_model = None                # either "geometry" or "mie"
 
     def import_site_data_and_constants(self,file_params,verbose=True):
-        
+
         _print_if(f"\nLoading data from {file_params} ... ",verbose)
         table = pd.read_excel(file_params,index_col="Parameter")
 
@@ -72,7 +72,7 @@ class physical_base(soiling_base):
         self.hrz0 =None                       # [-] site roughness height ratio
 
     def import_site_data_and_constants(self,file_params,verbose=True):
-        super().import_site_data_and_constants(file_params)                               
+        super().import_site_data_and_constants(file_params)
         table = pd.read_excel(file_params,index_col="Parameter")
 
         try:
@@ -97,24 +97,24 @@ class physical_base(soiling_base):
         # N_sims = sim_in.N_simulations
         # _print_if("Calculating deposition velocity for each of the "+str(N_sims)+" simulations",verbose)
 
-        
+
         D_meters = dust.D[0]*1e-6  # µm --> m
         Ntimes = len(wind_speed) #.shape[0]
 
         Cc = 1+2*(constants.air_lambda_p/D_meters)* \
                 (constants.A_slip[0]+constants.A_slip[1]*\
                     np.exp(-constants.A_slip[2]*D_meters/constants.air_lambda_p)) # slip correction factor
-                
+
         # computation of the gravitational settling velocity
-        vg = (constants.g*(D_meters**2)*Cc*(dust.rho[0]))/(18*constants.air_mu);    # terminal velocity [m/s] if Re<0.1 
+        vg = (constants.g*(D_meters**2)*Cc*(dust.rho[0]))/(18*constants.air_mu);    # terminal velocity [m/s] if Re<0.1
         Re = constants.air_rho*vg*D_meters/constants.air_mu                      # Reynolds number for vg(Re<0.1)
         for ii in range(constants.N_iter):
             Cd_g = 24/Re
             Cd_g[Re>constants.Re_Limit[0]] = 24/Re[Re>constants.Re_Limit[0]] * \
                 (1 + 3/16*Re[Re>constants.Re_Limit[0]] + 9/160*(Re[Re>constants.Re_Limit[0]]**2)*\
                     np.log(2*Re[Re>constants.Re_Limit[0]]))
-            Cd_g[Re>constants.Re_Limit[1]] = 24/Re[Re>constants.Re_Limit[1]] * (1 + 0.15*Re[Re>constants.Re_Limit[1]]**0.687)      
-            Cd_g[Re>constants.Re_Limit[2]] = 0.44;      
+            Cd_g[Re>constants.Re_Limit[1]] = 24/Re[Re>constants.Re_Limit[1]] * (1 + 0.15*Re[Re>constants.Re_Limit[1]]**0.687)
+            Cd_g[Re>constants.Re_Limit[2]] = 0.44;
             vnew = np.sqrt(4*constants.g*D_meters*Cc*dust.rho[0]/(3*Cd_g*constants.air_rho))
             if max(abs(vnew-vg)/vnew)<constants.tol:
                 vg = vnew
@@ -123,7 +123,7 @@ class physical_base(soiling_base):
             Re = constants.air_rho*vg*D_meters/constants.air_mu
         if ii == constants.N_iter:
             _print_if('Max iter reached in Reynolds calculation for gravitational settling velocity',verbose)
-            
+
         # computation of the settling velocity due to inertia and diffusion
         u_friction = constants.k_von_Karman*wind_speed/np.log(hrz0)                                           # [m/s] friction velocity
         diffusivity = constants.k_Boltzman/(3*np.pi*constants.air_mu)* \
@@ -139,20 +139,20 @@ class physical_base(soiling_base):
         R1 = np.exp(-np.sqrt(Stokes_number))                                                                        # 'stick' factor for boundary layer resistance computation
         R1[R1<=tol]=tol                                                                                             # to avoid division by 0
         if Ra:
-            aerodynamic_resistance = 1/(Cd_momentum*wind_speed) 
-            _print_if('Aerodynamic resistance is considered',verbose)                                                   # [s/m] 
+            aerodynamic_resistance = 1/(Cd_momentum*wind_speed)
+            _print_if('Aerodynamic resistance is considered',verbose)                                                   # [s/m]
         elif not Ra:
             aerodynamic_resistance = 0
             _print_if('Aerodynamic resistance is neglected',verbose)
         else:
             _print_if('Choose whether or not considering the aerodynamic resistance',verbose)
-        
+
         boundary_layer_resistance = 1/(constants.eps0*\
             np.transpose(matlib.repmat((u_friction),len(D_meters),1))*R1*\
                 (E_brownian+E_impaction+E_interception)) # [s/m]
-        
+
         # Rt = np.transpose(matlib.repmat(aerodynamic_resistance,len(D_meters),1))+boundary_layer_resistance
-        
+
         vt = 1/(np.transpose(matlib.repmat(aerodynamic_resistance,len(D_meters),1))\
             +boundary_layer_resistance)   # [m/s]
 
@@ -178,23 +178,23 @@ class physical_base(soiling_base):
         for f in list(files):
             D_meters = dust.D[f]*1e-6  # µm --> m
             Ntimes = len(sim_in.wind_speed[f]) #.shape[0]
-            Nhelios = helios.tilt[f].shape[0] 
+            Nhelios = helios.tilt[f].shape[0]
             Nd = D_meters.shape[0]
 
             Cc = 1+2*(constants.air_lambda_p/D_meters)* \
                     (constants.A_slip[0]+constants.A_slip[1]*\
                         np.exp(-constants.A_slip[2]*D_meters/constants.air_lambda_p)) # slip correction factor
-                    
+
             # computation of the gravitational settling velocity
-            vg = (constants.g*(D_meters**2)*Cc*(dust.rho[f]))/(18*constants.air_mu);    # terminal velocity [m/s] if Re<0.1 
+            vg = (constants.g*(D_meters**2)*Cc*(dust.rho[f]))/(18*constants.air_mu);    # terminal velocity [m/s] if Re<0.1
             Re = constants.air_rho*vg*D_meters/constants.air_mu                      # Reynolds number for vg(Re<0.1)
             for ii in range(constants.N_iter):
                 Cd_g = 24/Re
                 Cd_g[Re>constants.Re_Limit[0]] = 24/Re[Re>constants.Re_Limit[0]] * \
                     (1 + 3/16*Re[Re>constants.Re_Limit[0]] + 9/160*(Re[Re>constants.Re_Limit[0]]**2)*\
                         np.log(2*Re[Re>constants.Re_Limit[0]]))
-                Cd_g[Re>constants.Re_Limit[1]] = 24/Re[Re>constants.Re_Limit[1]] * (1 + 0.15*Re[Re>constants.Re_Limit[1]]**0.687)      
-                Cd_g[Re>constants.Re_Limit[2]] = 0.44;      
+                Cd_g[Re>constants.Re_Limit[1]] = 24/Re[Re>constants.Re_Limit[1]] * (1 + 0.15*Re[Re>constants.Re_Limit[1]]**0.687)
+                Cd_g[Re>constants.Re_Limit[2]] = 0.44;
                 vnew = np.sqrt(4*constants.g*D_meters*Cc*dust.rho[f]/(3*Cd_g*constants.air_rho))
                 if max(abs(vnew-vg)/vnew)<constants.tol:
                     vg = vnew
@@ -203,7 +203,7 @@ class physical_base(soiling_base):
                 Re = constants.air_rho*vg*D_meters/constants.air_mu
             if ii == constants.N_iter:
                 _print_if('Max iter reached in Reynolds calculation for gravitational settling velocity',verbose)
-                
+
             # computation of the settling velocity due to inertia and diffusion
             u_friction = constants.k_von_Karman*sim_in.wind_speed[f]/np.log(hrz0)                                           # [m/s] friction velocity
             diffusivity = constants.k_Boltzman/(3*np.pi*constants.air_mu)* \
@@ -219,36 +219,36 @@ class physical_base(soiling_base):
             R1 = np.exp(-np.sqrt(Stokes_number))                                                                        # 'stick' factor for boundary layer resistance computation
             R1[R1<=tol]=tol                                                                                             # to avoid division by 0
             if Ra:
-                aerodynamic_resistance = 1/(Cd_momentum*sim_in.wind_speed[f]) 
-                _print_if('Aerodynamic resistance is considered',verbose)                                                   # [s/m] 
+                aerodynamic_resistance = 1/(Cd_momentum*sim_in.wind_speed[f])
+                _print_if('Aerodynamic resistance is considered',verbose)                                                   # [s/m]
             elif not Ra:
                 aerodynamic_resistance = 0
                 _print_if('Aerodynamic resistance is neglected',verbose)
             else:
                 _print_if('Choose whether or not considering the aerodynamic resistance',verbose)
-            
+
             boundary_layer_resistance = 1/(constants.eps0*\
                 np.transpose(matlib.repmat((u_friction),len(D_meters),1))*R1*\
                     (E_brownian+E_impaction+E_interception)) # [s/m]
-            
+
             # Rt = np.transpose(matlib.repmat(aerodynamic_resistance,len(D_meters),1))+boundary_layer_resistance
-            
+
             vt = 1/(np.transpose(matlib.repmat(aerodynamic_resistance,len(D_meters),1))\
                 +boundary_layer_resistance)   # [m/s]
-            
+
             # computation of vertical deposition velocity
             vz = (vg + vt).transpose() # [m/s]
-            
+
             helios.pdfqN[f] = np.empty((Nhelios,Ntimes,Nd))
             for idx in range(helios.tilt[f].shape[0]):
                 Fd = np.cos(rad(helios.tilt[f][idx,:]))*vz   # Flux per unit concentration at each time, for each heliostat [m/s] (Eq. 28 in [1] without Cd)
                 if Fd.min() < 0:
                     warn("Deposition velocity is negative (min value: "+str(Fd.min())+"). Setting negative components to zero.")
                     Fd[Fd<0]=0
-                helios.pdfqN[f][idx,:,:] = Fd.transpose()*dust.pdfN[f]*1e6  # Dust flux pdf, i.e. [dq[particles/(s*m^2)]/dLog_{10}(D[µm]) ] deposited on 1m2. 1e6 for cm^3->m^3 
-            
+                helios.pdfqN[f][idx,:,:] = Fd.transpose()*dust.pdfN[f]*1e6  # Dust flux pdf, i.e. [dq[particles/(s*m^2)]/dLog_{10}(D[µm]) ] deposited on 1m2. 1e6 for cm^3->m^3
+
         self.helios = helios
-        
+
     def adhesion_removal(self,simulation_inputs,verbose=True):
         _print_if("Calculating adhesion/removal balance",verbose)
         helios = self.helios
@@ -256,16 +256,16 @@ class physical_base(soiling_base):
         dt = simulation_inputs.dt
         constants = self.constants
         files = list(simulation_inputs.time.keys())
-        
+
         for f in files:
             D_meters = dust.D[f]*1e-6  # Change to µm
             youngs_modulus_composite = 4/3*((1-dust.poisson[f]**2)/dust.youngs_modulus[f] + \
-                (1-helios.poisson**2)/helios.youngs_modulus)**(-1);                             # [N/m2] composite Young modulus 
+                (1-helios.poisson**2)/helios.youngs_modulus)**(-1);                             # [N/m2] composite Young modulus
             hamaker_system = np.sqrt(dust.hamaker[f]*helios.hamaker)                            # [J] system Hamaker constant (Israelachvili)
             work_adh = hamaker_system/(12*np.pi*constants.D0**2)                                # [J/m^2] work of adhesion
             radius_sep = ((3*np.pi*work_adh*D_meters**2)/(8*youngs_modulus_composite))**(1/3)   # [m] contact radius at separation (JKR model)
             F_adhesion = 3/4*np.pi*work_adh*D_meters                                            # [N] van der Waals adhesion force (JKR model)
-            F_gravity = dust.rho[f]*np.pi/6*constants.g*D_meters**3                             # [N] weight force   
+            F_gravity = dust.rho[f]*np.pi/6*constants.g*D_meters**3                             # [N] weight force
 
             if helios.stow_tilt == None: # No common stow angle supplied. Need to use raw tilts to compute removal moments
                 _print_if("  No common stow_tilt. Use values in helios.tilt to compute removal moments. This might take some time.",verbose)
@@ -275,12 +275,12 @@ class physical_base(soiling_base):
                 for h in range(Nhelios):
                     for k in range(Ntimes):
                         mom_removal = np.sin(rad(helios.tilt[f][h,k]))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity at each tilt for each diameter
-                        mom_adhesion =  (F_adhesion+F_gravity*np.cos(rad(helios.tilt[f][h,k])))*radius_sep             # [Nm] adhesion moment  
+                        mom_adhesion =  (F_adhesion+F_gravity*np.cos(rad(helios.tilt[f][h,k])))*radius_sep             # [Nm] adhesion moment
                         helios.pdfqN[f][h,k:,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
                         # if any(mom_adhesion<mom_removal):
                         #     _print_if("Some dust is removed",verbose)
 
-                
+
                 helios.pdfqN[f] = np.gradient(helios.pdfqN[f],dt[f],axis=1) # Take derivative so that pdfqN is the rate at wich dust is deposited at each diameter
 
             else: # common stow angle at night for all heliostats. Assumes tilt at night is close to vertical at night.
@@ -290,24 +290,24 @@ class physical_base(soiling_base):
                 mom_removal = np.sin(rad(helios.stow_tilt))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity
                 mom_adhesion =  (F_adhesion+F_gravity*np.cos(rad(helios.stow_tilt)))*radius_sep             # [Nm] adhesion moment
                 helios.pdfqN[f][:,:,mom_adhesion<mom_removal] = 0 # Remove this diameter from consideration
-        
+
         self.helios = helios
-    
-    def calculate_delta_soiled_area(self,simulation_inputs,sigma_dep=None,verbose=True): 
-        
+
+    def calculate_delta_soiled_area(self,simulation_inputs,sigma_dep=None,verbose=True):
+
         # info and error checking
         _print_if("Calculating soil deposited in a timestep [m^2/m^2]",verbose)
-        
+
         sim_in = simulation_inputs
         helios = self.helios
         dust = sim_in.dust
         extinction_weighting = helios.extinction_weighting
-        
+
         files = list(sim_in.wind_speed.keys())
         for f in files:
             D_meters = dust.D[f]*1e-6
             helios.delta_soiled_area[f] = np.empty((helios.tilt[f].shape[0],helios.tilt[f].shape[1]))
-            
+
             if sigma_dep is not None or self.sigma_dep is not None:
                 helios.delta_soiled_area_variance[f] = np.empty((helios.tilt[f].shape[0],helios.tilt[f].shape[1]))
 
@@ -331,13 +331,13 @@ class physical_base(soiling_base):
                     #     # The below two integrals are equivalent, but the version with the log10(D)
                     #     # as the independent variable is used due to the log spacing of the diameter grid
                     #     #
-                    #     # helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.trapz(helios.pdfqN[f][ii,jj,:]*\
+                    #     # helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.trapezoid(helios.pdfqN[f][ii,jj,:]*\
                     #     #     (np.pi/4*D_meters**2)*sim_in.dt[f]/dust.D[f]/np.log(10),dust.D[f])
-                        
-                    #     helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.pi/4 *np.trapz(helios.pdfqN[f][ii,jj,:]*\
+
+                    #     helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.pi/4 *np.trapezoid(helios.pdfqN[f][ii,jj,:]*\
                     #         (D_meters**2)*sim_in.dt[f],np.log10(dust.D[f]))
                     # else: # loss_model == "mie"
-                    helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.pi/4 * np.trapz(helios.pdfqN[f][ii,jj,:]*\
+                    helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.pi/4 * np.trapezoid(helios.pdfqN[f][ii,jj,:]*\
                         (D_meters**2)*sim_in.dt[f]*extinction_weighting[f][ii,:],np.log10(dust.D[f])) # pdfqN includes cos(tilt)
 
             # variance of noise for each measurement
@@ -350,17 +350,17 @@ class physical_base(soiling_base):
                 helios.delta_soiled_area_variance[f] = self.sigma_dep**2 * (alpha**2*np.cos(theta)**2)
 
         self.helios = helios
-    
+
     def plot_area_flux(self,sim_data,exp_idx,hel_id,air_temp,wind_speed,
                         tilt=0.0,hrz0=None,constants=None,
                         ax=None,Ra=True,verbose=True):
-        
+
         dummy_sim = simulation_inputs()
 
         for att_name in sim_data.dust.__dict__.keys():
             val = {0:getattr(sim_data.dust,att_name)[exp_idx]}
             setattr(dummy_sim.dust,att_name,val)
-        
+
         # dummy_sim.dust.import_dust(dust_file,verbose=False,dust_measurement_types="PM10")
         dummy_sim.air_temp = {0:np.array([air_temp])}
         dummy_sim.wind_speed = {0:np.array([wind_speed])}
@@ -386,7 +386,7 @@ class physical_base(soiling_base):
         # dummy_model.helios.acceptance_angles = [acceptance_angle]
         # dummy_model.helios.extinction_weighting = {0:np.atleast_2d(self.helios.extinction_weighting[exp_idx][0,:])}
         dummy_model.helios.extinction_weighting = {0:np.atleast_2d(self.helios.extinction_weighting[exp_idx][hel_id,:])}
-        
+
         fmt = "Setting constants.{0:s} to {1:s} (was {2:s})"
         if constants is not None:
             for kk in constants.keys():
@@ -395,7 +395,7 @@ class physical_base(soiling_base):
                 setattr(dummy_model.constants,kk,constants[kk])
 
         if hrz0 is None:
-            hrz0 = dummy_model.hrz0        
+            hrz0 = dummy_model.hrz0
             dummy_model.deposition_flux(dummy_sim,Ra=Ra)
         else:
             dummy_model.deposition_flux(dummy_sim,hrz0=hrz0,Ra=Ra)
@@ -407,7 +407,7 @@ class physical_base(soiling_base):
         else:
             ax1 = ax
 
-        title = f''' 
+        title = f'''
                         Area loss rate for given dust distribution at acceptance angle {acceptance_angle*1e3:.2f} mrad,
                         wind_speed= {wind_speed:.1f} m/s, air_temperature={air_temp:.1f} C
                         (total area loss is {dummy_model.helios.delta_soiled_area[0][0,0]:.2e} $m^2$/($s\cdot m^2$))
@@ -417,16 +417,16 @@ class physical_base(soiling_base):
         ax1.set_title(title.format(wind_speed,air_temp,))
         ax1.set_xlabel(r"D [$\mu$m]")
         ax1.set_ylabel(r'$\frac{dA [m^2/m^2/s] }{dLog(D \;[\mu m])}$', color='black',size=20)
-        plt.xscale('log')   
+        plt.xscale('log')
         ax1.set_xticks([0.001,0.01,0.1,1,2.5,4,10,20,100])
 
 class constant_mean_base(soiling_base):
     def __init__(self):
         super().__init__()
         self.mu_tilde = None
-    
+
     def import_site_data_and_constants(self,file_params,verbose=True):
-        super().import_site_data_and_constants(file_params)                               
+        super().import_site_data_and_constants(file_params)
         table = pd.read_excel(file_params,index_col="Parameter")
         try:
             self.mu_tilde =float(table.loc['mu_tilde'].Value)          # [-] constant average deposition
@@ -436,7 +436,7 @@ class constant_mean_base(soiling_base):
     def calculate_delta_soiled_area(self,simulation_inputs,mu_tilde=None,sigma_dep=None,verbose=True):
 
         _print_if("Calculating soil deposited in a timestep [m^2/m^2]",verbose)
-        
+
         sim_in = simulation_inputs
         helios = self.helios
         dust = sim_in.dust
@@ -453,7 +453,7 @@ class constant_mean_base(soiling_base):
             else:
                 sigma_dep = sigma_dep
                 _print_if("Using supplied value for sigma_dep = "+str(sigma_dep),verbose)
-        
+
         files = list(sim_in.time.keys())
         for f in files:
             helios.delta_soiled_area[f] = np.empty((helios.tilt[f].shape[0],helios.tilt[f].shape[1]))
@@ -477,12 +477,12 @@ class constant_mean_base(soiling_base):
                     helios.delta_soiled_area[f][ii,jj] = \
                         alpha[jj] * np.cos(rad(helios.tilt[f][ii,jj]))*mu_tilde
 
-            # Predict confidence interval if sigma_dep is defined. Fixed tilt assumed in this class. 
+            # Predict confidence interval if sigma_dep is defined. Fixed tilt assumed in this class.
             if sigma_dep is not None:
                 theta = np.radians(self.helios.tilt[f])
                 inc_factor = self.helios.inc_ref_factor[f]
                 dsav = sigma_dep**2* (alpha**2*np.cos(theta)**2)
-                
+
                 helios.delta_soiled_area_variance[f] = dsav
                 self.helios.soiling_factor_prediction_variance[f] = \
                     np.cumsum( inc_factor**2 * dsav,axis=1 )
@@ -492,28 +492,28 @@ class constant_mean_base(soiling_base):
 class simulation_inputs:
     """
     Defines a `simulation_inputs` class that manages the input data for a soiling model simulation.
-    
+
     The class provides methods to import weather and dust data from Excel files, and stores the data in dictionaries
     with the file number as the key. The class also includes a `dust` attribute that stores the dust properties
     for each experiment.
-    
+
     The `import_weather` method reads weather data such as air temperature, wind speed, dust concentration, etc.
     from the Excel files and stores them in the corresponding dictionaries.
-    
+
     The `import_source_intensity` method reads the source intensity data from the Excel files and stores it in
     the `source_wavelength` and `source_normalized_intensity` dictionaries.
-    
+
     The `get_experiment_subset` method creates a copy of the `simulation_inputs` object with only the specified
     experiments included.
     """
     def __init__(self,experiment_files=None,k_factors=None,dust_type=None,verbose=True):
 
-        # the below will be dictionaries of 1D arrays with file numbers as keys 
+        # the below will be dictionaries of 1D arrays with file numbers as keys
         self.file_name = {}                     # name of the input file
         self.dt = {}                            # [seconds] simulation time step
         self.time = {}                          # absolute time (taken from 1st Jan)
         self.time_diff = {}                     # [days] delta_time since start date
-        self.start_datetime = {}                # datetime64 for start 
+        self.start_datetime = {}                # datetime64 for start
         self.end_datetime = {}                  # datetime64 for end
         self.air_temp = {}                      # [C] air temperature
         self.wind_speed = {}                    # [m/s] wind speed
@@ -526,7 +526,7 @@ class simulation_inputs:
         self.dni = {}                           # [W/m^2] Direct Normal Irradiance
         self.relative_humidity = {}             # [%] relative humidity
         self.source_normalized_intensity = {}   # [1/m^2/nm] normalized source intensity
-        self.source_wavelength = {}             # [nm] source wavelengths corersponding to source_intensity 
+        self.source_wavelength = {}             # [nm] source wavelengths corersponding to source_intensity
 
         self.dust = dust()                      # dust properties will be per experiment
 
@@ -535,7 +535,7 @@ class simulation_inputs:
             experiment_files = _ensure_list(experiment_files)
             self.N_simulations = len(experiment_files)
 
-            if k_factors == None: 
+            if k_factors == None:
                 k_factors = [1.0]*len(experiment_files)
             elif k_factors == "import": # import k-factors from parameter file
                 k_factors = []
@@ -546,7 +546,7 @@ class simulation_inputs:
                 if len(k_factors) != len(experiment_files):
                     raise ValueError("Please specify a k-factor for each weather file")
 
-            self.k_factors = {ii:k_factors[ii] for ii in range(self.N_simulations)} 
+            self.k_factors = {ii:k_factors[ii] for ii in range(self.N_simulations)}
             self.import_weather(experiment_files,dust_type,verbose=verbose)
             self.dust.import_dust(experiment_files,verbose=verbose,dust_measurement_type=dust_type)
 
@@ -561,7 +561,7 @@ class simulation_inputs:
                 intensity = xl.parse("Source_Intensity")
                 self.source_wavelength[ii] = intensity['Wavelength (nm)'].to_numpy()
                 self.source_normalized_intensity[ii] = intensity['Source Intensity (W/m^2 nm)'].to_numpy()
-                norm = np.trapz(y=self.source_normalized_intensity[ii],x=self.source_wavelength[ii])
+                norm = np.trapezoid(y=self.source_normalized_intensity[ii],x=self.source_wavelength[ii])
                 self.source_normalized_intensity[ii] = self.source_normalized_intensity[ii]/norm # make sure intensity is normalized for later computations
             else:
                 self.source_normalized_intensity[ii] = None
@@ -571,7 +571,7 @@ class simulation_inputs:
     def import_weather(self, files, dust_type, verbose=True, smallest_windspeed=1e-6):
         files = _ensure_list(files)
         dust_type = _import_option_helper(files, dust_type)
-        
+
         weather_variables = { # List of possible weather variable names and the combination of possibly names
             'air_temp': ['AirTemp', 'Temperature', 'Temp'],
             'wind_speed': ['WindSpeed', 'WS'],
@@ -580,7 +580,7 @@ class simulation_inputs:
             'relative_humidity': ['RH', 'RelativeHumidity'],
             'wind_direction': ['WD', 'WindDirection']
         }
-        
+
         dust_names = { # List of possible dust concentration names and the combination of possibly names
             'PM_tot': ['PM_tot', 'PM_TOT', 'PMTOT', 'PMT', 'PM20'],
             'TSP': ['TSP'],
@@ -599,9 +599,9 @@ class simulation_inputs:
             time = pd.to_datetime(weather['Time'])
             self.start_datetime[ii] = time.iloc[0]
             self.end_datetime[ii] = time.iloc[-1]
-            
+
             _print_if(f"Importing site data (weather,time). Using dust_type = {dust_type[ii]}, test_length = {(self.end_datetime[ii]-self.start_datetime[ii]).days} days", verbose)
-            
+
             self.time[ii] = time
             self.dt[ii] = (self.time[ii][1] - self.time[ii][0]).total_seconds()
             self.time_diff[ii] = (self.time[ii].values - self.time[ii].values.astype('datetime64[D]')).astype('timedelta64[h]').astype('int')
@@ -643,13 +643,13 @@ class simulation_inputs:
                         break
                 else:
                     _print_if(f"No {dust_key} data to import.", verbose)
-            
+
             self.dust_conc_mov_avg[ii] = pd.Series(self.dust_concentration[ii]).rolling(window=int(60.0/(self.dt[ii]/60)), min_periods=1).mean().values
 
             if verbose:
                 T = (time.iloc[-1] - time.iloc[0]).days
                 _print_if(f"Length of simulation for file {file}: {T} days", verbose)
-                
+
     def get_experiment_subset(self,idx):
         attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes
         self_out = copy.deepcopy(self)
@@ -663,28 +663,28 @@ class simulation_inputs:
 
 class dust:
     def __init__(self):
-        self.D     = {}          # [µm] dust particles diameter 
+        self.D     = {}          # [µm] dust particles diameter
         self.rho   = {}          # [kg/m^3] particle material density
         self.m     = {}          # [-] complex refractive index
         self.pdfN  = {}          # "pdf" of dust number d(N [1/cm3])/d(log10(D[µm]))
         self.pdfM  = {}          # "pdf" of dust mass dm[µg/m3]/dLog10(D[µm])
         self.pdfA  = {}          # "pdf" of dust mass dm[µg/m3]/dLog10(D[µm])
-        self.hamaker = {}        # [J] hamaker constant of dust  
+        self.hamaker = {}        # [J] hamaker constant of dust
         self.poisson = {}        # [-] poisson ratio of dust
         self.youngs_modulus = {} # [Pa] young's modulus of dust
         self.PM10 = {}           # [µg/m^3] PM10 concentration computed with the given dust size distribution
         self.TSP = {}            # [µg/m^3] TSP concentration computed with the given dust size distribution
-        self.PMT = {}            # [µg/m^3] PMT concentration computed with the given dust size distribution        
+        self.PMT = {}            # [µg/m^3] PMT concentration computed with the given dust size distribution
         self.Nd = {}
         self.log10_mu = {}
         self.log10_sig = {}
-    
+
     def import_dust(self,experiment_files,verbose=True,dust_measurement_type=None):
-        
+
         _print_if("Importing dust properties for each experiment",verbose)
         experiment_files = _ensure_list(experiment_files)
         dust_measurement_type = _import_option_helper(experiment_files,dust_measurement_type)
-        
+
         for ii,f in enumerate(experiment_files):
             table = pd.read_excel(f,sheet_name="Dust",index_col="Parameter")
             rhoii = float(table.loc['rho'].Value)
@@ -698,7 +698,7 @@ class dust:
             spacing = diameter_grid_info[2].astype('int')
             Dii = np.logspace(diameter_end_points[0],diameter_end_points[1],num=spacing)
             self.D[ii] = Dii
-            
+
             if isinstance(table.loc['Nd'].Value,str): # if this is imported as a string, we need to split it.
                 self.Nd[ii] = np.array(table.loc['Nd'].Value.split(';'),dtype=float)
                 self.log10_mu[ii] = np.log10(np.array(table.loc['mu'].Value.split(';'),dtype=float))
@@ -709,7 +709,7 @@ class dust:
                 self.log10_sig[ii] = np.log10([np.array(table.loc['sigma'].Value)])
             else:
                 raise ValueError("Format of dust distribution components is not recognized in file {0:s}".format(f))
-                
+
             # computation of the dust size distribution
             N_components = len(self.Nd[ii])
             nNd = np.zeros((len(Dii),N_components))
@@ -723,9 +723,9 @@ class dust:
             self.pdfN[ii] = pdfNii
             self.pdfA[ii] = pdfNii*(np.pi/4*Dii**2)*1e-6 # pdfA (area) dA[m^2/m^3]/dLog10(D[µm]), 1e-6 factor from { D^2(µm^2->m^2) 1e-12 , V(cm^3->m^3) 1e6 }
             self.pdfM[ii] = pdfNii*(rhoii*np.pi/6*Dii**3)*1e-3 # pdfm (mass) dm[µg/m^3]/dLog10(D[µm]), 1e-3 factor from { D^3(µm^3->m^3) 1e-18 , m(kg->µg) 1e9 , V(cm^3->m^3) 1e6 }
-            self.TSP[ii] = np.trapz(self.pdfM[ii],np.log10(Dii)) 
+            self.TSP[ii] = np.trapezoid(self.pdfM[ii],np.log10(Dii))
             self.PMT[ii] = self.TSP[ii]
-            self.PM10[ii] = np.trapz(self.pdfM[ii][Dii<=10],np.log10(Dii[Dii<=10]))  # PM10 = np.trapz(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
+            self.PM10[ii] = np.trapezoid(self.pdfM[ii][Dii<=10],np.log10(Dii[Dii<=10]))  # PM10 = np.trapezoid(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
 
             self.hamaker[ii] = float(table.loc['hamaker_dust'].Value)
             self.poisson[ii] = float(table.loc['poisson_dust'].Value)
@@ -741,11 +741,11 @@ class dust:
                 elif len(X)==3: # decimal, e.g. PM2.5
                     att = "PM"+"_".join(X.split('.'))
                     X = float(X)
-            
+
                 new_meas = {f: None for f,_ in enumerate(experiment_files)}
                 for ii,_ in enumerate(experiment_files):
-                    new_meas[ii] = np.trapz(self.pdfM[ii][Dii<=X],np.log10(Dii[Dii<=X]))
-            
+                    new_meas[ii] = np.trapezoid(self.pdfM[ii][Dii<=X],np.log10(Dii[Dii<=X]))
+
                 setattr(self,att,new_meas)
                 _print_if("Added "+att+" attribute to dust class to all experiment dust classes",verbose)
 
@@ -772,7 +772,7 @@ class dust:
             ax2[ff].plot(D_dust,pdfM, color=color)
             ax2[ff].tick_params(axis='y', labelcolor=color)
             ax2[ff].grid('on')
-        
+
         plt.xscale('log')
         ax2[-1].set_xticks(10.0**np.arange(np.log10(D_dust[0]),np.log10(D_dust[-1]),1))
         plt.tight_layout()
@@ -783,7 +783,7 @@ class dust:
     def plot_area_distribution(self,figsize=(5,5)):
         N_files = len(self.D)
         _,ax1 = plt.subplots(nrows=N_files,sharex=True,squeeze=False,figsize=figsize)
-        
+
         for ii in range(N_files):
             D_dust = self.D[ii]
             pdfA = self.pdfA[ii]
@@ -806,18 +806,18 @@ class sun:
         self.declination = {}   # [degrees]
         self.azimuth = {}       # [degrees]
         self.zenith = {}        # [degrees]
-        self.hourly = {}        
+        self.hourly = {}
         self.time = {}          # time vector for solar angles (datetime)
         self.DNI = {}           # [W/m^2] direct normal irradiance at ground
         self.stow_angle = {}    # [deg] minimum sun elevation angle where heliostat field operates
-        
+
     def import_sun(self,file_params):
         table = pd.read_excel(file_params,index_col="Parameter")
         self.stow_angle = float(table.loc['stowangle'].Value)
-        
+
 class helios:
     def __init__(self):
-        
+
         # Properties of heliostat (scalars, assumes identical heliostats)
         self.hamaker = []          # [J] hamaker constant of heliostat glass
         self.poisson = []          # [-] poisson ratio of heliostat glass
@@ -827,7 +827,7 @@ class helios:
         self.width = []
         self.num_radial_sectors = []
         self.num_theta_sectors = []
-        
+
         # Properties of individual heliostats (1D array indexed by heliostat_index)
         self.x = []                         # [m] x (east-west) position of representative heliostats
         self.y = []                         # [m] y (north-south) position of representative heliostats
@@ -843,12 +843,12 @@ class helios:
                             'z':[],
                             'sector_id':[]
                         }                   # populated if representative heliostats are from a sectorization of a field
-        
+
         self.acceptance_angles = {}          # acceptance angle for receiver
 
         # Mie extinction weighting (dict of 2D arrays indexed by heliostat index, dust diameter)
-        self.extinction_weighting = {}       
-        
+        self.extinction_weighting = {}
+
         # Movement properties (dicts of 2D arrays indexed by [heliostat_index, time] with weather file name keys )
         self.tilt = {}                      # [deg] tilt angle of the heliostat
         self.azimuth = {}                   # [deg] azimuth angle of the heliostat
@@ -857,7 +857,7 @@ class helios:
         self.inc_ref_factor = {}            # [ - ] incidence factor for reflectance computation (1st surface for now)
         self.stow_tilt = {}                 # [deg] tilt at which heliostats are stowed at night
         self.optical_efficiency = {}        # [ - ] average total optical efficiency of the sector represented by the heliostat
-        
+
         # Properties of dust on heliostat (dicts of 3D arrays, indexed by [heliostat_index, time, diameter] with experiment numbers as keys)
         self.delta_soiled_area = {}         # [m^2/m^2] "pdf" of projected area of dust deposited on mirror for each time interval & each diameter
         self.mom_removal = {}
@@ -870,7 +870,7 @@ class helios:
         self.soiling_factor_prediction_variance = {}
 
     def import_helios(self,file_params,file_solar_field=None,num_sectors=None,verbose=True):
-        
+
         table = pd.read_excel(file_params,index_col="Parameter")
         # self.h_tower = float(table.loc['h_tower'].Value)
         self.hamaker = float(table.loc['hamaker_glass'].Value)
@@ -910,10 +910,10 @@ class helios:
             self.num_radial_sectors,self.num_theta_sectors = num_sectors
             self.sectorize_corn(file_solar_field,n_hor,n_vert)
         else:
-            raise ValueError("num_sectors must be None or an a 2-tuple of intergers")  
+            raise ValueError("num_sectors must be None or an a 2-tuple of intergers")
 
     def sectorize_radial(self,whole_field_file,n_rho,n_theta,verbose=True):
-        
+
         if whole_field_file.split('.')[-1] == 'csv':
             whole_SF = pd.read_csv(whole_field_file,skiprows=[1])
         elif whole_field_file.split('.')[-1] == 'xlsx':
@@ -926,17 +926,17 @@ class helios:
         # n_sec = n_rho*n_theta
         n_tot = len(x)
         extra_hel_th = np.mod(n_tot,n_theta)
-    
+
         rho = np.sqrt(x**2+y**2)                    # radius - polar coordinates of each heliostat
         theta = np.arctan2(y,x)                     # angle - polar coordinates of each heliostat
-       
+
         val_t1 = np.sort(theta)                     # sorts the heliostats by ascendent thetas
         idx_t = np.argsort(theta)                   # store the indexes of the ascendent thetas
         val_r1 = rho[idx_t]                         # find the corresponding values of the radii
-        
+
         val_r = np.concatenate((val_r1[val_t1>=-np.pi/2], val_r1[val_t1<-np.pi/2]))          # "rotates" to have -pi/2 as the first theta value
         val_t = np.concatenate((val_t1[val_t1>=-np.pi/2], val_t1[val_t1<-np.pi/2]+2*np.pi))  # "rotates" to have -pi/2 as the first theta value
-        
+
         self.full_field['rho'] = val_r
         self.full_field['theta'] = val_t
         self.full_field['x'] = val_r*np.cos(val_t)
@@ -974,11 +974,11 @@ class helios:
                 in_theta_slice = (val_t>=theta_th_sec[ii])
                 thetas = val_t[in_theta_slice]                              # same as above for the last sector
                 rhos = val_r[in_theta_slice]                             # same as above for the last sector
-                
+
             AR = np.sort(rhos)                              # sort the heliostats belonging to each sector by radius
             AR_idx = np.argsort(rhos)                       # store the indexes
             AT = thetas[AR_idx]                             # find the corresponding thetas
-            
+
             # compute the angular-sector delimiting heliostats to have sectors with same (or as close as possible) number of heliostats
             id_ar = np.array([0])
             id_br = (np.floor(len(AR)/n_rho)*np.ones(n_rho)).astype('int')
@@ -989,12 +989,12 @@ class helios:
             AT_sec = AT[idx_r_sec[0:n_rho]]
             rho_r_sec[:,ii] = AR_sec[0:len(rho_r_sec[:,ii])]        # finds the radial sector-delimiting heliostats for each angular sector
             theta_r_sec[:,ii] = AT_sec[0:len(rho_r_sec[:,ii])]      # finds the corresponding angles of the radial sector-delimiting heliostats for each angular sector
-            
+
             # select the heliostats whose radial coordinate is within the jj-th radial sector of the ii-th angular sector
             for jj in range(n_rho):
                 if jj!=n_rho-1:
                     and_in_radius_slice = (rhos>=rho_r_sec[jj,ii]) & (rhos<rho_r_sec[jj+1,ii])
-                    rhos_jj = rhos[and_in_radius_slice] 
+                    rhos_jj = rhos[and_in_radius_slice]
                     thetas_jj = thetas[and_in_radius_slice]
                 else:
                     and_in_radius_slice = (rhos>=rho_r_sec[jj,ii])
@@ -1007,7 +1007,7 @@ class helios:
                 idx = np.where(in_theta_slice)[0][and_in_radius_slice]
                 self.full_field['sector_id'][idx] = kk
                 self.sector_area[kk] = len(idx)*self.height*self.width # sector area
-                
+
                 # define the representative heliostats for each sector
                 hel_rep[kk,0] = rho_sec
                 hel_rep[kk,1] = theta_sec
@@ -1025,23 +1025,23 @@ class helios:
     def sectorize_corn(self,whole_field_file,n_hor,n_vert,verbose=True):
         """
         Sectorize the solar field by dividing it into a grid of horizontal and vertical sectors.
-        
-        This function reads the solar field coordinates from a CSV or XLSX file, generates a grid around 
-        the solar field, and assigns each heliostat to the closest grid point. The function then computes 
-        the representative heliostat for each sector and stores the sector information in the object's 
+
+        This function reads the solar field coordinates from a CSV or XLSX file, generates a grid around
+        the solar field, and assigns each heliostat to the closest grid point. The function then computes
+        the representative heliostat for each sector and stores the sector information in the object's
         attributes.
-        
+
         Parameters:
             whole_field_file (str): The file path to the CSV or XLSX file containing the solar field coordinates.
             n_hor (int): The number of horizontal sectors to divide the solar field into.
             n_vert (int): The number of vertical sectors to divide the solar field into.
             verbose (bool, optional): Whether to print progress messages. Defaults to True.
-        
+
         Returns:
             None
         """
-                
-            
+
+
         def read_solarfield(field_filepath): # Load CSV containing solarfield coordintes
             positions = []
             if field_filepath.split('.')[-1] == 'csv':
@@ -1061,31 +1061,31 @@ class helios:
             y_points = np.linspace(min(y),max(y),num_vert)
             grid = np.array([(x,y) for x in x_points for y in y_points])
             return grid
-        
-        def find_closest_point(position,grid): 
+
+        def find_closest_point(position,grid):
             distances = cdist([position[1:3]], grid) # Find distance between heliostats and grid coordinates
-            closest_idx = np.argmin(distances) 
+            closest_idx = np.argmin(distances)
             return distances[0][closest_idx], closest_idx
-            
+
         positions = read_solarfield(whole_field_file)
         grid = generate_grid(n_hor,n_vert,positions[:,1],positions[:,2])
-        
-        closest_grid = [] # Create a dictionary to store 
+
+        closest_grid = [] # Create a dictionary to store
         # [heliostat ID, x position, y position, distance to closest grid, closest grid point]
         for i in range(len(positions)):
-            distance_grid, closest_idx = find_closest_point(positions[i,:],grid) 
+            distance_grid, closest_idx = find_closest_point(positions[i,:],grid)
             if i == 0:
                 closest_grid = np.hstack([positions[i,:],distance_grid,closest_idx])
             else:
                 closest_grid = np.vstack([closest_grid,np.hstack([positions[i,:],distance_grid,closest_idx])])
-        
-        
+
+
         # Store Heliostat Field information
         self.full_field['x'] = (closest_grid[:,1])
         self.full_field['y'] = (closest_grid[:,2])
         self.full_field['id'] = np.array(closest_grid[:,0],dtype=np.int64)
         self.full_field['sector_id'] = np.array(closest_grid[:,4],dtype=np.int64)
-        
+
         for i in np.unique(self.full_field['sector_id']):
             sector_field = closest_grid[closest_grid[:,4] == i,:]
             sector_size = len(sector_field)
@@ -1094,13 +1094,13 @@ class helios:
                 representative_helio = np.hstack([representative_info,sector_size])
             else:
                 representative_helio = np.vstack([representative_helio,np.hstack([representative_info,sector_size])])
-                
+
         ##
         self.x = (representative_helio[:,1])
         self.y = (representative_helio[:,2])
         self.heliostats_in_sector = np.array(representative_helio[:,-1],dtype=np.int64)
         self.sector_area = self.heliostats_in_sector * self.height * self.width
-    
+
     def sector_plot(self):
         Ns = self.x.shape[0]
         n_theta = self.num_theta_sectors
@@ -1108,7 +1108,7 @@ class helios:
 
         if n_theta == None:
             print("No sectorization defined")
-        
+
         else:
             # set up colormap to make sure adjacent sectors have a different color
             base_map = np.linspace(0.0,1.0,n_radius)
@@ -1132,13 +1132,13 @@ class helios:
     def compute_extinction_weights(self,simulation_data,loss_model=None,verbose=True,show_plots=False,options={}):
         """
         Computes the extinction weights for the heliostat field based on the specified loss model.
-        
+
         Parameters:
             simulation_data (object): An object containing simulation data, including dust properties and source information.
             loss_model (str, optional): The loss model to use for computing the extinction weights. Can be either 'mie' or 'geometry'. Defaults to None.
             verbose (bool, optional): Whether to print progress messages. Defaults to True.
             options (dict, optional): Additional options to pass to the extinction function.
-        
+
         Returns:
             None
         """
@@ -1166,7 +1166,7 @@ class helios:
                     already_computed = [e in computed for _,e in enumerate(same_ext[f][h])]
                     if any(already_computed):
                         idx = already_computed.index(True)
-                        fe,he = same_ext[f][h][idx]                        
+                        fe,he = same_ext[f][h][idx]
                         _print_if(f"\t Using weights from file {fe}, mirror {he} for file {f}, mirror {h}...",verbose)
                         self.extinction_weighting[f][h,:] = self.extinction_weighting[fe][he,:]
                     else:
@@ -1176,7 +1176,7 @@ class helios:
                                                             **options)
                         self.extinction_weighting[f][h,:] = ext_weight
                         computed.append((f,h))
-                    
+
                     if show_plots:
                         fig,ax = plt.subplots()
                         ax.semilogx(sim_dat.dust.D[f],self.extinction_weighting[f][h,:])
@@ -1194,17 +1194,17 @@ class helios:
     def plot_extinction_weights(self,simulation_data,fig_kwargs={},plot_kwargs={}):
         """
         Plot the extinction weights for each heliostat and file in the simulation data.
-        
+
         Parameters:
             simulation_data (object): The simulation data object containing the dust and other simulation parameters.
             fig_kwargs (dict, optional): Additional keyword arguments to pass to the `plt.figure()` function.
             plot_kwargs (dict, optional): Additional keyword arguments to pass to the `ax.semilogx()` function.
-        
+
         Returns:
             fig (matplotlib.figure.Figure): The figure object containing the plots.
             ax (list of matplotlib.axes.Axes): The list of axes objects for each plot.
         """
-                
+
         files = list(self.extinction_weighting.keys())
         Nhelios = [len(self.tilt[f]) for f in files]
         phia = [self.acceptance_angles[f] for f in files]
@@ -1231,9 +1231,9 @@ class helios:
                 ax1.grid(True)
                 idx += 1
         plt.tight_layout()
-        
+
         return fig,ax
-        
+
 class constants:
     def __init__(self):
         self.air_rho = []
@@ -1252,7 +1252,7 @@ class constants:
         self.beta_EIM = []
         self.eps0 = []
         self.D0 = []
-        
+
     def import_constants(self,file_params,verbose=True):
         _print_if("\nImporting constants",verbose)
         table = pd.read_excel(file_params,index_col="Parameter")
@@ -1263,7 +1263,7 @@ class constants:
         self.irradiation = float(table.loc['I_solar'].Value)            # [W/m2] solar extraterrestrial constant
         self.g = 9.81                                                   # [m/s^2] gravitational constant
         self.A_slip = np.array(table.loc['A1_A2_A3'].Value.split(';')).astype('float')  # coefficients for slip correction factor
-        self.k_Boltzman = float(table.loc['k_boltzman'].Value)          # [J/K] Boltzman constant 
+        self.k_Boltzman = float(table.loc['k_boltzman'].Value)          # [J/K] Boltzman constant
         self.k_von_Karman = float(table.loc['k_von_karman'].Value)      # Von Karman constant
         self.N_iter = int(table.loc['N_iter'].Value)                    # max interations to compute the gravitational settling velocity
         self.tol = float(table.loc['tol'].Value)                        # tolerance to reach convergence in the gravitational settling velocity computation
@@ -1276,10 +1276,10 @@ class constants:
 class reflectance_measurements:
     """
     Represents a class for managing reflectance measurement data.
-    
-    The `reflectance_measurements` class is used to import and manage reflectance data from multiple experiments. It can handle multiple files, each containing 
+
+    The `reflectance_measurements` class is used to import and manage reflectance data from multiple experiments. It can handle multiple files, each containing
     average and standard deviation of reflectance measurements, as well as optional tilt information. The class provides methods to access the imported data and generate plots.
-    
+
     Args:
         reflectance_files (str or list): Path(s) to the Excel file(s) containing the reflectance data.
         time_grids (list): List of time grids corresponding to each reflectance file.
@@ -1290,10 +1290,10 @@ class reflectance_measurements:
         column_names_to_import (list, optional): List of column names to import from the data sheets. If not provided, all columns will be imported.
         verbose (bool, optional): Whether to print progress messages. Defaults to True.
     """
-    def __init__(self,reflectance_files,time_grids,number_of_measurements=None, 
+    def __init__(self,reflectance_files,time_grids,number_of_measurements=None,
                     reflectometer_incidence_angle=None,reflectometer_acceptance_angle=None,
                     import_tilts=False,column_names_to_import=None,verbose=True):
-        
+
         reflectance_files = _ensure_list(reflectance_files)
         N_experiments = len(reflectance_files)
         if number_of_measurements == None:
@@ -1301,12 +1301,12 @@ class reflectance_measurements:
         else:
             self.number_of_measurements = _import_option_helper(reflectance_files,number_of_measurements)
 
-        
+
         if reflectometer_incidence_angle == None:
             reflectometer_incidence_angle = [0]*N_experiments
         else:
             reflectometer_incidence_angle = _import_option_helper(reflectance_files,reflectometer_incidence_angle)
-        
+
         if reflectometer_acceptance_angle == None:
             reflectometer_acceptance_angle = [0]*N_experiments
         else:
@@ -1329,11 +1329,11 @@ class reflectance_measurements:
 
         if import_tilts:
             self.tilts = {}
-            
+
         self.import_reflectance_data(reflectance_files,time_grids,reflectometer_incidence_angle,
                                      reflectometer_acceptance_angle,import_tilts=import_tilts,
                                      column_names_to_import=column_names_to_import)
-        
+
     def import_reflectance_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
                                 reflectometer_acceptance_angle, import_tilts=False,column_names_to_import=None):
         """
@@ -1348,7 +1348,7 @@ class reflectance_measurements:
             column_names_to_import (list, optional): List of column names to import from the data sheets. If not provided, all columns will be imported.
         """
         for ii in range(len(reflectance_files)):
-            
+
             self.file_name[ii] = reflectance_files[ii]
             reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Average"),\
                 "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Reflectance_Sigma")}
@@ -1357,7 +1357,7 @@ class reflectance_measurements:
             if time_column is not None:
                 self.times[ii] = reflectance_data['Average'][time_column].values
             else:
-                raise ValueError(f"No 'Time' or 'Timestamp' column found in file {reflectance_files[ii]}")            
+                raise ValueError(f"No 'Time' or 'Timestamp' column found in file {reflectance_files[ii]}")
             if column_names_to_import != None: # extract relevant column names of the pandas dataframe
                 self.average[ii] = reflectance_data['Average'][column_names_to_import].values/100.0 # Note division by 100.0. Data in sheets are assumed to be in percentage
                 self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])),  -np.diff(self.average[ii], axis=0)))  # compute reflectance loss between measurements
@@ -1373,25 +1373,25 @@ class reflectance_measurements:
             self.prediction_indices[ii] = []
             self.prediction_times[ii] = []
             for m in self.times[ii]:
-                self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))        
+                self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))
             self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
             for jj in range(self.average[ii].shape[1]):
                 self.rho0[ii] = np.nanmax(self.average[ii], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
 
-            # idx = reflectance_files.index(f) 
+            # idx = reflectance_files.index(f)
             self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
             self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(self.number_of_measurements[ii])
             self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
 
             if import_tilts:
                 self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[self.mirror_names[ii]].values.transpose()
-                    
+
     # def import_heliostats_ref_data(self,reflectance_files,time_grids,reflectometer_incidence_angle,
     #                             reflectometer_acceptance_angle,import_tilts=False,
     #                             column_names_to_import=None):
 
     #     for ii in range(len(reflectance_files)):
-            
+
     #         self.file_name[ii] = reflectance_files[ii]
     #         reflectance_data = {"Average": pd.read_excel(reflectance_files[ii],sheet_name="Heliostats_Ref"),\
     #             "Sigma": pd.read_excel(reflectance_files[ii],sheet_name="Heliostats_Sigma")}
@@ -1409,18 +1409,18 @@ class reflectance_measurements:
     #         self.prediction_indices[ii] = []
     #         self.prediction_times[ii] = []
     #         for m in self.times[ii]:
-    #             self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))        
+    #             self.prediction_indices[ii].append(np.argmin(np.abs(m-time_grids[ii])))
     #         self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
     #         self.rho0[ii] = self.average[ii][0,:]
 
-    #         # idx = reflectance_files.index(f) 
+    #         # idx = reflectance_files.index(f)
     #         self.reflectometer_incidence_angle[ii] = reflectometer_incidence_angle[ii]
     #         self.sigma_of_the_mean[ii] = self.sigma[ii]/np.sqrt(self.number_of_measurements[ii])
     #         self.reflectometer_acceptance_angle[ii] = reflectometer_acceptance_angle[ii]
 
     #         if import_tilts:
     #             self.tilts[ii] = pd.read_excel(reflectance_files[ii],sheet_name="Tilts")[self.mirror_names[ii]].values.transpose()
-                    
+
     def get_experiment_subset(self,idx):
         attributes = [a for a in dir(self) if not a.startswith("__")] # filters out python standard attributes
         self_out = copy.deepcopy(self)
@@ -1431,7 +1431,7 @@ class reflectance_measurements:
                     if k not in idx:
                         attr.pop(k)
         return self_out
-   
+
     def plot(self):
         files = list(self.average.keys())
         N_mirrors = self.average[0].shape[1]
@@ -1454,7 +1454,7 @@ class reflectance_measurements:
                     tilt_str = r"Experiment "+str(ii+1)+ r", tilt = ${0:.0f}^{{\circ}}$"
                 else:
                     tilt_str = r"tilt = ${0:.0f}^{{\circ}}$"
-                
+
                 if all(tilt==tilt[0]):
                     a.set_title(tilt_str.format(tilt[0]))
                 else:
@@ -1466,7 +1466,7 @@ class reflectance_measurements:
                 miny = min((m-6*s).min(),miny)
                 error_two_sigma = 1.96*s
                 a.errorbar(self.times[f],m,yerr=error_two_sigma,label="Measurement mean",marker=".")
-            
+
             a.set_ylabel(r"Reflectance at ${0:.1f}^{{\circ}}$".format(self.reflectometer_incidence_angle[ii]))
         a.set_ylim((miny,1))
         a.set_xlabel("Date")
@@ -1477,7 +1477,7 @@ class field_model(soiling_base):
 
         self.sun = sun()
         self.sun.import_sun(file_params)
-        
+
         self.helios.import_helios(file_params,file_SF,num_sectors=num_sectors)
         if not(isinstance(self.helios.stow_tilt,float)) and not(isinstance(self.helios.stow_tilt,int)):
             self.helios.stow_tilt = None
@@ -1487,35 +1487,35 @@ class field_model(soiling_base):
         sun = self.sun
         constants = self.constants
         timezone = pytz.FixedOffset(int(self.timezone_offset*60))
-        
+
         _print_if("Calculating sun apparent movement and angles for "+str(sim_in.N_simulations)+" simulations",verbose)
-        
+
         files = list(sim_in.time.keys())
         for f in list(files):
             time_utc = sim_in.time[f].dt.tz_localize(timezone) # Apply UTC to timeseries
             time_utc = time_utc.tolist() # Convert to list
-            
+
             # Loop through all times and calculate azimuth and altitude/elevation
-            solar_angles = np.array([solar.get_position(self.latitude,self.longitude,time.to_pydatetime()) for time in time_utc]) 
+            solar_angles = np.array([solar.get_position(self.latitude,self.longitude,time.to_pydatetime()) for time in time_utc])
             sun.azimuth[f] = solar_angles[:,0] # solar_angles(:,[azimuth,elevation])
             sun.elevation[f] = solar_angles[:,1]
             sun.DNI[f] = np.array([radiation.get_radiation_direct(time.to_pydatetime(),elevation) for time, elevation in zip(time_utc,solar_angles[:,1])])
-            
-        self.sun = sun # update sun in the main model 
-    
+
+        self.sun = sun # update sun in the main model
+
     def helios_angles(self,plant,verbose=True,second_surface=True):
         """
         Calculates the heliostat movement and angles for a given solar field and simulation inputs.
-        
+
         Parameters:
             plant (object): The solar plant object containing information about the plant configuration.
             verbose (bool, optional): Whether to print progress messages. Defaults to True.
             second_surface (bool, optional): Whether to use the second surface model for the incidence reflection factor. Defaults to True.
-        
+
         Returns:
             None
         """
-        sun = self.sun  
+        sun = self.sun
         helios = self.helios
 
         files = list(sun.elevation.keys())
@@ -1527,7 +1527,7 @@ class field_model(soiling_base):
             h_tower = plant.receiver['tower_height']
             helios.dist = np.sqrt(helios.x**2+helios.y**2)                                  # horizontal distance between mirror and tower
             helios.elevation_angle_to_tower = np.degrees(np.arctan((h_tower/helios.dist)))  # elevation angle from heliostats to tower
-            
+
             T_m = np.array([-helios.y,-helios.x,np.ones((len(helios.x)))*h_tower])          # relative position of tower from mirror (left-handed ref.sys.)
             L_m = np.sqrt(np.sum(T_m**2,axis=0))                                            # distance mirror-tower [m]
             t_m = T_m/L_m                                                                   # unit vector in the direction of the tower (from mirror, left-handed ref.sys.)
@@ -1540,23 +1540,23 @@ class field_model(soiling_base):
             THETA_m = np.transpose(THETA_m)                                                 # incident angle (the angle a ray of sun makes with the normal to the surface of the mirrors) in radians
             helios.incidence_angle[f] = np.degrees(THETA_m)                                 # incident angle in degrees
             helios.incidence_angle[f][:,sun.elevation[f]<=stowangle] = np.nan               # heliostats are stored vertically at night facing north
-            
+
             # apply the formula (Guo et al.) to obtain the components of the normal for each mirror
             A_norm = np.zeros((len(helios.x),max(s_m.shape),min(s_m.shape)))
             B_norm = np.sin(THETA_m)/np.sin(2*THETA_m)
             for ii in range(len(helios.x)):
                 A_norm[ii,:,:] = s_m+t_m[:,ii]
-            
+
             N = A_norm[:,:,0]*B_norm                                # north vector
             E = A_norm[:,:,1]*B_norm                                # east vector
             H = A_norm[:,:,2]*B_norm                                # height vector
             N[:,sun.elevation[f]<=stowangle] = 1                    # heliostats are stored at night facing north
             E[:,sun.elevation[f]<=stowangle] = 0                    # heliostats are stored at night facing north
             H[:,sun.elevation[f]<=stowangle] = 0                    # heliostats are stored at night facing north
-            # Nd = np.degrees(np.arctan2(E,N))                      
+            # Nd = np.degrees(np.arctan2(E,N))
             # Ed = np.degrees(np.arctan2(N,E))
-            # Hd = np.degrees(np.arctan2(H,np.sqrt(E**2+N**2)))   
-            
+            # Hd = np.degrees(np.arctan2(H,np.sqrt(E**2+N**2)))
+
             helios.elevation[f] = np.degrees(np.arctan(H/(np.sqrt(N**2+E**2))))         # [deg] elevation angle of the heliostats
             helios.elevation[f][:,sun.elevation[f]<=stowangle] = 90 - helios.stow_tilt  # heliostats are stored at stow_tilt at night facing north
             helios.tilt[f] = 90-helios.elevation[f]                                     # [deg] tilt angle of the heliostats
@@ -1570,24 +1570,24 @@ class field_model(soiling_base):
                 _print_if("Second surface model",verbose)
             else:
                 _print_if("Choose either first or second surface model",verbose)
-   
+
         self.helios = helios
 
     def reflectance_loss(self,simulation_inputs,cleans,verbose=True):
-        
+
         sim_in = simulation_inputs
         N_sims = sim_in.N_simulations
         _print_if("Calculating reflectance losses with cleaning for "+str(N_sims)+" simulations",verbose)
 
         helios = self.helios
         n_helios = helios.x.shape[0]
-        
+
         files = list(sim_in.time.keys())
         for fi in range(len(files)):
             f = files[fi]
             T_days = (sim_in.time[f].iloc[-1]-sim_in.time[f].iloc[0]).days # needs to be more than one day
             n_hours = int(helios.delta_soiled_area[f].shape[1] )
-            
+
             # accumulate soiling between cleans
             temp_soil = np.zeros((n_helios,n_hours))
             temp_soil2 =  np.zeros((n_helios,n_hours))
@@ -1598,25 +1598,25 @@ class field_model(soiling_base):
                 if len(clean_idx)>0 and clean_idx[0]!=0:
                     clean_idx = np.insert(clean_idx,0,0)                # insert clean_idx = 0 to compute soiling since the beginning
                     clean_at_0 = False                                  # true only when sector hh-th is cleaned on day 0
-                if len(clean_idx)==0 or clean_idx[-1]!=(sra.shape[0]):                      
+                if len(clean_idx)==0 or clean_idx[-1]!=(sra.shape[0]):
                     clean_idx = np.append(clean_idx,sra.shape[0])       # append clean_idx = 8760 to compute soiling until the end
-                
+
                 clean_idx_n = np.arange(len(clean_idx))
-                for cc in clean_idx_n[:-1]:  
+                for cc in clean_idx_n[:-1]:
                     temp_soil[hh,clean_idx[cc]:clean_idx[cc+1]] = \
                         np.cumsum(sra[clean_idx[cc]:clean_idx[cc+1]])  # Note: clean_idx = 8760 would be outside sra, but Python interprets it as "till the end"
-                  
+
                 # Run again with initial condition equal to final soiling to obtain an approximation of "steady-state" soiling
                 # if clean_at_0:
                 #     temp_soil2[hh,:] = temp_soil[hh,:]
                 # else:
                 sra[0] = temp_soil[hh,-1]
-                for cc in clean_idx_n[:-1]:                  
+                for cc in clean_idx_n[:-1]:
                     temp_soil2[hh,clean_idx[cc]:clean_idx[cc+1]] = \
                         np.cumsum(sra[clean_idx[cc]:clean_idx[cc+1]])
-                                
+
             helios.soiling_factor[f] = 1-temp_soil2*helios.inc_ref_factor[f]  # hourly soiling factor for each sector of the solar field
-        
+
         self.helios = helios
 
     def optical_efficiency(self,plant,simulation_inputs,climate_file,verbose=True,n_az=10,n_el=10):
@@ -1640,7 +1640,7 @@ class field_model(soiling_base):
             raise ValueError("Location of field_model and climate file do not match")
         if self.timezone_offset != float(tz):
             raise ValueError("Timezone offset of field_model and climate file do not match")
-        
+
         cp = CoPylot()
         r = cp.data_create()
         assert cp.data_set_string(
@@ -1648,7 +1648,7 @@ class field_model(soiling_base):
             "ambient.0.weather_file",
             climate_file,
         )
-        
+
         # layout setup
         assert cp.data_set_number(r,"heliostat.0.height",helios.height)
         assert cp.data_set_number(r,"heliostat.0.width",helios.width)
@@ -1662,11 +1662,11 @@ class field_model(soiling_base):
             assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['width_diameter'])
         elif plant.receiver['receiver_type'] == 'Flat plate':
             assert cp.data_set_number(r,"receiver.0.rec_width",plant.receiver['width_diameter'])
-            try:    
+            try:
                 assert cp.data_set_number(r,"receiver.0.rec_elevation",plant.receiver['orientation_elevation'])
             except:
                 assert cp.data_set_number(r,"receiver.0.rec_elevation",-35)
-        assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['width_diameter']) 
+        assert cp.data_set_number(r,"receiver.0.rec_diameter",plant.receiver['width_diameter'])
         assert cp.data_set_number(r,"receiver.0.rec_height",plant.receiver['panel_height'])
         assert cp.data_set_number(r,"receiver.0.optical_height",plant.receiver['tower_height'])
 
@@ -1677,7 +1677,7 @@ class field_model(soiling_base):
         layout = [[ff['id'][ii],ff['x'][ii],ff['y'][ii],zz[ii]] for ii in range(N_helios)] #[list(id),list(ff['x']),list(ff['y']),list(zz)]
         assert cp.assign_layout(r,layout)
         field = cp.get_layout_info(r)
-        
+
         # simulation parameters
         assert cp.data_set_number(r,"fluxsim.0.flux_time_type",0) # 1 for time simulation, 0 for solar angles
         assert cp.data_set_number(r,"fluxsim.0.flux_dni",1000.0)  # set the simulation DNI to 1000 W/m2. Only used to display indicative receiver power.
@@ -1686,13 +1686,13 @@ class field_model(soiling_base):
         files = list(sim_in.time.keys())
         Ns = len(helios.x)
         helios.optical_efficiency = {f: [] for f in files}
-        az_grid = np.linspace(0,360,num=n_az) 
+        az_grid = np.linspace(0,360,num=n_az)
         el_grid = np.linspace(sun.stow_angle,90,num=n_el)
         eff_grid = np.zeros((Ns,n_az,n_el))
         rec_power_grid = np.zeros((n_az,n_el))
         sec_ids = ff['sector_id'][field['id'].values.astype(int)] # CoPylot re-orders sectors
         fmt = "Getting efficiencies for az={0:.3f}, el={1:.3f}"
-        
+
         # buliding the lookup table for grid of solar angles
         fmt_pwr = "Power absorbed by receiver at DNI=1000 W/m2: {0:.2e} kW"
         for ii in range(len(az_grid)):
@@ -1709,11 +1709,11 @@ class field_model(soiling_base):
                     raise ValueError("SolarPILOT unable to simulate with current parameter configuration")
                 else:
                     _print_if(fmt_pwr.format(dat_summary['Power absorbed by the receiver']),verbose)
-                    
+
                 for kk in range(Ns):
                     idx = np.where(sec_ids==kk)[0]
                     eff_grid[kk,ii,jj] = effs[idx].mean()
-        
+
         # Apply lookup table to simulation
         for f in files:
             T = len(sim_in.time[f])

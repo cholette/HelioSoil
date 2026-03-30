@@ -1,4 +1,4 @@
-# %% Analysis of IMDEA data
+# %% Analysis of redlands data
 main_directory = ".."
 import os
 os.sys.path.append(main_directory)
@@ -18,16 +18,16 @@ import scipy.stats as sps
 
 rcParams['figure.figsize'] = (10, 7)
 
-sp_save_file = f"{main_directory}/results/sp_fitting_results_imdea"
-cm_save_file = f"{main_directory}/results/cm_fitting_results_imdea"
+sp_save_file = f"{main_directory}/results/sp_fitting_results_redlands"
+cm_save_file = f"{main_directory}/results/cm_fitting_results_redlands"
 figure_format = ".pdf"
 reflectometer_incidence_angle = 15 # angle of incidence of reflectometer
-reflectometer_acceptance_angle = 72.5e-3 # half acceptance angle of reflectance measurements
+reflectometer_acceptance_angle = 12.5e-3 # half acceptance angle of reflectance measurements
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
-d = f"{main_directory}/data/imdea/"
+d = f"{main_directory}/data/redlands/"
 time_to_remove_at_end = [0,0,0,0,0,0]
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
-train_mirrors = ["OS_M2_T00"] # which mirrors within the experiments are used for
+train_mirrors = ["OS_M1_T00"] # which mirrors within the experiments are used for
 k_factor = None # None sets equal to 1.0, "import" imports from the file
 dust_type = "PM10"
 use_fitted_dust_distributions = False
@@ -35,16 +35,16 @@ epsilon = 1e-3
 M = 100 # number of Monte Carlo simulations for deposition rate histogram
 
 # %% Get file list and time intervals. Import training data.
-parameter_file = d+"parameters_imdea_experiments.xlsx"
+parameter_file = d+"parameters_redlands_experiments.xlsx"
 if use_fitted_dust_distributions:
     d+="fitted/"
 
 files,all_intervals,exp_mirrors,all_mirrors = smu.get_training_data(d,"experiment_",time_to_remove_at_end=time_to_remove_at_end)
 orientation = [ [s[1] for s in mirrors] for mirrors in exp_mirrors]
 
-# October 2025 (remove nothing, first/last measurement)
-all_intervals[0][0] = np.datetime64('2025-10-06T16:30:00')
-all_intervals[0][1] = np.datetime64('2025-10-10T12:00:00')
+# January/February 2025 (remove nothing, first/last measurement)
+all_intervals[0][0] = np.datetime64('2026-02-05T15:30:00')
+all_intervals[0][1] = np.datetime64('2026-02-09T10:00:00')
 
 testing_intervals = all_intervals
 
@@ -122,7 +122,7 @@ _,_,_ = imodel.plot_soiling_factor( sim_data_train,
                             reflectance_data=reflect_data_train,
                             figsize=(10,10),
                             reflectance_std='measurements',
-                            save_path=f"{main_directory}/results/imdea_semi_physical_training",
+                            save_path=f"{main_directory}/results/redlands_semi_physical_training",
                             fig_title="On Training Data (semi-physical)",
                             orientation_strings=orientation    )
 
@@ -151,7 +151,7 @@ _,_,_ = imodel_constant.plot_soiling_factor(    sim_data_train,
                                                 reflectance_data=reflect_data_train,
                                                 figsize=(10,10),
                                                 reflectance_std='mean',
-                                                save_path=f"{main_directory}/results/imdea_constant_mean_training",
+                                                save_path=f"{main_directory}/results/redlands_constant_mean_training",
                                                 fig_title="On Training Data",
                                                 orientation_strings=orientation    )
 
@@ -202,8 +202,8 @@ fig,ax,ref_data = plot_for_paper(imodel,
                             orientation,
                             legend_shift=(0,0),
                             rows_with_legend=[2],
-                            num_legend_cols=4)
-                            # yticks=(0.93,0.95,0.98,1.0))
+                            num_legend_cols=4,
+                            yticks=(0.95,0.98,1.0))
 
 if use_fitted_dust_distributions:
     fig.savefig(sp_save_file+figure_format,dpi=300,bbox_inches='tight',pad_inches=0.1)
@@ -278,7 +278,7 @@ ax.set_xlabel('Loss (percentage points)',fontsize=fsz+2)
 ax.legend(fontsize=fsz)
 
 fig.set_size_inches(5,4)
-fig.savefig(f"{main_directory}/results/losses_imdea.pdf",dpi=300,bbox_inches='tight',pad_inches=0)
+fig.savefig(f"{main_directory}/results/losses_redlands.pdf",dpi=300,bbox_inches='tight',pad_inches=0)
 
 mirror_idxs = list(range(len(all_mirrors)))
 test_experiments = [f for f in list(range(len(files))) if f not in train_experiments]

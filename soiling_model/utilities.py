@@ -30,7 +30,7 @@ def _import_option_helper(file_list,option):
         assert len(file_list) == len(option), "Please supply a list for {option} containing one string for each experiment. Or, supply a single global type by specifying a string. "
     else:
         option = [option]*len(file_list)
-    
+
     return option
 
 def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_per_truck=1):
@@ -45,8 +45,8 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
 
     # evenly space cleaning ends
     clean_ends = np.linspace(0,n_hours-1,num=n_cleans+1,dtype=int)
-    clean_ends = np.delete(clean_ends,-1) # remove the last clean since (clean at 0 takes care of this) 
-    
+    clean_ends = np.delete(clean_ends,-1) # remove the last clean since (clean at 0 takes care of this)
+
     # shift schedule
     cleans = np.zeros((n_sectors,n_hours))
     idx0 = None  # Initialize idx0
@@ -77,13 +77,13 @@ def simple_annual_cleaning_schedule(n_sectors,n_trucks,n_cleans,dt=1,n_sectors_p
 def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,figsize=(7,12),lgd_label=None,lgd_size = 15):
     """
     Plot the experiment data, including reflectance, dust concentration, rain intensity, wind speed, and relative humidity.
-    
+
     Args:
         simulation_inputs (SimulationInputs): The simulation input data.
         reflectance_data (ReflectanceData): The reflectance data.
         experiment_index (int): The index of the experiment to plot.
         figsize (tuple): The size of the figure.
-    
+
     Returns:
         tuple: The figure and axes objects.
     """
@@ -112,8 +112,8 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
         std_valid = std[valid_indices,ii].squeeze()
         ax[0].errorbar(t_valid,ave_valid,yerr=1.96*std_valid,label=(names[ii][0:5]),marker='o',capsize=4.0)
 
-    ax[0].grid(True) 
-    label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data.reflectometer_incidence_angle[f]) 
+    ax[0].grid(True)
+    label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data.reflectometer_incidence_angle[f])
     ax[0].set_ylabel(label_str)
     ax[0].legend(fontsize=lgd_size,ncol=len(ave)//2)
 
@@ -135,7 +135,7 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
     else:
         rain_nan = np.nan*np.ones(sim_data.time[f].shape)
         ax[2].plot(sim_data.time[f],rain_nan)
-    
+
     ax[2].set_ylabel(r'Rain [mm/hour]',color='blue')
     ax[2].tick_params(axis='y', labelcolor='blue')
     YL = ax[2].get_ylim()
@@ -151,21 +151,21 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
     ax[3].grid(True)
     ax[3].legend(fontsize=lgd_size)
 
-    if len(sim_data.relative_humidity)>0: 
+    if len(sim_data.relative_humidity)>0:
         ax[4].plot(sim_data.time[f],sim_data.relative_humidity[f],color='black',label="measurements")
         ax[4].axhline(y=np.nanmean(sim_data.relative_humidity[f]),color='black',ls='--',label = r"Average = {0:.2f}".format(np.nanmean(sim_data.relative_humidity[f])))
     else:
         rain_nan = np.nan*np.ones(sim_data.time[f].shape)
         ax[4].plot(sim_data.time[f],rain_nan)
-    
+
     label_str = r'Relative Humidity [%]'
     ax[4].set_ylabel(label_str,color='black')
     ax[4].set_xlabel('Date')
     ax[4].tick_params(axis='y', labelcolor='black')
     ax[4].grid(True)
     ax[4].legend(fontsize=lgd_size)
-    
-    if len(sim_data.wind_direction)>0: 
+
+    if len(sim_data.wind_direction)>0:
         figwr,axwr = wind_rose(sim_data,f)
         figwr.tight_layout()
 
@@ -177,12 +177,12 @@ def plot_experiment_data(simulation_inputs,reflectance_data,experiment_index,fig
 def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
     """
     Trims the simulation input data and reflectance data based on the provided trim ranges.
-    
+
     Args:
         simulation_inputs (SimulationInputs): The simulation input data to be trimmed.
         reflectance_data (ReflectanceData): The reflectance data to be trimmed.
         trim_ranges (list, str): The trim ranges to be applied. Can be a list of [lower_bound, upper_bound] for each file, "reflectance_data" to use the reflectance data time range, or "simulation_inputs" to use the simulation input time range.
-    
+
     Returns:
         SimulationInputs, ReflectanceData: The trimmed simulation input and reflectance data.
     """
@@ -193,7 +193,7 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
         if 'time_diff' not in weather_variables:
             weather_variables.append('time_diff')
     else:
-        weather_variables = ['time', 'dt', 'time_diff', 'air_temp', 'wind_speed', 'wind_direction', 
+        weather_variables = ['time', 'dt', 'time_diff', 'air_temp', 'wind_speed', 'wind_direction',
                              'dust_concentration', 'rain_intensity', 'dni', 'relative_humidity']
     sim_dat = deepcopy(simulation_inputs)
     ref_dat = deepcopy(reflectance_data)
@@ -208,16 +208,16 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
         sim_dat.days = {}
 
     for f in files:
-        if isinstance(trim_ranges,list) or isinstance(trim_ranges,np.ndarray):  
+        if isinstance(trim_ranges,list) or isinstance(trim_ranges,np.ndarray):
             assert isinstance(trim_ranges[f],list) or isinstance(trim_ranges[f],np.ndarray), "trim_ranges must be a list of lists or a list of 1D np.arrays"
             lb = trim_ranges[f][0].astype('datetime64[m]') # astype ensure they are comparable
             ub = trim_ranges[f][1].astype('datetime64[m]') # astype ensure they are comparable
         elif trim_ranges=="reflectance_data":
             assert ref_dat is not None, "Reflectance data must be supplied for trim_ranges==""reflectance_data"""
             lb = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, -1])][0].astype('datetime64[m]') # astype ensure they are comparable # modified to last since W1 is missing
-            ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, -1])][-1].astype('datetime64[m]') # astype ensure they are comparable # modified to last since W1 is missing  
-            # lb = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][0].astype('datetime64[m]') # astype ensure they are comparable # 
-            # ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][-1].astype('datetime64[m]') # astype ensure they are comparable #     
+            ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, -1])][-1].astype('datetime64[m]') # astype ensure they are comparable # modified to last since W1 is missing
+            # lb = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][0].astype('datetime64[m]') # astype ensure they are comparable #
+            # ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][-1].astype('datetime64[m]') # astype ensure they are comparable #
         elif trim_ranges == "simulation_inputs":
             lb = sim_dat.time[f].values[0].astype('datetime64[m]') # astype ensure they are comparable
             ub = sim_dat.time[f].values[-1].astype('datetime64[m]') # astype ensure they are comparable
@@ -229,7 +229,7 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
         mask = (sim_dat.time[f]>=lb.astype('datetime64[ns]')) & (sim_dat.time[f]<=ub.astype('datetime64[ns]'))   # .astype('datetime64[ns]') guarantees compatibility with Pandas Timestamp
         if all(mask==0):
             raise ValueError(f"Provided date range of {lb} to {ub} for file {sim_dat.file_name[f]} excludes all data.")
-            
+
         sim_dat.time[f] = sim_dat.time[f][mask]
         sim_dat.time_diff[f] = sim_dat.time_diff[f][mask]
         sim_dat.air_temp[f] = sim_dat.air_temp[f][mask]
@@ -243,14 +243,14 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
             sim_dat.relative_humidity[f] = sim_dat.relative_humidity[f][mask]
         if len(sim_dat.wind_direction)>0:
             sim_dat.wind_direction[f] = sim_dat.wind_direction[f][mask]
-        
+
         # Calculate hourly and daily averages of dust_concentration
         dust_conc_temp = pd.Series(sim_dat.dust_concentration[f], index=pd.to_datetime(sim_dat.time[f]))
         hourly_avg = dust_conc_temp.resample('h').mean()
         daily_avg = dust_conc_temp.resample('D').mean()
 
         sim_dat.hourly_dust_avg[f] = hourly_avg
-        sim_dat.daily_dust_avg[f] = daily_avg            
+        sim_dat.daily_dust_avg[f] = daily_avg
         sim_dat.hours[f] = hourly_avg.index  # Store hourly timestamps
         sim_dat.days[f] = daily_avg.index    # Store daily timestamps
 
@@ -259,7 +259,7 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
             if hasattr(ref_dat,"tilts") and len(ref_dat.tilts)>0:
                 ref_dat.tilts[f] = ref_dat.tilts[f][:,mask]
             mask = (ref_dat.times[f]>=lb) & (ref_dat.times[f]<=ub)
-            ref_dat.times[f] = ref_dat.times[f][mask] 
+            ref_dat.times[f] = ref_dat.times[f][mask]
             ref_dat.average[f] = ref_dat.average[f][mask,:]
             ref_dat.sigma[f] = ref_dat.sigma[f][mask,:]
             ref_dat.sigma_of_the_mean[f] = ref_dat.sigma_of_the_mean[f][mask,:]
@@ -275,11 +275,11 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
             ref_dat.rho0[f] = np.nanmax(ref_dat.average[f], axis=0) # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
             elapsed_time = (ref_dat.times[f][-1] - ref_dat.times[f][0]) / np.timedelta64(1, 'D')            # compute total time in days as a np.float64
             ref_dat.soiling_rate[f] = (ref_dat.average[f][0]-ref_dat.average[f][-1])/elapsed_time*100       # compute soiling rates in p.p./day for each mirror
-            
+
         sim_dat.time[f] = sim_dat.time[f].reset_index(drop=True) # reset indices to start at 0 to allow repeated iterations
-            
-                 
-    
+
+
+
     return sim_dat,ref_dat
 
 def daily_average(ref_dat,time_grids,dt=None):
@@ -312,21 +312,21 @@ def daily_average(ref_dat,time_grids,dt=None):
                                 "sigma": ref_dat.sigma[f][:,ii],
                                 "day":ref_dat.times[f].astype('datetime64[D]')
                                 })
-            
+
             daily = df.groupby("day")
             N = daily.count()['sigma'].values
             sum_var = df.groupby('day')['sigma'].apply(lambda x: sum(x.dropna()**2)).values
             ref_dat_new.sigma[f][:,ii] = np.sqrt(sum_var/N) # pooled variance
             # ref_dat_new.sigma[f] = np.insert(ref_dat_new.sigma[f],0,ref_dat.sigma[f][0])
-            
-            ref_dat_new.sigma_of_the_mean[f][:,ii] = (ref_dat_new.sigma[f][:,ii] / 
+
+            ref_dat_new.sigma_of_the_mean[f][:,ii] = (ref_dat_new.sigma[f][:,ii] /
                                 np.sqrt(ref_dat_new.number_of_measurements[f]))
             # ref_dat_new.sigma_of_the_mean[f] = np.insert(ref_dat_new.sigma_of_the_mean[f],0,ref_dat.sigma_of_the_mean[f][0])
 
             ref_dat_new.average[f][:,ii] = daily.mean().average.values
             ref_dat_new.prediction_indices[f] = []
             ref_dat_new.prediction_times[f] = []
-            
+
             # handle case when time_grids is a pandas something
             if isinstance(time_grids[f],(pd.Series,pd.DataFrame)):
                 tg = time_grids[f].values
@@ -335,7 +335,7 @@ def daily_average(ref_dat,time_grids,dt=None):
 
             for m in ref_dat_new.times[f]:
                 idx = np.argmin(np.abs(m-tg))
-                ref_dat_new.prediction_indices[f].append(idx)        
+                ref_dat_new.prediction_indices[f].append(idx)
             ref_dat_new.prediction_times[f].append(tg[ref_dat_new.prediction_indices[f]])
         ref_dat_new.delta_ref[f] = np.vstack((np.zeros((1, ref_dat_new.average[f].shape[1])), -np.diff(ref_dat_new.average[f], axis=0)))  # compute reflectance loss between subsequent measurements (0 given to first timestamp)
         ref_dat_new.tot_ref_loss[f] = ref_dat_new.average[f][0]-ref_dat_new.average[f][-1]
@@ -357,7 +357,7 @@ def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sa
         if not np.all( fi['Time'].diff()[1::] == dt ): # omit first time, which is NaT
             raise ValueError("Time in file "+f+" is inconsistent with specified dt")
 
-        fi['day'] = fi['Time'].apply(lambda x:x.day) 
+        fi['day'] = fi['Time'].apply(lambda x:x.day)
         fi['month'] = fi['Time'].apply(lambda x:x.month)
         fi['year'] = fi['Time'].apply(lambda x:x.year)
         df = pd.concat((df,fi),ignore_index=True)
@@ -369,7 +369,7 @@ def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sa
     dt_str = str(dt.astype('timedelta64[s]').astype('int'))+'s'
     time_grid = pd.date_range(start=t0,end=tf,freq=dt_str)
     day_grid = pd.date_range(start=t0,end=tf,freq="D")
-    
+
     for n in range(N_sample_years):
         samples = pd.DataFrame(columns=df.columns)
         _print_if("Building sample {0:d} of {1:d}".format(n+1,N_sample_years),verbose)
@@ -400,14 +400,14 @@ def sample_simulation_inputs(historical_files,window=np.timedelta64(30,"D"),N_sa
 def _extinction_function(diameters,lambdas,intensities,acceptance_angle,
                          refractive_index,grid_size_mu=int(1e4),
                          grid_size_x=1000,verbose=False):
-    
+
     # theta_s = np.radians(np.linspace(-180,180,grid_size_theta_s)) # angle of scattering (\theta=0 is direction of radiation)
     m = refractive_index
     lam = lambdas/1000 # nm -> µm
     E = intensities*1000 #W/m^2/nm -> W/m^2/µm
 
     # set up grids
-    # mu = np.sort(np.cos(theta_s)) 
+    # mu = np.sort(np.cos(theta_s))
     aa_cos = np.cos(acceptance_angle)
     mu = np.linspace(-1,aa_cos,num=grid_size_mu)
     _print_if(f"\t Acceptance angle cosine = {aa_cos:.6f}",verbose)
@@ -419,20 +419,20 @@ def _extinction_function(diameters,lambdas,intensities,acceptance_angle,
     Qxg = np.zeros(xg.shape)
     for ii,x in enumerate(xg):
         scat = miepython.i_unpolarized(m,x,mu,'qext')
-        Qxg[ii] = np.trapz(scat,mu)
-    
+        Qxg[ii] = np.trapezoid(scat,mu)
+
     # apply look up table to data
     Qx = np.zeros((len(diameters),len(lam)))
     for ii,d in enumerate(diameters):
         for jj,lamjj in enumerate(lam):
             x = np.pi*d/lamjj
             Qx[ii,jj] = np.interp(x,xg,Qxg)
-    gamma = 2*np.pi*np.trapz(Qx*E,x=lam,axis=1) # for unit irradiance
-    
+    gamma = 2*np.pi*np.trapezoid(Qx*E,x=lam,axis=1) # for unit irradiance
+
     return gamma
 
 def _same_ext_coeff(helios,simulation_data):
-    
+
     sim_dat = simulation_data
     dust = sim_dat.dust
     D = dust.D
@@ -445,7 +445,7 @@ def _same_ext_coeff(helios,simulation_data):
     num_heliostats = [helios.tilt[f].shape[0] for f in files]
     same_dust = np.zeros((len(files),len(files)))
     same_ext = [ [[] for n in range(num_heliostats[f])] for f in files]
-                
+
     for ii,f in enumerate(files):
         for jj,g in enumerate(files):
             if len(D[f]) == len(D[g]):
@@ -460,7 +460,7 @@ def _same_ext_coeff(helios,simulation_data):
 
             if len(intensities[f]) == len(intensities[g]):
                 same_intensity =  np.all(intensities[f] == intensities[g])
-            
+
             same_ref_ind =  (refractive_index[f] == refractive_index[g])
             same_dust[ii,jj] = same_diameters and same_lams \
                 and same_intensity and same_ref_ind
@@ -472,7 +472,7 @@ def _same_ext_coeff(helios,simulation_data):
                     a = phia[f][jj]
                     idx = [(g,mm) for mm,pg in enumerate(phia[g]) if pg==a]
                     same_ext[ii][jj].extend(idx)
-                
+
     return same_ext
 
 def set_extinction_coefficients(destination_model,extinction_weights,file_inds):
@@ -480,15 +480,15 @@ def set_extinction_coefficients(destination_model,extinction_weights,file_inds):
     Directly set extinction weights, e.g. from another model.
 
     This function sets the extinction weights directly. The input extinction_weights
-    is an H-by-D numpy.array, where H is the number of heliostats and D is the number of 
-    diameter bins. Its primary use is to save time, since computation of the Mie 
-    extinction weights can be time-consuming. 
-    
-    The required argument file_inds is a list, and the extinction weights of those 
-    each of these files will be set to the np.array extinction_weights. Note that 
-    the zeroth dimension of extinction_weights must be the same as the number of heliostats 
-    in the destination file (determined by destination_model.helios.tilt). 
-    
+    is an H-by-D numpy.array, where H is the number of heliostats and D is the number of
+    diameter bins. Its primary use is to save time, since computation of the Mie
+    extinction weights can be time-consuming.
+
+    The required argument file_inds is a list, and the extinction weights of those
+    each of these files will be set to the np.array extinction_weights. Note that
+    the zeroth dimension of extinction_weights must be the same as the number of heliostats
+    in the destination file (determined by destination_model.helios.tilt).
+
     """
     dm = destination_model
     ew = extinction_weights
@@ -512,17 +512,17 @@ def set_extinction_coefficients(destination_model,extinction_weights,file_inds):
 def get_training_data(d,file_start,time_to_remove_at_end=0,helios=False):
     """
     Get training data for a soiling model.
-    
+
     This function loads training data from a directory of files, where each file contains
     start and end dates for a training interval, as well as the names of mirrors used
     in the training data.
-    
+
     Args:
         d (str): The directory containing the training data files.
         file_start (str): The prefix of the training data files to load.
         time_to_remove_at_end (int or list[int], optional): The number of hours to remove from the
             end of each training interval. If a list, the length must match the number of files.
-    
+
     Returns:
         tuple:
             - files (list[str]): The full paths to the training data files.
@@ -564,7 +564,7 @@ def get_training_data(d,file_start,time_to_remove_at_end=0,helios=False):
     else:
         for ii,f in enumerate(files):
             mirror_names[ii] = list(pd.read_excel(d+f,sheet_name="Heliostats_Ref").columns[1::])
-        
+
 
     # get mirror names that show up in all files
     common = []
@@ -592,14 +592,14 @@ def _parse_dust_str(dust_type):
 def wind_rose(simulation_data,exp_idx):
     """
     Generate a wind rose plot from the provided simulation data.
-    
+
     Args:
         simulation_data (pandas.DataFrame): A DataFrame containing the simulation data, including wind direction and wind speed.
         exp_idx (int): The index of the experiment to plot.
-    
+
     Returns:
         matplotlib.figure.Figure, windrose.WindroseAxes: The figure and axes objects for the wind rose plot.
-    """ 
+    """
     from windrose import WindroseAxes
     fig = plt.figure()
     wd = simulation_data.wind_direction[exp_idx]
@@ -666,13 +666,13 @@ def soiling_rates_summary(ref_data,sim_data,verbose=False):
             print(f"Campaign {campaign_id}:")
             # Filter results for the current campaign
             campaign_results = [res for res in results if res[0] == campaign_id]
-            
+
             print("  Average Soiling Rates by Tilt:")
             for res in campaign_results:
                 tilt = res[1]
                 avg_rate = res[2]
                 print(f"    Tilt {tilt}: {avg_rate:.2f}")
-            
+
             print("  Initial and Final ave Values by Tilt:")
             for res in campaign_results:
                 tilt = res[1]
@@ -689,20 +689,20 @@ def loss_table_from_sim(sim_res,sim_data):
     for (campaign_idx, tilt), y_data in sim_res.items():
         # Extract time data for the current campaign
         time_data = sim_data.time[campaign_idx]
-        
+
         # # Ensure time_data and y_data lengths match
         if len(time_data) != len(y_data):
             raise ValueError(f"Time and Y data lengths do not match for campaign {campaign_idx}, tilt {tilt}.")
-        
+
         # Calculate elapsed time in days
         elapsed_time = (time_data[time_data.index[-1]] - time_data[0]) / np.timedelta64(1, 'D')
-        
+
         # Calculate initial value, final value, total loss, and average daily loss
         initial_value = y_data[0]
         final_value = y_data[-1]
         total_loss = initial_value - final_value
         avg_daily_loss = total_loss / elapsed_time if elapsed_time > 0 else np.nan
-        
+
         # Append the data to the table
         table_data.append({
             "Campaign": f"Campaign {campaign_idx + 1}",
@@ -731,19 +731,19 @@ def loss_hel_table_from_sim(sim_res_hel,sim_data):  # provide simulated reflecta
 
     # Iterate over campaigns and tilts in the simulation data
     for campaign_idx in range(len(sim_res_hel)):
-        
+
         for hel, y_data in sim_res_hel[campaign_idx].items():
-           
+
             # Calculate elapsed time in days
             elapsed_time = (y_data['Time'][-1]-y_data['Time'][0]).astype('timedelta64[s]')
             elapsed_time = pd.Timedelta(elapsed_time)/ np.timedelta64(1, 'D')
-            
+
             # Calculate initial value, final value, total loss, and average daily loss
             initial_value = y_data['Reflectance'][0]
             final_value = y_data['Reflectance'][-1]
             total_loss = initial_value - final_value
             avg_daily_loss = total_loss / elapsed_time if elapsed_time > 0 else np.nan
-            
+
             # Append the data to the table
             table_data.append({
                 "Campaign": f"Campaign {campaign_idx + 1}",
@@ -777,23 +777,23 @@ def loss_table_from_plot(ax):
             # Check if the word "Tilt" is in the title of the subplot
             if "Tilt" in subplot.get_title():
                 lines = subplot.get_lines()
-                
+
                 # Process only the first line (Mean)
                 line = lines[0]  # The first line is the mean line
                 x_data = line.get_xdata()
                 y_data = line.get_ydata()
-                
+
                 # Calculate metrics
                 initial_value = y_data[0]         # Initial value
                 final_value = y_data[-1]          # Final value
                 elapsed_time = x_data[-1] - x_data[0]  # Time difference
-                
+
                 # Ensure no division by zero
                 if elapsed_time > 0:
                     avg_daily_loss = (initial_value - final_value) / elapsed_time
                 else:
                     avg_daily_loss = np.nan  # Handle edge case for no elapsed time
-                
+
                 # Add to the table
                 table_data.append({
                     "Campaign": f"Campaign {campaign_idx + 1}",
@@ -822,7 +822,7 @@ class DustDistribution():
         This needs a docstring :(
     """
     def __init__(self,params=None,type=None):
-        
+
         self.n_components = None
         self.sub_dists = []
         self.weights = []
@@ -833,7 +833,7 @@ class DustDistribution():
             N = len(params)/3
             assert np.abs(N-np.floor(N))<np.finfo(float).eps, \
                 "Please specify parameters of each component as a 1D numpy.array([weights,mu,sigma])."
-            
+
             N = int(np.floor(N))
             w,mu,sig = params[0:N],params[N:2*N],params[2*N::]
             self.n_components = N
@@ -847,25 +847,25 @@ class DustDistribution():
         for ii in range(self.n_components):
             pdf += self.weights[ii]*self.sub_dists[ii].pdf(x)
         return pdf
-    
+
     def cdf(self,x):
         cdf = 0
         for ii in range(self.n_components):
             cdf += self.weights[ii]*self.sub_dists[ii].cdf(x)
         return cdf
-    
+
     def mean(self):
         m = 0
         sum_weights = sum(self.weights)
         for ii in range(self.n_components):
             m += self.weights[ii]/sum_weights*self.sub_dists[ii].mean()
         return m
-    
+
     def icdf(self,p):
         fun = lambda x: self.cdf(x)-p
         res = spo.fsolve(fun,self.mean())
         return res
-    
+
     def _sse(self,params,log_diameter_values,pm_values):
 
         N = len(params)/3
@@ -878,7 +878,7 @@ class DustDistribution():
         self.weights = w
 
         return np.sum( (self.cdf(log_diameter_values)-pm_values)**2 )
-    
+
     def fit(self,params0,log_diameter_values,pm_values,tol=1e-3):
 
         N = len(params0)/3
@@ -887,7 +887,7 @@ class DustDistribution():
         N = int(np.floor(N))
 
         fun = lambda x: self._sse(x,log_diameter_values,pm_values)
-        
+
         # construct bounds
         lower_bound_w = [0]*N
         lower_bound_mu = [-np.inf]*N
@@ -937,7 +937,7 @@ class DustDistribution():
                 new_weights.append(Ni*1e3)
                 ns = sps.norm(loc=mi,scale=si)
                 new_subs.append(ns)
-            
+
             self.weights = new_weights
             self.sub_dists = new_subs
             self.type = "number"
@@ -956,7 +956,7 @@ class DustDistribution():
                 new_weights.append(Ni*1e6)
                 ns = sps.norm(loc=mi,scale=si)
                 new_subs.append(ns)
-            
+
             self.weights = new_weights
             self.sub_dists = new_subs
             self.type = "number"
@@ -981,7 +981,7 @@ class DustDistribution():
                 new_weights.append(Mi*1e-3)
                 ns = sps.norm(loc=mbari,scale=si)
                 new_subs.append(ns)
-            
+
             self.weights = new_weights
             self.sub_dists = new_subs
             self.type = "mass"
@@ -1007,7 +1007,7 @@ class DustDistribution():
                 new_weights.append(Ai*1e-6)
                 ns = sps.norm(loc=mbari,scale=si)
                 new_subs.append(ns)
-            
+
             self.weights = new_weights
             self.sub_dists = new_subs
             self.type = "area"
@@ -1015,14 +1015,14 @@ class DustDistribution():
         elif self.type.lower() == "mass":
             if rho is None:
                 raise ValueError("Rho cannot be None to convert from mass")
-            
+
             assert isinstance(rho,float), "Particle density must be a scalar float."
             self.convert_to_number(rho)
             self.convert_to_area()
 
     def write_to_file(self,file_name,sheet_name,kind='number',rho=None,verbose=True):
         _print_if("Writing dust distribution to file "+file_name,verbose)
-        
+
         # ensure kind is correct
         if kind.lower() == 'number':
             self.convert_to_number(rho)
@@ -1057,7 +1057,7 @@ class DustDistribution():
             elif cell.value == "sigma":
                 ws.cell(row=cell.row, column=2).value = sig_str
                 ws.cell(row=cell.row, column=4).value = ""
-        
+
         wb.save(filename=file_name)
         wb.close()
 

@@ -2,7 +2,7 @@
 main_directory = ".."
 import os
 os.sys.path.append(main_directory)
- 
+
 # CHOOSE WHETHER TO USE DAILY AVERAGE OF REFLECTANCE VALUES OR NOT
 DAILY_AVERAGE = False
 
@@ -32,8 +32,8 @@ second_surf = True # True if using the second-surface model. Otherwise, use firs
 d = f"{main_directory}/data/port_augusta/"
 time_to_remove_at_end = [0,0,0,0,0,0]
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
-train_mirrors = ["OSE_M2_T00"] #,"ONW_M5_T00"] # which mirrors within the experiments are used for 
-# train_mirrors = ["OSE_M3_T30"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for 
+train_mirrors = ["OSE_M2_T00"] #,"ONW_M5_T00"] # which mirrors within the experiments are used for
+# train_mirrors = ["OSE_M3_T30"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
 dust_type = "TSP"
 number_of_measurements = 6.0
@@ -76,15 +76,15 @@ if DAILY_AVERAGE:
                                            sim_data_train.time,
                                            dt=None)
 
-# Trim (if required) training data 
+# Trim (if required) training data
 sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                                 reflect_data_train,
-                                                                training_intervals 
+                                                                training_intervals
                                                             )
-                                                            
+
 sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                                 reflect_data_train,
-                                                                "reflectance_data" 
+                                                                "reflectance_data"
                                                             )
 
 # %% Plot training data
@@ -119,11 +119,11 @@ if DAILY_AVERAGE:
     reflect_data_total = smu.daily_average(reflect_data_total,
                                            sim_data_total.time,
                                            dt=None)
-    
-# %% Trim data and plot                                                           
+
+# %% Trim data and plot
 sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
                                                                 reflect_data_total,
-                                                                "reflectance_data" 
+                                                                "reflectance_data"
                                                             )
 
 for ii,experiment in enumerate(sim_data_total.dt.keys()):
@@ -160,7 +160,7 @@ if DAILY_AVERAGE:
     fig,ax = plt.subplots(nrows=2,ncols=2,sharey=True,figsize=(16,16))
     fmt = "${0:s}$"
     names = ["SE1",	"SE2",	"SE3",	"SE4",	"SE5",	"NW1",	"NW2",	"NW3",	"NW4",	"NW5"]
-    label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0]) 
+    label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0])
 
     for f,exp in enumerate(files):
         ave = reflect_data_total.average[f]
@@ -172,37 +172,37 @@ if DAILY_AVERAGE:
             ax[f//2,np.mod(f,2)].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=fmt.format(names[ii]),marker='o',capsize=4.0)
         ax[f//2,np.mod(f,2)].grid(True)
         ax[f//2,np.mod(f,2)].xaxis.set_major_formatter(date_format)
-        ax[f//2,np.mod(f,2)].xaxis.set_major_locator(mdates.DayLocator(interval=1)) 
+        ax[f//2,np.mod(f,2)].xaxis.set_major_locator(mdates.DayLocator(interval=1))
         if np.mod(f,2)==0:
-            ax[f//2,np.mod(f,2)].set_ylabel(label_str)            
+            ax[f//2,np.mod(f,2)].set_ylabel(label_str)
         else:
             ax[f//2,np.mod(f,2)].legend(loc='upper left', bbox_to_anchor=(1, 1))
         title_str = "Campaign "+f"{f+1}"
         ax[f//2,np.mod(f,2)].set_title(title_str,fontsize=20)
-        
+
         plt.setp(ax[f//2,np.mod(f,2)].get_xticklabels(), rotation=20, horizontalalignment='right', fontsize=15)
         plt.tight_layout
-    
+
     [[ax[kk, jj].set_ylim((0.855, 0.965)) for jj in range(ax.shape[1])] for kk in range(ax.shape[0])]
-    
+
 # %% PLOT EXPERIMENTAL DATA AFTER DAILY AVERAGE
 
 for f in range(len(files)):
-                
+
     lgd_size=15
     fig,ax = plt.subplots(nrows=3,figsize=(12,15))
 
     ave = reflect_data_total.average[f]
     t = reflect_data_total.times[f]
     std = reflect_data_total.sigma[f]
-    lgd_label = [lg[:5].replace("O","").replace("_M","") for lg in mirror_name_list[f]]      
+    lgd_label = [lg[:5].replace("O","").replace("_M","") for lg in mirror_name_list[f]]
     for ii in range(ave.shape[1]):
         if lgd_label[ii]=='W1':
             ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
         else:
             ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],marker='o',capsize=4.0)
-    ax[0].grid(True) 
-    label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0]) 
+    ax[0].grid(True)
+    label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0])
     ax[0].set_ylabel(label_str)
     ax[0].legend(fontsize=lgd_size,loc='center right',bbox_to_anchor=(1.15,0.5))
     plt.suptitle('Raygen Experiments Summary ',fontsize = 20,x=0.5,y=0.92)
