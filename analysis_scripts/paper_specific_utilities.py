@@ -154,7 +154,13 @@ def plot_for_paper(mod,rdat,sdat,train_experiments,train_mirrors,orientation,
                 ax[jj,ii].set_title("Heliostat")
             else:
                 if jj==0:
-                    ax[jj,ii].set_title(f"Campaign {e+1}, Tilt: {t:.0f}"+r"$^{\circ}$")
+                    if "condor".lower() in sdat.file_name[e].lower():
+                        ax[jj,ii].set_title(f"CONDOR, Tilt: {t:.0f}"+r"$^{\circ}$")
+                    elif "d&s".lower() in sdat.file_name[e].lower():
+                        ax[jj,ii].set_title(f"D&S, Tilt: {t:.0f}"+r"$^{\circ}$")
+                    else:
+                        ax[jj,ii].set_title(f"Campaign {e+1}, Tilt: {t:.0f}"+r"$^{\circ}$")
+
                 else:
                     ax[jj,ii].set_title(f"Tilt: {t:.0f}"+r"$^{\circ}$")
 

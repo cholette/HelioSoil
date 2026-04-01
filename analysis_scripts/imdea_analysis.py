@@ -21,12 +21,12 @@ rcParams['figure.figsize'] = (10, 7)
 sp_save_file = f"{main_directory}/results/sp_fitting_results_imdea"
 cm_save_file = f"{main_directory}/results/cm_fitting_results_imdea"
 figure_format = ".pdf"
-reflectometer_incidence_angle = 15 # angle of incidence of reflectometer
-reflectometer_acceptance_angle = 72.5e-3 # half acceptance angle of reflectance measurements
+reflectometer_incidence_angle = [12, 15] # angle of incidence of reflectometer
+reflectometer_acceptance_angle = [145e-3, 12.5e-3] # half acceptance angle of reflectance measurements [rad]
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
 d = f"{main_directory}/data/imdea/"
 time_to_remove_at_end = [0,0,0,0,0,0]
-train_experiments = [0] # indices for training experiments from 0 to len(files)-1
+train_experiments = [1] # indices for training experiments from 0 to len(files)-1
 train_mirrors = ["OS_M2_T00"] # which mirrors within the experiments are used for
 k_factor = None # None sets equal to 1.0, "import" imports from the file
 dust_type = "PM10"
@@ -53,6 +53,8 @@ extract = lambda x,ind: [x[ii] for ii in ind]
 files_train = extract(files,train_experiments)
 training_intervals = extract(all_intervals,train_experiments)
 testing_intervals = list(all_intervals)
+ref_inc_angle_train = extract(reflectometer_incidence_angle,train_experiments)
+ref_accept_angle_train = extract(reflectometer_acceptance_angle,train_experiments)
 t = [t for t in train_experiments]
 plot_title = "Training: "+str(train_mirrors)+", Exp: "+str(t)
 
@@ -66,8 +68,8 @@ sim_data_train = smb.simulation_inputs( files_train,
 reflect_data_train = smb.reflectance_measurements(  files_train,
                                                     sim_data_train.time,
                                                     number_of_measurements=9.0,
-                                                    reflectometer_incidence_angle=reflectometer_incidence_angle,
-                                                    reflectometer_acceptance_angle=reflectometer_acceptance_angle,
+                                                    reflectometer_incidence_angle=ref_inc_angle_train,
+                                                    reflectometer_acceptance_angle=ref_accept_angle_train,
                                                     import_tilts=True,
                                                     column_names_to_import=train_mirrors
                                                     )
@@ -90,6 +92,8 @@ for ii,experiment in enumerate(train_experiments):
 imodel.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
 imodel.helios.compute_extinction_weights(sim_data_train,imodel.loss_model,
                                          verbose=True,options={'grid_size_x':1000})
+#%% TEST FOR CHANGING EXT WEIGHTS
+
 fig_weights,ax_weights = imodel.helios.plot_extinction_weights(sim_data_train,fig_kwargs={'figsize':(5,7)})
 ext_weights = imodel.helios.extinction_weighting[0].copy()
 
@@ -191,8 +195,12 @@ for ii,experiment in enumerate(sim_data_total.dt.keys()):
 
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total,reflect_data_total,second_surface=second_surf)
-file_inds = np.arange(len(files))
-imodel = smu.set_extinction_coefficients(imodel,ext_weights,file_inds)
+# Recompute extinction weights per instrument: acceptance angles differ strongly between
+# CONDOR (145 mrad, file 0) and D&S (12.5 mrad, file 1). helios_angles() already set
+# acceptance_angles[f] correctly for each file, so compute_extinction_weights will use
+# the right acceptance angle per instrument rather than reusing CONDOR weights for all.
+imodel.helios.compute_extinction_weights(sim_data_total, imodel.loss_model,
+                                         verbose=True, options={'grid_size_x': 1000})
 
 fig,ax,ref_data = plot_for_paper(imodel,
                             reflect_data_total,
@@ -209,6 +217,44 @@ if use_fitted_dust_distributions:
     fig.savefig(sp_save_file+figure_format,dpi=300,bbox_inches='tight',pad_inches=0.1)
 else:
     fig.savefig(sp_save_file+figure_format,dpi=300,bbox_inches='tight',pad_inches=0.1)
+
+# %% Export semi-physical model predictions to Excel
+# fit_instrument reflects which instrument was used for training (keys in sim_data_train
+# are always 0-based regardless of which experiment index was selected)
+r0_export = imodel.helios.nominal_reflectance
+train_fname = sim_data_train.file_name[0]
+if "condor" in train_fname.lower():
+    fit_instrument = "CONDOR"
+elif "d&s" in train_fname.lower():
+    fit_instrument = "D&S"
+else:
+    fit_instrument = f"Exp{train_experiments[0]}"
+sp_excel_path = f"{main_directory}/results/imdea_sp_predictions_fit_{fit_instrument}.xlsx"
+
+with pd.ExcelWriter(sp_excel_path) as writer:
+    for f in sorted(sim_data_total.file_name.keys()):
+        fname = sim_data_total.file_name[f]
+        if "condor" in fname.lower():
+            sheet = "CONDOR"
+        elif "d&s" in fname.lower():
+            sheet = "D&S"
+        else:
+            sheet = f"Exp{f}"
+
+        times        = reflect_data_total.times[f]
+        pred_idx     = reflect_data_total.prediction_indices[f]
+        mirror_names = reflect_data_total.mirror_names[f]
+        measured     = reflect_data_total.average[f]                                  # (N_meas, N_mirrors)
+        predicted    = (r0_export * imodel.helios.soiling_factor[f][:, pred_idx]).T  # (N_meas, N_helios)
+
+        rows = {'Time': times}
+        for h, name in enumerate(mirror_names):
+            rows[f'{name}_measured']  = measured[:, h]
+            rows[f'{name}_predicted'] = predicted[:, h]
+
+        pd.DataFrame(rows).to_excel(writer, sheet_name=sheet, index=False)
+
+print(f"Predictions saved to {sp_excel_path}")
 
 # %% Performance of constant-mean model on total data
 if use_fitted_dust_distributions:
