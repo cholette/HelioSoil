@@ -1,3 +1,5 @@
+# %% 
+
 """Analysis of geometry reflectance model and comparison with models from [1] and [2]
 
 References
@@ -8,7 +10,7 @@ References
 import numpy as np
 import matplotlib.pyplot as plt
 
-normal_cleanliness = [0.95, 0.90, 0.85]
+normal_cleanliness = [0.95, 0.90, 0.85, 0.75]
 d = [1.0, 0.9, 0.5]
 a = []  # [16.78] # reverse engineering from lab soiling results in [2]
 θ = np.arange(5.0, 50, 0.1)

@@ -1951,8 +1951,8 @@ class Heliostats:
             self.y = solar_field[:, 2]  # y cartesian coordinate of each heliostat (N>0)
             self.rho = np.sqrt(
                 self.x**2 + self.y**2
-            )  # angular polar coordinate of each heliostat (E=0, positive counterclockwise)
-            self.theta = np.arctan2(self.y, self.x)  # radial polar coordinate of each heliostat
+            )  # radial polar coordinate of each heliostat 
+            self.theta = np.arctan2(self.y, self.x)  # angular polar coordinate of each heliostat (E=0, positive counterclockwise)
             self.num_radial_sectors = None
             self.num_theta_sectors = None
         elif (
@@ -1968,7 +1968,20 @@ class Heliostats:
             )
             self.num_radial_sectors, self.num_theta_sectors = self.truck.sectors
             self.sectorize_radial(solar_field, n_rho, n_theta)
-        elif table.loc["receiver_type"].Value == "Flat plate":
+        elif table.loc["receiver_type"].Value == "Flat plate" and isinstance(self.truck.sectors, tuple):
+            
+            n_rho, n_theta = self.truck.sectors
+            _print_if(
+                "Sectorizing with {0:d} angular and {1:d} radial sectors".format(n_theta, n_rho),
+                verbose,
+            )
+            self.num_radial_sectors, self.num_theta_sectors = self.truck.sectors
+
+            print(f"Sectorizing field into {n_rho} x {n_theta} sectors ... ")
+            self.sectorize_radial(solar_field,n_rho,n_theta)
+            # self.sectorize_corn_cleaningrows(solar_field,n_hor,n_vert)
+        elif table.loc["receiver_type"].Value == "Flat plate" and isinstance(self.truck.sectors, tuple):
+            print(f"Sectorizing field into {num_sectors} with kmeans ... ")
             n_hor, n_vert = self.truck.sectors
             _print_if(
                 "Sectorizing with {0:d} horizontal and {1:d} vertical sectors".format(
@@ -1980,7 +1993,6 @@ class Heliostats:
             self.sectorize_kmeans_clusters(
                 solar_field, self.truck.sectors[0] * self.truck.sectors[1]
             )
-            # self.sectorize_corn_cleaningrows(solar_field,n_hor,n_vert)
         else:
             raise ValueError("num_sectors must be None or an a 2-tuple of intergers")
 
