@@ -314,7 +314,7 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
         sim_dat.days = {}
 
     for f in files:
-        if isinstance(trim_ranges, list):
+        if isinstance(trim_ranges, list) | isinstance(trim_ranges,np.ndarray):
             assert isinstance(trim_ranges[f], list) or isinstance(
                 trim_ranges[f], np.ndarray
             ), "trim_ranges must be a list of lists or a list of 1D np.arrays"
@@ -783,6 +783,24 @@ def wind_rose(simulation_data, exp_idx):
 
     return fig, wax
 
+def cardinal_to_uv(cardinal: str) -> tuple[float, float]:
+    """
+    Convert a cardinal direction string to (U, V) unit vector components.
+    U: positive = eastward, V: positive = northward.
+    Direction is where the wind is GOING (not coming from).
+    """
+    angles = {
+        'N':   90, 'NNE': 67.5, 'NE':  45, 'ENE': 22.5,
+        'E':    0, 'ESE': -22.5, 'SE': -45, 'SSE': -67.5,
+        'S':  -90, 'SSW': -112.5, 'SW': -135, 'WSW': -157.5,
+        'W':  180, 'WNW': 157.5, 'NW': 135, 'NNW': 112.5,
+    }
+    key = cardinal.strip().upper()
+    if key not in angles:
+        raise ValueError(f"Unknown cardinal direction: '{cardinal}'")
+    
+    theta = np.deg2rad(angles[key])
+    return np.cos(theta), np.sin(theta)
 
 def soiling_rates_summary(ref_data, sim_data, verbose=False):
 
@@ -874,7 +892,6 @@ def soiling_rates_summary(ref_data, sim_data, verbose=False):
                 )
 
     return df_ref_data
-
 
 def loss_table_from_sim(sim_res, sim_data):
     table_data = []
