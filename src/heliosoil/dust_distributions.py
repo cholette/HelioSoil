@@ -1,345 +1,323 @@
-from typing import Union
+from enum import Enum, auto
+from typing import Union, Sequence, Tuple
+
 import scipy.stats as sps
 import scipy.optimize as spo
 import numpy as np
 from .utilities import _print_if
 from openpyxl import load_workbook
+from tqdm import tqdm
 
-from typing import Sequence, Tuple, Union
+import matplotlib.pyplot as plt
+
 NumberArray = Union[np.ndarray, Sequence[float]]
 
-class DustDistribution:
-    """
-    Representation of a mixture of Gaussian distributions in log10(diameter) space.
 
-    This class fits a mixture of normals to cumulative distribution data
-    and provides conversions between number, mass, and area distributed forms.
+class DistributionKind(Enum):
+    """Physical interpretation of a DustDistribution's weights."""
+    NUMBER = 'number'
+    MASS   = 'mass'
+    AREA   = 'area'
+
+
+class GaussianMixtureModel:
+    """
+    Mixture of Gaussian distributions in log10(D/µm) space.
+
+    Parameters are stored as numpy arrays. This class owns the mixture
+    model machinery: density, cumulative distribution, mean, and inverse CDF.
+    It is used as the internal representation inside DustDistribution.
 
     Args:
-        params: Flattened list/array of parameters `[w0,…,wN−1, mu0,…,muN−1, sig0,…,sigN−1]`
-        type: One of 'mass', 'number', 'area' indicating distribution type
+        weights: Component amplitudes, shape (N,). Units depend on the parent
+                 distribution type (µg·m⁻³ for mass, cm⁻³ for number, etc.).
+        mus:     Component means in log10(D/µm), shape (N,).
+        sigmas:  Component standard deviations in log10(D/µm), shape (N,).
     """
 
     def __init__(self,
-                 params: Union[None, NumberArray] = None,
-                 type: Union[None, str] = None) -> None:
+                 weights: NumberArray,
+                 mus: NumberArray,
+                 sigmas: NumberArray) -> None:
+        self.weights = np.asarray(weights, dtype=float)
+        self.mus     = np.asarray(mus,     dtype=float)
+        self.sigmas  = np.asarray(sigmas,  dtype=float)
+        assert len(self.weights) == len(self.mus) == len(self.sigmas), \
+            "weights, mus, and sigmas must all have the same length."
+        assert np.all(self.sigmas > 0), "All sigma values must be positive."
 
-        self.n_components = None
-        self.sub_dists = []
-        self.weights = []
-        self.type = []
-        self.units = []
-        if params is not None:
-            assert type.lower() in [
-                "mass",
-                "number",
-                "area",
-            ], "Please supply a type (mass, number, area)"
-            N = len(params) / 3
-            assert (
-                np.abs(N - np.floor(N)) < np.finfo(float).eps
-            ), "Please specify parameters of each component as a 1D numpy.array([weights,mu,sigma])."
+    @classmethod
+    def from_params(cls, params: NumberArray) -> "GaussianMixtureModel":
+        """
+        Construct from a flat parameter array.
 
-            N = int(np.floor(N))
-            w, mu, sig = params[0:N], params[N : 2 * N], params[2 * N : :]
-            self.n_components = N
-            self.sub_dists = [sps.norm(loc=mu[ii], scale=sig[ii]) for ii in range(N)]
-            self.weights = w
-            self.type = type
-            self._set_units()
+        Args:
+            params: Flat array [w0,...,wN-1, mu0,...,muN-1, sig0,...,sigN-1].
+        Returns:
+            A new GaussianMixtureModel instance.
+        """
+        params = np.asarray(params, dtype=float)
+        N = len(params) // 3
+        assert len(params) == 3 * N, "params length must be divisible by 3."
+        return cls(params[0:N], params[N:2*N], params[2*N:])
 
-    def pdf(self, x: NumberArray) -> np.ndarray:
-        """
-        Compute mixture PDF at `x` (log10 diameter).
-        """
-        pdf = 0
-        for ii in range(self.n_components):
-            pdf += self.weights[ii] * self.sub_dists[ii].pdf(x)
-        return pdf
+    @property
+    def n_components(self) -> int:
+        return len(self.weights)
 
-    def cdf(self, x: NumberArray) -> np.ndarray:
+    def to_params(self) -> np.ndarray:
+        """Return the flat parameter array [w0,..., mu0,..., sig0,...]."""
+        return np.concatenate([self.weights, self.mus, self.sigmas])
+
+    def density(self, log_d: NumberArray) -> np.ndarray:
         """
-        Compute mixture CDF at `x` (log10 diameter).
+        Evaluate the mixture density at log10(D/µm) values.
+
+        Args:
+            log_d: log10(D/1µm) values at which to evaluate.
+        Returns:
+            Mixture density values, same shape as log_d.
         """
-        cdf = 0
-        for ii in range(self.n_components):
-            cdf += self.weights[ii] * self.sub_dists[ii].cdf(x)
-        return cdf
+        return sum(
+            w * sps.norm.pdf(log_d, loc=mu, scale=sig)
+            for w, mu, sig in zip(self.weights, self.mus, self.sigmas)
+        )
+
+    def cumulative(self, log_d: NumberArray) -> np.ndarray:
+        """
+        Evaluate the mixture cumulative distribution at log10(D/µm) values.
+
+        Args:
+            log_d: log10(D/1µm) values at which to evaluate.
+        Returns:
+            Mixture cumulative distribution values, same shape as log_d.
+        """
+        return sum(
+            w * sps.norm.cdf(log_d, loc=mu, scale=sig)
+            for w, mu, sig in zip(self.weights, self.mus, self.sigmas)
+        )
 
     def mean(self) -> float:
-        """
-        Compute the weighted mean (log10 space) of the mixture.
-        """
-        m = 0
-        sum_weights = sum(self.weights)
-        for ii in range(self.n_components):
-            m += self.weights[ii] / sum_weights * self.sub_dists[ii].mean()
-        return m
+        """Weighted mean in log10(D/1µm) space."""
+        return float(np.dot(self.weights / self.weights.sum(), self.mus))
 
     def icdf(self, p: float) -> float:
         """
-        Inverse CDF via root finding on the mixture CDF.
+        Inverse cumulative distribution via root-finding.
 
         Args:
-            p: probability in [0,1]
+            p: Probability in [0, 1].
         Returns:
-            x such that CDF(x) == p
+            log10(D/µm) such that cumulative(log_d) == p.
         """
+        result, = spo.fsolve(lambda x: self.cumulative(x) - p, self.mean())
+        return float(result)
 
-        def residual(x: float) -> float:
-            return float(self.cdf(x) - p)
+    def __repr__(self) -> str:
+        lines = [f"GaussianMixtureModel ({self.n_components} component(s)):"]
+        for i, (w, mu, sig) in enumerate(zip(self.weights, self.mus, self.sigmas)):
+            lines.append(f"  [{i}]  weight={w:.4g},  mu={mu:.4g},  sigma={sig:.4g}")
+        return "\n".join(lines)
 
-        result, = spo.fsolve(residual, self.mean())
-        return result
 
-    def _sse(self,
-        params: NumberArray,
-        log_diameter_values: NumberArray,
-        pm_values: NumberArray) -> float:
-        """Internal least-squares objective on cumulative values."""
+class DustDistribution:
+    """
+    Base class for dust particle size distributions.
 
-        N = len(params) / 3
-        assert (
-            np.abs(N - np.floor(N)) < np.finfo(float).eps
-        ), "Please specify parameters of each component as a 1D numpy.array([weights,mu,sigma])."
-        N = int(np.floor(N))
-        w, mu, sig = params[0:N], params[N : 2 * N], params[2 * N : :]
-        self.n_components = N
-        self.sub_dists = [sps.norm(loc=mu[ii], scale=sig[ii]) for ii in range(N)]
-        self.weights = w
+    Subclasses (NumberDistribution, MassDistribution, AreaDistribution) each
+    set a class-level `kind` and provide `to_number`, `to_mass`, and `to_area`
+    conversion methods that return new instances rather than mutating in place.
 
-        return np.sum((self.cdf(log_diameter_values) - pm_values) ** 2)
+    This class should not be instantiated directly.
 
-    def fit(self,
-        params0: NumberArray,
-        log_diameter_values: NumberArray,
-        cumulative_values: NumberArray,
-        values_type: str = "mass",
-        tol: float = 1e-3) -> spo.OptimizeResult:
+    Args:
+        distribution: A GaussianMixtureModel (or compatible object) holding
+                      the mixture parameters.
+    """
+
+    kind: Union[None, DistributionKind] = None  # overridden by each subclass
+
+    _DENSITY_UNITS = {
+        DistributionKind.MASS:   r"$\frac{\mu g \cdot m^{-3}}{d(\log D)}$",
+        DistributionKind.NUMBER: r"$\frac{\mathrm{cm}^{-3}}{d(\log D)}$",
+        DistributionKind.AREA:   r"$\frac{\mu m^2 \cdot cm^{-3}}{d(\log D)}$",
+    }
+
+    _CUMULATIVE_UNITS = {
+        DistributionKind.MASS:   r"$\mu g \cdot m^{-3}$",
+        DistributionKind.NUMBER: r"$\mathrm{cm}^{-3}$",
+        DistributionKind.AREA:   r"$\mu m^2 \cdot m^{-3}$",
+    }
+
+    def __init__(self, distribution: GaussianMixtureModel) -> None:
+        self.distribution = distribution
+
+    @classmethod
+    def from_params(cls, params: NumberArray) -> "DustDistribution":
         """
-        Fit a mixture to data using bound-constrained least squares.
+        Construct from a flat parameter array.
 
         Args:
-            params0: initial guess parameters [w,mu,sigma]
-            log_diameter_values: sorted log10 diameter values
-            cumulative_values: empirical cumulative values at those points
-            values_type: distribution type of fitted data
+            params: Flat array [w0,...,wN-1, mu0,...,muN-1, sig0,...,sigN-1].
         Returns:
-            The SciPy OptimizeResult
+            A new instance of the calling subclass.
         """
+        return cls(GaussianMixtureModel.from_params(params))
 
-        N = len(params0) / 3
-        assert (
-            np.abs(N - np.floor(N)) < np.finfo(float).eps
-        ), "Please specify parameters of each component as a 1D numpy.array([weights,mu,sigma])."
-        N = int(np.floor(N))
+    # ------------------------------------------------------------------
+    # Units
+    # ------------------------------------------------------------------
 
-        def fun(x):
-            return self._sse(x, log_diameter_values, cumulative_values)
+    @property
+    def units(self,cumulative=False) -> str:
+        """LaTeX units string for the current distribution kind."""
+        if cumulative:
+            return self._CUMULATIVE_UNITS.get(self.kind, "")
+        else: # density
+            return self._DENSITY_UNITS.get(self.kind, "")
 
-        # construct bounds
-        lower_bound_w = [0] * N
-        lower_bound_mu = [-np.inf] * N
-        lower_bound_sig = [0 + tol] * N
-        lb = lower_bound_w + lower_bound_mu + lower_bound_sig  # join lists
-        ub = [np.inf] * len(lb)
 
+    # ------------------------------------------------------------------
+    # Mixture model pass-throughs
+    # ------------------------------------------------------------------
+
+    @property
+    def n_components(self) -> int:
+        return self.distribution.n_components
+
+    def density(self, log_d: NumberArray) -> np.ndarray:
+        """
+        Evaluate the mixture density at log10(D/µm) values.
+
+        Args:
+            log_d: log10(D/µm) values at which to evaluate.
+        Returns:
+            Mixture density values, same shape as log_d.
+        """
+        return self.distribution.density(log_d)
+
+    def cumulative(self, log_d: NumberArray) -> np.ndarray:
+        """
+        Evaluate the mixture cumulative distribution at log10(D/µm) values.
+
+        Args:
+            log_d: log10(D/µm) values at which to evaluate.
+        Returns:
+            Mixture cumulative distribution values, same shape as log_d.
+        """
+        return self.distribution.cumulative(log_d)
+
+    def mean(self) -> float:
+        """Weighted mean in log10(D/µm) space."""
+        return self.distribution.mean()
+
+    def icdf(self, p: float) -> float:
+        """
+        Inverse cumulative distribution via root-finding.
+
+        Args:
+            p: Probability in [0, 1].
+        Returns:
+            log10(D/µm) such that cumulative(log_d) == p.
+        """
+        return self.distribution.icdf(p)
+
+    # ------------------------------------------------------------------
+    # Fitting
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _sse(distribution: GaussianMixtureModel,
+             log_diameter_values: NumberArray,
+             pm_values: NumberArray) -> float:
+        """
+        Sum of squared errors between the mixture CDF and empirical cumulative values.
+
+        Static to prevent the optimiser from mutating the instance during fitting.
+        """
+        residuals = distribution.cumulative(log_diameter_values) - np.asarray(pm_values)
+        return float(np.sum(residuals ** 2))
+
+    @classmethod
+    def fit(cls,
+            params0: NumberArray,
+            log_diameter_values: NumberArray,
+            cumulative_values: NumberArray,
+            tol: float = 1e-3) -> Tuple["DustDistribution", spo.OptimizeResult]:
+        """
+        Fit a mixture to cumulative data using bound-constrained least squares.
+
+        Call on a subclass to produce the correctly typed result, e.g.:
+            dist, res = NumberDistribution.fit(params0, log_d, data)
+
+        Args:
+            params0:             Initial guess, flat array [w, mu, sigma].
+            log_diameter_values: Sorted log10(D/µm) values.
+            cumulative_values:   Empirical cumulative values at those points.
+            tol:                 Lower bound on sigma for each component.
+        Returns:
+            Tuple of (fitted instance of the calling subclass, scipy OptimizeResult).
+        """
+        params0 = np.asarray(params0, dtype=float)
+        N = len(params0) // 3
+        assert len(params0) == 3 * N, "params0 length must be divisible by 3."
+
+        def objective(params: np.ndarray) -> float:
+            return DustDistribution._sse(
+                GaussianMixtureModel.from_params(params),
+                log_diameter_values,
+                cumulative_values,
+            )
+
+        lb = [0.0] * N + [-np.inf] * N + [tol] * N
+        ub = [np.inf] * (3 * N)
         bnds = spo.Bounds(lb=lb, ub=ub, keep_feasible=True)
-        res = spo.minimize(fun, params0, bounds=bnds, tol=1e-8)
+        res = spo.minimize(objective, params0, bounds=bnds, tol=1e-8)
 
-        params = res.x
-        N = int(np.floor(len(params) / 3))
-        w, mu, sig = params[0:N], params[N : 2 * N], params[2 * N : :]
-        self.n_components = N
-        self.sub_dists = [sps.norm(loc=mu[ii], scale=sig[ii]) for ii in range(N)]
-        self.weights = w
-        self.type = values_type
-        self._set_units()
+        return cls(GaussianMixtureModel.from_params(res.x)), res
 
-        return res
-
-    def _set_units(self)-> None:
-        """Internal: set the `units` string based on distribution type."""
-
-        if self.type.lower() == "mass":
-            self.units = r"$\frac{\mu g \cdot m^{{-3}}}{d(\log(D))}$"
-        elif self.type.lower() == "number":
-            self.units = r"$\frac{cm^{{-3}} ] }{d(\log(D))}$"
-        elif self.type.lower() == "area":
-            self.units = r"$\frac{ m^2 \cdot m^{{-3}}}{d(\log(D))}$"
-
-    def convert_to_number(self, rho: float = None) -> None:
-        """
-        Convert this distribution to number.
-
-        Args:
-            rho: particle density in correct units (required for mass → number)
-        """
-        if self.type.lower() == "number":
-            print("Type is already " "number" " ")
-        elif self.type.lower() == "mass":
-            assert isinstance(rho, float), "Particle density must be a scalar float."
-            new_subs = []
-            new_weights = []
-            for ii in range(self.n_components):
-                Mi = self.weights[ii]
-                mbari = self.sub_dists[ii].mean()
-                si = self.sub_dists[ii].std()
-
-                mi = mbari - 3 * si**2 / np.log10(np.e)
-                b = 2 * mi + 6 * si**2 / np.log10(np.e)
-                Ni = 6 * Mi / np.pi / rho * np.exp((mi**2 - 0.25 * b**2) / 2 / si**2)
-
-                new_weights.append(Ni * 1e3)
-                ns = sps.norm(loc=mi, scale=si)
-                new_subs.append(ns)
-
-            self.weights = new_weights
-            self.sub_dists = new_subs
-            self.type = "number"
-            self._set_units()
-        elif self.type.lower() == "area":
-            new_subs = []
-            new_weights = []
-            for ii in range(self.n_components):
-                Ai = self.weights[ii]
-                mbari = self.sub_dists[ii].mean()
-                si = self.sub_dists[ii].std()
-
-                mi = mbari - 2 * si**2 / np.log10(np.e)
-                Ni = (
-                    Ai
-                    / np.pi
-                    * 4
-                    * np.exp((mi**2 - (mi - si**2 / np.log10(np.e)) ** 2) / 2 / si**2)
-                )
-
-                new_weights.append(Ni * 1e6)
-                ns = sps.norm(loc=mi, scale=si)
-                new_subs.append(ns)
-
-            self.weights = new_weights
-            self.sub_dists = new_subs
-            self.type = "number"
-            self._set_units()
-
-    def convert_to_mass(self, rho):
-        """
-        Convert this distribution to mass.
-
-        Args:
-            rho: particle density in correct units (required for number → mass)
-        """
-        assert isinstance(rho, float), "Particle density must be a scalar float."
-        if self.type.lower() == "mass":
-            print("Type is already " "mass" " ")
-        elif self.type.lower() == "number":
-            new_subs = []
-            new_weights = []
-            for ii in range(self.n_components):
-                Ni = self.weights[ii]
-                mi = self.sub_dists[ii].mean()
-                si = self.sub_dists[ii].std()
-
-                b = 2 * mi + 6 * si**2 / np.log10(np.e)
-                mbari = b / 2.0
-                Mi = Ni * np.pi * rho / 6 * np.exp(-(mi**2 - 0.25 * b**2) / 2 / si**2)
-
-                new_weights.append(Mi * 1e-3)
-                ns = sps.norm(loc=mbari, scale=si)
-                new_subs.append(ns)
-
-            self.weights = new_weights
-            self.sub_dists = new_subs
-            self.type = "mass"
-            self._set_units()
-        elif self.type.lower() == "area":
-            print("Convert to number first. ")
-
-    def convert_to_area(self, rho=None):
-        """
-        Convert distribution to area.
-
-        Args:
-            rho: particle density in correct units (required for number <-> mass)
-        """
-
-        if self.type.lower() == "area":
-            print("Type is already " "area" " ")
-        elif self.type.lower() == "number":
-            new_subs = []
-            new_weights = []
-            for ii in range(self.n_components):
-                Ni = self.weights[ii]
-                mi = self.sub_dists[ii].mean()
-                si = self.sub_dists[ii].std()
-
-                mbari = mi + 2 * si**2 / np.log10(np.e)
-                Ai = (
-                    Ni
-                    * np.pi
-                    / 4
-                    * np.exp(-(mi**2 - (mi + si**2 / np.log10(np.e)) ** 2) / 2 / si**2)
-                )
-
-                new_weights.append(Ai * 1e-6)
-                ns = sps.norm(loc=mbari, scale=si)
-                new_subs.append(ns)
-
-            self.weights = new_weights
-            self.sub_dists = new_subs
-            self.type = "area"
-            self._set_units()
-        elif self.type.lower() == "mass":
-            if rho is None:
-                raise ValueError("Rho cannot be None to convert from mass")
-
-            assert isinstance(rho, float), "Particle density must be a scalar float."
-            self.convert_to_number(rho)
-            self.convert_to_area()
+    # ------------------------------------------------------------------
+    # I/O
+    # ------------------------------------------------------------------
 
     def write_to_file(self,
-        file_name: str,
-        sheet_name: str,
-        kind: str = "number",
-        rho: float = None,
-        verbose: bool = True) -> None:
+                      file_name: str,
+                      sheet_name: str,
+                      kind: DistributionKind = None,
+                      rho: float = None,
+                      verbose: bool = True) -> None:
         """
-        Write the fitted distribution to an Excel file.
+        Write the distribution to an Excel file, converting kind if needed.
 
         Args:
-            file_name: path to .xlsx
-            sheet_name: sheet containing dust parameters
-            kind: 'number', 'mass', or 'area'
-            rho: density required for conversions
-            verbose: whether to print status
+            file_name:  Path to .xlsx file.
+            sheet_name: Sheet containing dust parameters.
+            kind:       DistributionKind to write. Defaults to the current kind.
+            rho:        Particle density in g·cm⁻³, required for some conversions.
+            verbose:    Whether to print status.
         """
         _print_if("Writing dust distribution to file " + file_name, verbose)
 
-        # ensure kind is correct
-        if kind.lower() == "number":
-            self.convert_to_number(rho)
-        elif kind.lower(rho) == "mass":
-            self.convert_to_mass(rho)
-        elif kind.lower(rho) == "area":
-            self.convert_to_area(rho)
+        if kind is None or kind == self.kind:
+            target = self
+        elif kind == DistributionKind.NUMBER:
+            target = self.to_number(rho)
+        elif kind == DistributionKind.MASS:
+            target = self.to_mass(rho)
+        elif kind == DistributionKind.AREA:
+            target = self.to_area(rho)
         else:
-            raise ValueError("kind not recognized.")
+            raise ValueError(f"Unrecognised kind: {kind}.")
 
-        # convert to strings and join with ";" delimiter
-        weight_str = [str(s) + ";" for s in self.weights]
-        mu_str = [str(10 ** (self.sub_dists[ii].mean())) for ii in range(self.n_components)]
-        sig_str = [str(10 ** (self.sub_dists[ii].std())) for ii in range(self.n_components)]
-        weight_str = "".join(weight_str)[0:-1]
-        mu_str = "".join(mu_str)[0:-1]
-        sig_str = "".join(sig_str)[0:-1]
+        weight_str = ";".join(str(w)           for w     in target.distribution.weights)
+        mu_str     = ";".join(str(10 ** mu)    for mu    in target.distribution.mus)
+        sig_str    = ";".join(str(10 ** sigma) for sigma in target.distribution.sigmas)
 
-        # write data
         wb = load_workbook(file_name)
         ws = wb[sheet_name]
         for cell in ws["A"]:
             if cell.value == "N_size":
-                ws.cell(row=cell.row, column=2).value = self.n_components
+                ws.cell(row=cell.row, column=2).value = target.n_components
                 ws.cell(row=cell.row, column=4).value = ""
             elif cell.value == "Nd":
                 ws.cell(row=cell.row, column=2).value = weight_str
@@ -350,6 +328,175 @@ class DustDistribution:
             elif cell.value == "sigma":
                 ws.cell(row=cell.row, column=2).value = sig_str
                 ws.cell(row=cell.row, column=4).value = ""
-
         wb.save(filename=file_name)
         wb.close()
+
+    # ------------------------------------------------------------------
+    # Utilities
+    # ------------------------------------------------------------------
+
+    def make_probability(self) -> "DustDistribution":
+        """
+        Return a new instance with component weights normalised to sum to 1.
+        """
+        total = self.distribution.weights.sum()
+        new_gmm = GaussianMixtureModel(
+            self.distribution.weights / total,
+            self.distribution.mus,
+            self.distribution.sigmas,
+        )
+        return type(self)(new_gmm)
+
+    def sample(self, sample_volume):
+        N = self.cumulative(np.inf)
+        Δv = sample_volume
+        N = sps.poisson.rvs(N*Δv)
+
+        w = self.distribution.weights
+        w/=sum(w)
+        mus,sigmas = self.distribution.mus, self.distribution.sigmas
+        n_components = len(w)
+        comp = np.random.choice(n_components,N,p=w)
+        samples = np.zeros(N)
+        for ii in tqdm(range(N)):
+            c = comp[ii]
+            samples[ii] = sps.norm.rvs(loc=mus[c],scale=sigmas[c],size=1)
+        return samples
+       
+    def plot(self,npts=1000,ax=None,lb=1e-4,ub=1.0-1e-4,mplkwds={}):
+
+        if ax is None:
+            fig,ax = plt.subplots()
+        
+        maxN = np.sum(self.distribution.weights)
+        XL,XU = self.icdf(lb*maxN), self.icdf(ub*maxN)
+        x = np.linspace(XL,XU,npts)
+        
+        ax.semilogx(10**x,self.density(x),**mplkwds)
+        ax.set_xlabel('Diameter')
+        ax.set_ylabel(f'Density {self.units}')
+
+        return ax
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__} (kind={self.kind}, density units='{self.units}')\n"
+            f"{self.distribution}"
+        )
+
+
+# ----------------------------------------------------------------------
+# Concrete subclasses
+# ----------------------------------------------------------------------
+
+class NumberDistribution(DustDistribution):
+    """
+    Dust distribution whose weights are number concentrations (cm⁻³).
+
+    Conversions:
+        to_mass(rho)  →  MassDistribution   (requires particle density)
+        to_area()     →  AreaDistribution
+    """
+
+    kind = DistributionKind.NUMBER
+
+    def to_number(self, rho: float = None) -> "NumberDistribution":
+        return self
+
+    def to_mass(self, rho: float = None) -> "MassDistribution":
+        """
+        Convert to mass distribution.
+
+        Args:
+            rho: Particle density in g·cm⁻³.
+        """
+        assert isinstance(rho, float), "rho must be a scalar float."
+        ln10    = np.log10(np.e)
+        ws, mus, sigs = self.distribution.weights, self.distribution.mus, self.distribution.sigmas
+        b        = 2 * mus + 6 * sigs**2 / ln10
+        new_mus  = b / 2.0
+        new_weights = ws * np.pi * rho / 6 * np.exp(-(mus**2 - 0.25 * b**2) / 2 / sigs**2)
+        return MassDistribution(GaussianMixtureModel(new_weights, new_mus, sigs))
+
+    def to_area(self, rho: float = None) -> "AreaDistribution":
+        """Convert to cross-sectional area distribution."""
+        ln10    = np.log10(np.e)
+        ws, mus, sigs = self.distribution.weights, self.distribution.mus, self.distribution.sigmas
+        new_mus = mus + 2 * sigs**2 / ln10
+        new_weights = (ws * np.pi / 4 * np.exp(-(mus**2 - (mus + sigs**2 / ln10)**2) / 2 / sigs**2) * 1e-6 )
+        return AreaDistribution(GaussianMixtureModel(new_weights, new_mus, sigs))
+
+
+class MassDistribution(DustDistribution):
+    """
+    Dust distribution whose weights are mass concentrations (µg·m⁻³).
+
+    Conversions:
+        to_number(rho)  →  NumberDistribution  (requires particle density)
+        to_area(rho)    →  AreaDistribution     (requires particle density; routes via number)
+    """
+
+    kind = DistributionKind.MASS
+
+    def to_number(self, rho: float = None) -> NumberDistribution:
+        """
+        Convert to number distribution.
+
+        Args:
+            rho: Particle density in g·cm⁻³.
+        """
+        assert isinstance(rho, float), "rho must be a scalar float."
+        ln10    = np.log10(np.e)
+        ws, mus, sigs = self.distribution.weights, self.distribution.mus, self.distribution.sigmas
+        new_mus = mus - 3 * sigs**2 / ln10
+        b       = 2 * new_mus + 6 * sigs**2 / ln10
+        new_weights = 6 * ws / np.pi / rho * np.exp((new_mus**2 - 0.25 * b**2) / 2 / sigs**2)
+        return NumberDistribution(GaussianMixtureModel(new_weights, new_mus, sigs))
+
+    def to_mass(self, rho: float = None) -> "MassDistribution":
+        return self
+
+    def to_area(self, rho: float = None) -> "AreaDistribution":
+        """
+        Convert to cross-sectional area distribution (routes through number).
+
+        Args:
+            rho: Particle density in g·cm⁻³.
+        """
+        return self.to_number(rho).to_area()
+
+
+class AreaDistribution(DustDistribution):
+    """
+    Dust distribution whose weights are cross-sectional area concentrations (m²·m⁻³).
+
+    Conversions:
+        to_number()     →  NumberDistribution
+        to_mass(rho)    →  MassDistribution    (requires particle density; routes via number)
+    """
+
+    kind = DistributionKind.AREA
+
+    def to_number(self, rho: float = None) -> NumberDistribution:
+        """Convert to number distribution."""
+        ln10    = np.log10(np.e)
+        ws, mus, sigs = self.distribution.weights, self.distribution.mus, self.distribution.sigmas
+        new_mus = mus - 2 * sigs**2 / ln10
+        new_weights = (
+            ws / np.pi * 4
+            * np.exp((new_mus**2 - (new_mus - sigs**2 / ln10)**2) / 2 / sigs**2)
+            * 1e6
+        )
+        return NumberDistribution(GaussianMixtureModel(new_weights, new_mus, sigs))
+
+    def to_mass(self, rho: float = None) -> MassDistribution:
+        """
+        Convert to mass distribution (routes through number).
+
+        Args:
+            rho: Particle density in g·cm⁻³.
+        """
+        return self.to_number().to_mass(rho)
+
+    def to_area(self, rho: float = None) -> "AreaDistribution":
+        return self
