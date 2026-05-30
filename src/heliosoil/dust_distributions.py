@@ -418,7 +418,7 @@ class NumberDistribution(DustDistribution):
         new_weights = ws * np.pi * rho / 6 * np.exp(-(mus**2 - 0.25 * b**2) / 2 / sigs**2)
         return MassDistribution(GaussianMixtureModel(new_weights, new_mus, sigs))
 
-    def to_area(self, rho: float = None) -> "AreaDistribution":
+    def to_area(self) -> "AreaDistribution":
         """Convert to cross-sectional area distribution."""
         ln10    = np.log10(np.e)
         ws, mus, sigs = self.distribution.weights, self.distribution.mus, self.distribution.sigmas
@@ -426,14 +426,13 @@ class NumberDistribution(DustDistribution):
         new_weights = (ws * np.pi / 4 * np.exp(-(mus**2 - (mus + sigs**2 / ln10)**2) / 2 / sigs**2) * 1e-6 )
         return AreaDistribution(GaussianMixtureModel(new_weights, new_mus, sigs))
 
-
 class MassDistribution(DustDistribution):
     """
     Dust distribution whose weights are mass concentrations (µg·m⁻³).
 
     Conversions:
-        to_number(rho)  →  NumberDistribution  (requires particle density)
-        to_area(rho)    →  AreaDistribution     (requires particle density; routes via number)
+        to_number(rho)  →  NumberDistribution  (requires particle density in g·cm⁻³)
+        to_area(rho)    →  AreaDistribution     (requires particle density in g·cm⁻³)
     """
 
     kind = DistributionKind.MASS

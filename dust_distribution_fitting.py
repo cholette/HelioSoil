@@ -17,36 +17,21 @@ log10_μ = np.log10([0.015,0.054,0.084])
 log10_σ = np.log10([1.6788,3.6058,1.8450])
 params = np.r_[N,log10_μ ,log10_σ]
 
-# dist_old = dd_OLD.DustDistribution(params,'number')
-
-# def plot_old(do):
-#     fig,ax = plt.subplots()
-#     x = np.linspace(-3,3,1000)
-#     ax.semilogx(10**x,do.pdf(x),label='Old')
-#     return ax
-
 # ax = plot_old(dist_old)
 number_dist = dd.NumberDistribution.from_params(params)
-# number_dist.plot(ax=ax,mplkwds={'label':'New','ls':'--'})
-# ax.legend()
-
-
-# dist_old.convert_to_mass(rho=2000.0)
-# ax = plot_old(dist_old)
-# mass_dist = number_dist.to_mass(rho=2.0)
-# mass_dist.plot(ax=ax)
-# ax.legend()
 
 # %% Sample
-
-v = 36 # cm3
+v = 1 # cm3
 samples = number_dist.sample(v)
 
 # %% plotting
 fig,ax = plt.subplots()
-ax.hist(samples,100,density=True)
+ax.hist(samples,10,density=True)
 x = np.linspace(-3,3,1000)
 ax.plot(x,number_dist.density(x))
+ax.set_xticklabels([f'$10^{{{s:.0f}}}$' for s in ax.get_xticks()])
+ax.set_xlabel('Diameter [$\mu$m]')
+ax.set_ylabel(f'Number density [{number_dist.units}]')
 plt.show()
 
 # %%
