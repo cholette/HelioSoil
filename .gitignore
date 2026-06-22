@@ -19,3 +19,4 @@ heliosoil.egg-info/
 docs/_build/
 .soilenv/
 soilenv
+*.exe

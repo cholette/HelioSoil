@@ -119,7 +119,6 @@ class GaussianMixtureModel:
             lines.append(f"  [{i}]  weight={w:.4g},  mu={mu:.4g},  sigma={sig:.4g}")
         return "\n".join(lines)
 
-
 class DustDistribution:
     """
     Base class for dust particle size distributions.
@@ -347,22 +346,53 @@ class DustDistribution:
         )
         return type(self)(new_gmm)
 
-    def sample(self, sample_volume):
-        N = self.cumulative(np.inf)
-        Δv = sample_volume
-        N = sps.poisson.rvs(N*Δv)
+    def sample_bin_counts(self, sample_volume, bin_edges, θ=0.0, sigma_delta=0.0, rng=None):
+        """Draw binned particle counts from the NB generative model.
 
-        w = self.distribution.weights
-        w/=sum(w)
-        mus,sigmas = self.distribution.mus, self.distribution.sigmas
-        n_components = len(w)
-        comp = np.random.choice(n_components,N,p=w)
-        samples = np.zeros(N)
-        for ii in tqdm(range(N)):
-            c = comp[ii]
-            samples[ii] = sps.norm.rvs(loc=mus[c],scale=sigmas[c],size=1)
-        return samples
-       
+        Per the notes (Sec. 3.4):  N_i | α ~ Poisson(α · λ_i),
+            λ_i = V · [F(u_i) − F(l_i)]                       (expected counts in bin i)
+            α   ~ Gamma(1/θ, scale=θ)   (mean 1, Var = θ; == Gamma(r, r) with r = 1/θ)
+        Optionally a per-sample diameter shift δ ~ N(0, sigma_delta) is applied to the
+        bin edges (log10 D). Marginalising α reproduces the NB(total) × multinomial
+        likelihood the fit uses, so this is an exact draw from that model.
+
+        θ = 0 disables the flow noise (α = 1); sigma_delta = 0 disables the shift.
+        Pass `rng` for reproducibility.
+        """
+        rng = rng or np.random.default_rng()
+        edges = np.asarray(bin_edges, float)
+        δ = 0.0 if sigma_delta == 0.0 else rng.normal(0.0, sigma_delta)
+        λ = sample_volume * np.diff(self.cumulative(edges - δ))   # expected counts / bin
+        α = 1.0 if θ == 0.0 else rng.gamma(1.0 / θ, scale=θ)      # shared flow factor
+        return rng.poisson(α * λ)                                 # integer counts
+        
+    def sample_histograms(self, M, sample_volume, bin_edges, θ=0.0, sigma_delta=0.0,
+                      rng=None, return_latents=False):
+        """Draw M binned-count histograms from the PGM model — same distribution,
+        independent flow factor (and optional shift) per period.
+
+        For period m = 0..M-1:
+            N^(m)_i | α_m ~ Poisson(α_m · λ^(m)_i),
+            λ^(m)_i = V_m · [F(u_i − δ_m) − F(l_i − δ_m)],
+            α_m ~ Gamma(1/θ, scale=θ)   (mean 1, Var = θ;  == Gamma(r, r), r = 1/θ),
+            δ_m ~ N(0, sigma_delta).
+        The shared (A, μ, σ) and r are what a joint fit recovers; the spread of the
+        M totals is what identifies r.
+
+        sample_volume : scalar (same V each period) or length-M array (per-period V).
+        Returns counts (M, Nb); if return_latents, also returns (alpha, delta).
+        """
+        rng = rng or np.random.default_rng()
+        edges = np.asarray(bin_edges, float)
+        V     = np.asarray(sample_volume, float) * np.ones(M)            # (M,)
+        delta = np.zeros(M) if sigma_delta == 0.0 else rng.normal(0.0, sigma_delta, M)
+        alpha = np.ones(M)  if θ == 0.0          else rng.gamma(1.0 / θ, scale=θ, size=M)
+
+        F   = self.cumulative(edges[None, :] - delta[:, None])          # (M, Nb+1)
+        lam = V[:, None] * np.diff(F, axis=1)                           # (M, Nb) expected counts
+        counts = rng.poisson(alpha[:, None] * lam)                      # (M, Nb) integer counts
+        return (counts, alpha, delta) if return_latents else counts
+             
     def plot(self,npts=1000,ax=None,lb=1e-4,ub=1.0-1e-4,mplkwds={}):
 
         if ax is None:
@@ -371,10 +401,13 @@ class DustDistribution:
         maxN = np.sum(self.distribution.weights)
         XL,XU = self.icdf(lb*maxN), self.icdf(ub*maxN)
         x = np.linspace(XL,XU,npts)
-        
-        ax.semilogx(10**x,self.density(x),**mplkwds)
-        ax.set_xlabel('Diameter')
-        ax.set_ylabel(f'Density {self.units}')
+
+        ax.plot(x,self.density(x),**mplkwds)
+        ax.set_xlim((x[0],x[-1]))
+        ax.set_xticklabels([f'$10^{{{s:.0f}}}$' for s in ax.get_xticks()])
+        ax.set_xlabel('Diameter [$\mu$m]')
+        ax.set_ylabel(f'Mass density [{self.units}]')
+        ax.legend()
 
         return ax
 
@@ -384,11 +417,9 @@ class DustDistribution:
             f"{self.distribution}"
         )
 
-
 # ----------------------------------------------------------------------
 # Concrete subclasses
 # ----------------------------------------------------------------------
-
 class NumberDistribution(DustDistribution):
     """
     Dust distribution whose weights are number concentrations (cm⁻³).
@@ -463,7 +494,6 @@ class MassDistribution(DustDistribution):
             rho: Particle density in g·cm⁻³.
         """
         return self.to_number(rho).to_area()
-
 
 class AreaDistribution(DustDistribution):
     """
