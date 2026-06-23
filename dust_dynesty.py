@@ -150,7 +150,6 @@ def detected_fraction(edges, mu, sigma, sigma_m=0.0, delta=0.0):
     mu = np.asarray(mu, float)
     return ndtr((e[-1] - mu) / se) - ndtr((e[0] - mu) / se)
 
-
 def unpack_full(theta, edges, cfg, f_floor=1e-12):
     A, mu, sigma, r, sigma_m, delta = cfg.unpack(theta)
     if cfg.detected_amplitude:
@@ -196,7 +195,6 @@ def make_loglike(edges, counts, cfg: ModelConfig, penalty: float = -1e25):
         return float(ll) if np.isfinite(ll) else penalty
 
     return loglike
-
 
 def make_loglike_multi(edges, counts, cfg: ModelConfig, penalty: float = -1e25):
     """Joint log-likelihood for M histograms sharing (A, mu, sigma, r).
@@ -254,6 +252,9 @@ def _lognormal_ppf(u, median, sigma_ln):
     return np.asarray(median, float) * np.exp(np.asarray(sigma_ln, float) * ndtri(u))
 
 
+# ---------------------------------------------------------------------------#
+#  Priors
+# ---------------------------------------------------------------------------#
 @dataclass
 class Priors:
     """Component-wise informative priors. Per-component entries are length-3
@@ -320,6 +321,10 @@ def make_prior_transform(cfg: ModelConfig, pri: Priors):
     Means: independent Normal(mu_loc, mu_scale) (needs separated priors). 
     Widths and amplitudes are component-wise log-normal; r is log-uniform.
     """
+
+    if isinstance(pri, MVNPriors):
+        return make_prior_transform_mvn(cfg, pri)
+    
     K = cfg.n_modes
     mu_loc   = np.asarray(pri.mu_loc, float)[:K]
     mu_scale = np.asarray(pri.mu_scale, float)[:K]
@@ -353,6 +358,73 @@ def make_prior_transform(cfg: ModelConfig, pri: Priors):
         return x
 
     return prior_transform
+
+@dataclass
+class MVNPriors:
+    """Per-mode 3-D (log10 A, mu = log10 D, log10 sigma) multivariate-normal prior.
+    mean: (K, 3); chol: (K, 3, 3) lower Cholesky of each mode's 3x3 covariance.
+    Nuisance priors (r, sigma_m, delta) match Priors."""
+    mean: np.ndarray
+    chol: np.ndarray
+    log10_r_lo: float = -1.0
+    log10_r_hi: float = 4.0
+    sigma_m_median: float = 0.05
+    sigma_m_lnsd:   float = 0.5
+    delta_scale:    float = 0.05
+
+    def __post_init__(self):
+        self.mean = np.asarray(self.mean, float)
+        self.chol = np.asarray(self.chol, float)
+        self.cov = np.ones_like(self.chol)
+        for ii in range(self.chol.shape[0]):
+            self.cov[ii,:,:] = self.chol[ii,:,:] @ (self.chol[ii,:,:].T)
+
+    @property
+    def n_modes(self):
+        return self.mean.shape[0]
+
+    @classmethod
+    def from_samples(cls, mode_samples, ridge=0.0, **nuisance):
+        """mode_samples: list of K arrays, each (n_refs, 3) with columns
+        [amplitude A, diameter mu (um), sigma (log10-D width)] -- your modeK_samples.
+        Estimates a per-mode 3x3 MVN in (log10 A, log10 mu = model mu, log10 sigma)."""
+        K = len(mode_samples)
+        mean = np.empty((K, 3)); chol = np.empty((K, 3, 3))
+        for k, S in enumerate(mode_samples):
+            X = np.log10(np.asarray(S, float))               # log10 of every column
+            mean[k] = X.mean(axis=0)
+            C = np.cov(X, rowvar=False) + ridge * np.eye(3)  # params are the variables
+            chol[k] = np.linalg.cholesky(C)
+        return cls(mean, chol, **nuisance)
+
+
+def make_prior_transform_mvn(cfg: ModelConfig, pri: MVNPriors):
+    """Unit cube -> theta for per-mode 3-D MVN priors. Mode k's three params live
+    at theta slots k, K+k, 2K+k; each is drawn as one correlated 3-vector."""
+    K = cfg.n_modes
+    assert pri.n_modes == K, "MVNPriors n_modes does not match cfg.n_modes."
+    mean, chol = pri.mean, pri.chol
+
+    def prior_transform(u):
+        u = np.asarray(u, float)
+        x = np.empty(cfg.ndim)
+        for k in range(K):
+            z = ndtri(u[[k, K + k, 2 * K + k]])      # 3 iid N(0,1) for this mode
+            v = mean[k] + chol[k] @ z                 # (log10 A, mu, log10 sigma)
+            x[k]         = 10.0 ** v[0]               # amplitude
+            x[K + k]     = v[1]                       # mu = log10 D  (no back-transform)
+            x[2 * K + k] = 10.0 ** v[2]               # sigma
+        idx = 3 * K
+        if cfg.fit_r:
+            x[idx] = 10.0 ** (pri.log10_r_lo + u[idx] * (pri.log10_r_hi - pri.log10_r_lo)); idx += 1
+        if cfg.fit_sigma_m:
+            x[idx] = _lognormal_ppf(u[idx], pri.sigma_m_median, pri.sigma_m_lnsd); idx += 1
+        if cfg.fit_delta:
+            x[idx] = _normal_ppf(u[idx], 0.0, pri.delta_scale); idx += 1
+        return x
+
+    return prior_transform
+
 
 # --------------------------------------------------------------------------- #
 #  Sampler driver

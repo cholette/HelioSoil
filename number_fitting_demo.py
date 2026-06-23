@@ -3,14 +3,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 import heliosoil.dust_distributions as dd
 import pandas as pd
-from dust_dynesty import (ModelConfig, Priors, make_prior_transform,
+from dust_dynesty import (ModelConfig, Priors, MVNPriors, make_prior_transform,
                                   expected_bin_counts, simulate_counts,run_dynesty,
                                   unpack_full)
 
 
 model_file = "fitting_simulated_data_flow_noise.stan"
 modes = 3 # max 3 usually
-automatic_prior = False # need to set physical prior below
+automatic_prior = False     # need to set physical prior below
+multivariate_priors = True  # need to set samples from literature for each moded below
 
 
 # %% Generate binned samples from a known distribution
@@ -22,19 +23,24 @@ automatic_prior = False # need to set physical prior below
 # log10_μ = np.log10([0.0117,0.051231,0.8226])
 # σ_log10 = np.log10([1.71061,2.239,2.512])
 
+# Cholette
+# N = np.array([3000,999.875,100])
+# log10_μ = np.log10([0.012,0.11,0.9])
+# σ_log10 = np.array([0.23,0.19,0.31])
+
 # Urban
-N = np.array([7100,6320,960])
-log10_μ = np.log10([0.0117,0.0373,0.151])
-σ_log10 = np.array([0.232,0.250,0.204])
+# N = np.array([7100,6320,960])
+# log10_μ = np.log10([0.0117,0.0373,0.151])
+# σ_log10 = np.array([0.232,0.250,0.204])
 
 # Rural
-# N = np.array([6650,147,1990])
-# log10_μ = np.log10([0.015,0.054,0.084])
-# σ_log10 = np.log10([1.6788,3.6058,1.8450])
+N = np.array([6650,147,1990])
+log10_μ = np.log10([0.015,0.054,0.084])
+σ_log10 = np.log10([1.6788,3.6058,1.8450])
 
-θ = 0.01 # variance in pump flow rate
+θ = 0.001 # variance in pump flow rate
 r_true = 1.0/θ
-num_hists = 3
+num_hists = 12
 ρ = 2.0 # g/cm3
 
 params = np.r_[N,log10_μ ,σ_log10]
@@ -51,13 +57,22 @@ v = 36.0 # sampling volume [cm3]
 # ================ Simulate with truncation (more Realistic) =================
 bin_edges = pd.read_excel("data/device_bins.xlsx")['Edges'].values
 bin_edges = np.log10(bin_edges)
+bin_centers = bin_edges[0:-1] + 0.5*np.diff(bin_edges)
 # bin_edges = np.log10([0.1, 1.0, 2.5, 4.0, 10.0, 17.0])
 margin = 1.0
 
 
 all_counts= number_dist.sample_histograms(num_hists,v,bin_edges,θ=θ)
 exp_counts = (all_counts/v).sum(axis=1).mean()
-                                   
+
+# Bar chart of counts 
+fig,ax = plt.subplots()
+ax.bar(bin_centers,height=all_counts.mean(axis=0)/v,width=np.diff(bin_edges)[0])
+ax.set_xlabel(r'Log(D [$\mu$m])')
+ax.set_ylabel(r'Average count density [#/$cm^{3}$]')
+ax.set_xticklabels([rf'$10^{{{x:.1f}}}$' for x in ax.get_xticks()])
+fig.tight_layout()
+
 # %% Plotting samples and true distribution
 for ii,counts in enumerate(all_counts):
     fig,ax = plt.subplots()
@@ -76,9 +91,33 @@ for ii,counts in enumerate(all_counts):
     ax.set_title(f'Histogram for sample {ii:d}')
 
 # %% Prior function
-def set_priors(m):
+def set_priors(m=None):
     if automatic_prior:
         pri = Priors.set(k,bin_edges,margin=margin,n_expected=(exp_counts))
+
+    elif multivariate_priors:
+        mode1_samples = np.array([  [7100,0.0117,0.232],
+                                    [133,0.008,0.657],
+                                    [6650,0.015,0.225],
+                                    [3200,0.02,0.161],
+                                    [726,0.002,0.247]])
+
+        mode2_samples = np.array([  [6320,0.0373,0.250],
+                                    [66.6,0.266,0.210],
+                                    [147,0.054,0.557],
+                                    [2900,0.116,0.217],
+                                    [114,0.038,0.770]])
+
+        mode3_samples = np.array([  [960,0.151,0.204],
+                                    [3.1,0.58,0.396],
+                                    [1990,0.084,0.266],
+                                    [0.3,1.8,0.380],
+                                    [0.178,21.6,0.438]])
+        
+        pri = MVNPriors.from_samples([mode1_samples, 
+                                      mode2_samples, 
+                                      mode3_samples])
+
     else:
         if m == 1:
             pri = Priors(mu_loc = (-1.0,), mu_scale= (0.5,),
@@ -97,7 +136,9 @@ def set_priors(m):
                         A_lnsd = (1.628, 1.93, 1.62))
     return pri
 
+ 
 # %% Fit model (note: selection assumes equal prior model probability)
+# Don't use unless priors are non-informative
 if isinstance(modes,list):
     logZ = np.zeros(len(modes))
     print('Selecting number of modes')
@@ -309,14 +350,39 @@ def convert_samples(theta_samples, cfg, edges, rho, source="number"):
     return amp, mu, sig
 
 LD = np.linspace(-3,3,100)
-Am, mu_m, sig_m = convert_samples(eq, cfg, bin_edges, rho=ρ, source="number")   # number -> mass
-dens_mass = np.array([density(LD, Am[i], mu_m[i], sig_m[i]) for i in range(len(Am))])
-lo,med_lo, med, med_hi, hi = np.percentile(dens_mass, [5, 25, 50, 75, 95], axis=0)
+mass_dist = number_dist.to_mass(ρ)
+maxMass = sum(mass_dist.distribution.weights)
 
-fig,ax = plt.subplots()
-ax.plot(LD,med,color='black',label='Median')
-ax.fill_between(LD, lo, hi, alpha=0.25, color='blue', label=f"Posterior {5}\u2013{95}%")
-ax.fill_between(LD, med_lo, med_hi, alpha=0.4, color='blue', label=f"Posterior {25}\u2013{75}%")
-ax = number_dist.to_mass(ρ).plot(ax=ax,mplkwds={'color':"red","ls":'--','label':'Truth'})
+# Prior mass distribution
+Am_prior, mu_m_prior, sig_m_prior = convert_samples(theta_prior, cfg, bin_edges, rho=ρ, source="number")   # number -> mass
+dens_mass_prior = np.array([density(LD, Am_prior[i], mu_m_prior[i], sig_m_prior[i]) for i in range(len(Am_prior))])
+lo_prior,med_lo_prior, med_prior, med_hi_prior, hi_prior = np.percentile(dens_mass_prior, [5, 25, 50, 75, 95], axis=0)
 
-ax.legend()
+fig,ax = plt.subplots(ncols=2,sharey=True,figsize=(10,5))
+ax[0].set_xlim((LD[0],LD[1]))
+ax[0] = mass_dist.plot(ax=ax[0],x_grid=LD,legend=False,
+                       mplkwds={'color':"red","ls":'--','label':'Truth'})
+ax[0].plot(LD,med_prior,color='black',label='Median')
+ax[0].fill_between(LD, lo_prior, hi_prior, alpha=0.25, color='blue', label=f"Posterior {5}\u2013{95}%")
+ax[0].fill_between(LD, med_lo_prior, med_hi_prior, alpha=0.4, color='blue', label=f"Posterior {25}\u2013{75}%")
+ax[0].set_title('Prior Mass')
+ax[0].legend()
+ax[0].set_ylim((0,5000))
+
+# Posterior mass distribution
+Am_post, mu_m_post, sig_m_post = convert_samples(eq, cfg, bin_edges, rho=ρ, source="number")   # number -> mass
+dens_mass_post = np.array([density(LD, Am_post[i], mu_m_post[i], sig_m_post[i]) for i in range(len(Am_post))])
+lo_post,med_lo_post, med_post, med_hi_post, hi_post = np.percentile(dens_mass_post, [5, 25, 50, 75, 95], axis=0)
+
+ax[1] = mass_dist.plot(ax=ax[1],x_grid=LD,legend=False,
+                       mplkwds={'color':"red","ls":'--','label':'Truth'})
+ax[1].plot(LD,med_post,color='black',label='Median')
+ax[1].fill_between(LD, lo_post, hi_post, alpha=0.25, color='blue', label=f"Posterior {5}\u2013{95}%")
+ax[1].fill_between(LD, med_lo_post, med_hi_post, alpha=0.4, color='blue', label=f"Posterior {25}\u2013{75}%")
+ax[1].legend()
+ax[1].set_title('Posterior Mass')
+ax[1].set_ylim((0,100))
+fig.tight_layout()
+
+
+# %%

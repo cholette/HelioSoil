@@ -393,21 +393,27 @@ class DustDistribution:
         counts = rng.poisson(alpha[:, None] * lam)                      # (M, Nb) integer counts
         return (counts, alpha, delta) if return_latents else counts
              
-    def plot(self,npts=1000,ax=None,lb=1e-4,ub=1.0-1e-4,mplkwds={}):
+    def plot(self,npts=1000,ax=None,x_grid=None,lb=1e-4,ub=1.0-1e-4,
+             legend=True,mplkwds={}):
 
         if ax is None:
             fig,ax = plt.subplots()
         
-        maxN = np.sum(self.distribution.weights)
-        XL,XU = self.icdf(lb*maxN), self.icdf(ub*maxN)
-        x = np.linspace(XL,XU,npts)
+        if x_grid is None:
+            maxN = np.sum(self.distribution.weights)
+            XL,XU = self.icdf(lb*maxN), self.icdf(ub*maxN)
+            x = np.linspace(XL,XU,npts)
+        else:
+            x = x_grid
 
         ax.plot(x,self.density(x),**mplkwds)
         ax.set_xlim((x[0],x[-1]))
         ax.set_xticklabels([f'$10^{{{s:.0f}}}$' for s in ax.get_xticks()])
         ax.set_xlabel('Diameter [$\mu$m]')
-        ax.set_ylabel(f'Mass density [{self.units}]')
-        ax.legend()
+        ax.set_ylabel(f'density [{self.units}]')
+
+        if legend:
+            ax.legend()
 
         return ax
 
