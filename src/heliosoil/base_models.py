@@ -1,5 +1,4 @@
 import numpy as np
-from numpy import matlib
 from numpy import radians as rad
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -191,12 +190,12 @@ class PhysicalBase(SoilingBase):
         diffusivity = (
             kB
             / (3 * np.pi * μ_air)
-            * np.transpose(matlib.repmat(air_temp + 273.15, len(D_meters), 1))
-            * matlib.repmat(Cc / D_meters, Ntimes, 1)
+            * (air_temp + 273.15)[:, None]
+            * (Cc / D_meters)[None, :]
         )  # [m^2/s] brownian diffusivity (Stokes-Einstein expression)
         Schmidt_number = ν_air / diffusivity  # Schmidt number
         Stokes_number = (
-            np.transpose(matlib.repmat((u_friction**2), len(D_meters), 1)) * vg / ν_air / g
+            (u_friction**2)[:, None] * vg / ν_air / g
         )  # Stokes number
         Cd_momentum = κ**2 / ((np.log(hrz0)) ** 2)  # drag coefficient for momentum
         E_brownian = Schmidt_number ** (-2 / 3)  # Brownian factor
@@ -219,15 +218,13 @@ class PhysicalBase(SoilingBase):
 
         boundary_layer_resistance = 1 / (
             constants.eps0
-            * np.transpose(matlib.repmat((u_friction), len(D_meters), 1))
+            * u_friction[:, None]
             * R1
             * (E_brownian + E_impaction + E_interception)
         )  # [s/m]
 
-        # Rt = np.transpose(matlib.repmat(aerodynamic_resistance,len(D_meters),1))+boundary_layer_resistance
-
         vt = 1 / (
-            np.transpose(matlib.repmat(aerodynamic_resistance, len(D_meters), 1))
+            np.reshape(aerodynamic_resistance, (-1, 1))
             + boundary_layer_resistance
         )  # [m/s]
 
@@ -321,12 +318,12 @@ class PhysicalBase(SoilingBase):
             diffusivity = (
                 kB
                 / (3 * np.pi * μ_air)
-                * np.transpose(matlib.repmat(sim_in.air_temp[f] + 273.15, len(D_meters), 1))
-                * matlib.repmat(Cc / D_meters, Ntimes, 1)
+                * (sim_in.air_temp[f] + 273.15)[:, None]
+                * (Cc / D_meters)[None, :]
             )  # [m^2/s] brownian diffusivity (Stokes-Einstein expression)
             Schmidt_number = ν_air / diffusivity  # Schmidt number
             Stokes_number = (
-                np.transpose(matlib.repmat((u_friction**2), len(D_meters), 1)) * vg / ν_air / g
+                (u_friction**2)[:, None] * vg / ν_air / g
             )  # Stokes number
             Cd_momentum = κ**2 / ((np.log(hrz0)) ** 2)  # drag coefficient for momentum
             E_brownian = Schmidt_number ** (-2 / 3)  # Brownian factor
@@ -352,15 +349,13 @@ class PhysicalBase(SoilingBase):
 
             boundary_layer_resistance = 1 / (
                 constants.eps0
-                * np.transpose(matlib.repmat((u_friction), len(D_meters), 1))
+                * u_friction[:, None]
                 * R1
                 * (E_brownian + E_impaction + E_interception)
             )  # [s/m]
 
-            # Rt = np.transpose(matlib.repmat(aerodynamic_resistance,len(D_meters),1))+boundary_layer_resistance
-
             vt = 1 / (
-                np.transpose(matlib.repmat(aerodynamic_resistance, len(D_meters), 1))
+                np.reshape(aerodynamic_resistance, (-1, 1))
                 + boundary_layer_resistance
             )  # [m/s]
 
