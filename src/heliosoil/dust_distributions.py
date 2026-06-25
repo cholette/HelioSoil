@@ -119,7 +119,6 @@ class GaussianMixtureModel:
             lines.append(f"  [{i}]  weight={w:.4g},  mu={mu:.4g},  sigma={sig:.4g}")
         return "\n".join(lines)
 
-
 class DustDistribution:
     """
     Base class for dust particle size distributions.
@@ -423,7 +422,7 @@ class NumberDistribution(DustDistribution):
         ln10    = np.log10(np.e)
         ws, mus, sigs = self.distribution.weights, self.distribution.mus, self.distribution.sigmas
         new_mus = mus + 2 * sigs**2 / ln10
-        new_weights = (ws * np.pi / 4 * np.exp(-(mus**2 - (mus + sigs**2 / ln10)**2) / 2 / sigs**2) * 1e-6 )
+        new_weights = (ws * np.pi / 4 * np.exp(2*mus/ln10 + 2/(ln10**2)*sigs**2) * 1e-6 )
         return AreaDistribution(GaussianMixtureModel(new_weights, new_mus, sigs))
 
 class MassDistribution(DustDistribution):
@@ -483,7 +482,7 @@ class AreaDistribution(DustDistribution):
         new_mus = mus - 2 * sigs**2 / ln10
         new_weights = (
             ws / np.pi * 4
-            * np.exp((new_mus**2 - (new_mus - sigs**2 / ln10)**2) / 2 / sigs**2)
+            * np.exp(-2*new_mus/ln10 - 2/(ln10**2)*sigs**2)
             * 1e6
         )
         return NumberDistribution(GaussianMixtureModel(new_weights, new_mus, sigs))

@@ -112,9 +112,16 @@ class PhysicalBase(SoilingBase):
             )
 
     def deposition_velocity(
-        self, dust, wind_speed=None, air_temp=None, hrz0=None, verbose=True, Ra=True
+        self, dust, f, wind_speed=None, air_temp=None, hrz0=None, verbose=True, Ra=True
     ):
-        dust = dust
+        """Settling + inertial/diffusional deposition velocity for one experiment.
+
+        ``dust.D[f]`` and ``dust.rho[f]`` are read for file/experiment index ``f``
+        (required, no default). ``wind_speed`` and ``air_temp`` are the time series
+        for that experiment. Returns
+        ``(aerodynamic_resistance, boundary_layer_resistance, vg, vt, vz)`` with
+        ``vz`` of shape ``(Nd, Ntimes)``.
+        """
 
         # unpack constants
         constants = self.constants
@@ -143,15 +150,14 @@ class PhysicalBase(SoilingBase):
         # N_sims = sim_in.N_simulations
         # _print_if("Calculating deposition velocity for each of the "+str(N_sims)+" simulations",verbose)
 
-        D_meters = dust.D[0] * 1e-6  # µm --> m
-        Ntimes = len(wind_speed)  # .shape[0]
+        D_meters = dust.D[f] * 1e-6  # µm --> m
 
         Cc = 1 + 2 * (λ_air_p / D_meters) * (
             A_slip[0] + A_slip[1] * np.exp(-A_slip[2] * D_meters / λ_air_p)
         )  # slip correction factor
 
         # computation of the gravitational settling velocity
-        vg = (g * (D_meters**2) * Cc * (dust.rho[0])) / (18 * μ_air)
+        vg = (g * (D_meters**2) * Cc * (dust.rho[f])) / (18 * μ_air)
         # terminal velocity [m/s] if Re<0.1
         Re = ρ_air * vg * D_meters / μ_air  # Reynolds number for vg(Re<0.1)
         for ii in range(constants.N_iter):
@@ -170,7 +176,7 @@ class PhysicalBase(SoilingBase):
                 24 / Re[Re > Re_Limit[1]] * (1 + 0.15 * Re[Re > Re_Limit[1]] ** 0.687)
             )
             Cd_g[Re > Re_Limit[2]] = 0.44
-            vg_high_re = np.sqrt(4 * g * D_meters * Cc * dust.rho[0] / (3 * Cd_g * ρ_air))
+            vg_high_re = np.sqrt(4 * g * D_meters * Cc * dust.rho[f] / (3 * Cd_g * ρ_air))
             vnew[Re_Limit[0] >= Re] = vg_high_re[
                 Re_Limit[0] >= Re
             ]  # replace vg with vg_high_re for Re>Re_Limit[0]
@@ -237,130 +243,27 @@ class PhysicalBase(SoilingBase):
         helios = self.helios
         dust = sim_in.dust
 
-        # unpack constants
-        constants = self.constants
-        κ = constants.k_von_Karman
-        A_slip = constants.A_slip
-        λ_air_p = constants.air_lambda_p
-        μ_air, ν_air = constants.air_mu, constants.air_nu
-        ρ_air = constants.air_rho
-        g = constants.g
-        Re_Limit = constants.Re_Limit
-        kB = constants.k_Boltzman
-        β_EIM = constants.beta_EIM
-
-        if hrz0 is None:  # hrz0 from constants file
-            hrz0 = self.hrz0
-            _print_if(
-                "No value for hrz0 supplied. Using value in self.hrz0 = " + str(self.hrz0) + ".",
-                verbose,
-            )
-        else:
-            _print_if(
-                "Value for hrz0 = " + str(hrz0) + " supplied. Value in self.hrz0 ignored.",
-                verbose,
-            )
-
         N_sims = sim_in.N_simulations
         _print_if(
             "Calculating deposition velocity for each of the " + str(N_sims) + " simulations",
             verbose,
         )
 
-        files = list(sim_in.wind_speed.keys())
-        for f in list(files):
-            D_meters = dust.D[f] * 1e-6  # µm --> m
-            Ntimes = len(sim_in.wind_speed[f])  # .shape[0]
+        for f in sim_in.wind_speed:
+            # vertical deposition velocity vz, shape (Nd, Ntimes)
+            *_, vz = self.deposition_velocity(
+                dust,
+                f,
+                wind_speed=sim_in.wind_speed[f],
+                air_temp=sim_in.air_temp[f],
+                hrz0=hrz0,
+                verbose=verbose,
+                Ra=Ra,
+            )
+
             Nhelios = helios.tilt[f].shape[0]
-            Nd = D_meters.shape[0]
-
-            Cc = 1 + 2 * (λ_air_p / D_meters) * (
-                A_slip[0] + A_slip[1] * np.exp(-A_slip[2] * D_meters / λ_air_p)
-            )  # slip correction factor
-
-            # computation of the gravitational settling velocity
-            vg = (g * (D_meters**2) * Cc * (dust.rho[f])) / (18 * μ_air)
-            # terminal velocity [m/s] if Re<0.1
-            Re = ρ_air * vg * D_meters / μ_air  # Reynolds number for vg(Re<0.1)
-            for ii in range(constants.N_iter):
-                vnew = vg.copy()  # initialize vnew with vg
-                Cd_g = 24 / Re
-                Cd_g[Re > Re_Limit[0]] = (
-                    24
-                    / Re[Re > Re_Limit[0]]
-                    * (
-                        1
-                        + 3 / 16 * Re[Re > Re_Limit[0]]
-                        + 9 / 160 * (Re[Re > Re_Limit[0]] ** 2) * np.log(2 * Re[Re > Re_Limit[0]])
-                    )
-                )
-                Cd_g[Re > Re_Limit[1]] = (
-                    24 / Re[Re > Re_Limit[1]] * (1 + 0.15 * Re[Re > Re_Limit[1]] ** 0.687)
-                )
-                Cd_g[Re > Re_Limit[2]] = 0.44
-                vg_high_re = np.sqrt(4 * g * D_meters * Cc * dust.rho[f] / (3 * Cd_g * ρ_air))
-                vnew[Re_Limit[0] >= Re] = vg_high_re[
-                    Re_Limit[0] >= Re
-                ]  # replace vg with vg_high_re for Re>Re_Limit[0]
-                if max(abs(vnew - vg) / vnew) < constants.tol:
-                    vg = vnew
-                    break
-                vg = vnew
-                Re = ρ_air * vg * D_meters / μ_air
-            if ii == constants.N_iter:
-                _print_if(
-                    "Max iter reached in Reynolds calculation for gravitational settling velocity",
-                    verbose,
-                )
-
-            # computation of the settling velocity due to inertia and diffusion
-            u_friction = κ * sim_in.wind_speed[f] / np.log(hrz0)  # [m/s] friction velocity
-            diffusivity = (
-                kB
-                / (3 * np.pi * μ_air)
-                * (sim_in.air_temp[f] + 273.15)[:, None]
-                * (Cc / D_meters)[None, :]
-            )  # [m^2/s] brownian diffusivity (Stokes-Einstein expression)
-            Schmidt_number = ν_air / diffusivity  # Schmidt number
-            Stokes_number = (
-                (u_friction**2)[:, None] * vg / ν_air / g
-            )  # Stokes number
-            Cd_momentum = κ**2 / ((np.log(hrz0)) ** 2)  # drag coefficient for momentum
-            E_brownian = Schmidt_number ** (-2 / 3)  # Brownian factor
-            E_impaction = (Stokes_number**β_EIM) / (
-                constants.alpha_EIM + Stokes_number**β_EIM
-            )  # Impaction factor (Giorgi, 1986)
-            E_interception = 0  # Interception factor (=0 in this model)
-            R1 = np.exp(
-                -np.sqrt(Stokes_number)
-            )  # 'stick' factor for boundary layer resistance computation
-            R1[R1 <= tol] = tol  # to avoid division by 0
-            if Ra:
-                aerodynamic_resistance = 1 / (Cd_momentum * sim_in.wind_speed[f])
-                _print_if("Aerodynamic resistance is considered", verbose)  # [s/m]
-            elif not Ra:
-                aerodynamic_resistance = 0
-                _print_if("Aerodynamic resistance is neglected", verbose)
-            else:
-                _print_if(
-                    "Choose whether or not considering the aerodynamic resistance",
-                    verbose,
-                )
-
-            boundary_layer_resistance = 1 / (
-                constants.eps0
-                * u_friction[:, None]
-                * R1
-                * (E_brownian + E_impaction + E_interception)
-            )  # [s/m]
-
-            vt = 1 / (
-                np.reshape(aerodynamic_resistance, (-1, 1))
-                + boundary_layer_resistance
-            )  # [m/s]
-
-            # computation of vertical deposition velocity
-            vz = (vg + vt).transpose()  # [m/s]
+            Ntimes = len(sim_in.wind_speed[f])
+            Nd = dust.D[f].shape[0]
 
             helios.pdfqN[f] = np.empty((Nhelios, Ntimes, Nd))
             for idx in range(helios.tilt[f].shape[0]):

@@ -17,5 +17,4 @@ dev/
 extinction_lookup_tables/
 heliosoil.egg-info/
 docs/_build/
-.soilenv/
-soilenv
+.pytest_cache/

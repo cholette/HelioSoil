@@ -1,0 +1,21 @@
+{
+  "heliosoil_version": "0.3.0",
+  "numpy_version": "2.2.6",
+  "python": "3.10.11",
+  "platform": "Windows-10-10.0.26100-SP0",
+  "git_sha": "7360eb51de7d89a0b6e31201ece8ad52317e8fa4",
+  "loss_model": "geometry",
+  "config": {
+    "n_trucks": 4,
+    "n_cleans": 10,
+    "cleaning_rate": 330,
+    "dust_type": "PM10",
+    "file": 0
+  },
+  "soiling_factor_shape": [
+    30,
+    8760
+  ],
+  "time_sampling": "hourly (all)",
+  "n_sector_samples": 6
+}

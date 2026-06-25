@@ -1,7 +1,6 @@
 # %% 
 import numpy as np
 import matplotlib.pyplot as plt
-import heliosoil.dust_distributions_OLD as dd_OLD
 import heliosoil.dust_distributions as dd
 import cmdstanpy
 
