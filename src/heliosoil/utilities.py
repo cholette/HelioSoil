@@ -9,6 +9,11 @@ from collections import defaultdict
 os.environ["MIEPYTHON_USE_JIT"] = "1"
 import miepython  # noqa: E402
 
+def sind(theta):
+    return np.sin(np.deg2rad(theta))
+
+def cosd(theta):
+    return np.cos(np.deg2rad(theta))
 
 def get_project_root(subdir: str = None) -> Path:
     """

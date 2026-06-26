@@ -25,6 +25,8 @@ from heliosoil.utilities import (
     _parse_dust_str,
     _to_dict_of_lists,
     get_project_root,
+    cosd,
+    sind
 )
 
 tol = np.finfo(float).eps  # machine floating point precision
@@ -158,28 +160,27 @@ class PhysicalBase(SoilingBase):
 
         # computation of the gravitational settling velocity
         vg = (g * (D_meters**2) * Cc * (dust.rho[f])) / (18 * μ_air)
+        
         # terminal velocity [m/s] if Re<0.1
         Re = ρ_air * vg * D_meters / μ_air  # Reynolds number for vg(Re<0.1)
         for ii in range(constants.N_iter):
             vnew = vg.copy()  # initialize vnew with vg
             Cd_g = 24 / Re
-            Cd_g[Re > Re_Limit[0]] = (
-                24
-                / Re[Re > Re_Limit[0]]
-                * (
-                    1
-                    + 3 / 16 * Re[Re > Re_Limit[0]]
-                    + 9 / 160 * (Re[Re > Re_Limit[0]] ** 2) * np.log(2 * Re[Re > Re_Limit[0]])
-                )
-            )
-            Cd_g[Re > Re_Limit[1]] = (
-                24 / Re[Re > Re_Limit[1]] * (1 + 0.15 * Re[Re > Re_Limit[1]] ** 0.687)
-            )
+
+            mask0 = (Re>Re_Limit[0])
+            Re0 = Re[mask0]
+            Cd_g[mask0] = 24/Re0*(1 + 3/16 * Re0 + 9/160 * (Re0** 2)*np.log(2*Re0)) 
+            
+            mask1 = (Re>Re_Limit[0])
+            Re1 = Re[mask1]
+            Cd_g[mask1] = 24/Re1*(1 + 0.15 * Re1**0.687)
+
             Cd_g[Re > Re_Limit[2]] = 0.44
+            
             vg_high_re = np.sqrt(4 * g * D_meters * Cc * dust.rho[f] / (3 * Cd_g * ρ_air))
-            vnew[Re_Limit[0] >= Re] = vg_high_re[
-                Re_Limit[0] >= Re
-            ]  # replace vg with vg_high_re for Re>Re_Limit[0]
+            
+            # replace vg with vg_high_re for Re>Re_Limit[0]
+            vnew[Re_Limit[0] >= Re] = vg_high_re[Re_Limit[0] >= Re]  
             if max(abs(vnew - vg) / vnew) < constants.tol:
                 vg = vnew
                 break
@@ -193,25 +194,22 @@ class PhysicalBase(SoilingBase):
 
         # computation of the settling velocity due to inertia and diffusion
         u_friction = κ * wind_speed / np.log(hrz0)  # [m/s] friction velocity
-        diffusivity = (
-            kB
-            / (3 * np.pi * μ_air)
-            * (air_temp + 273.15)[:, None]
-            * (Cc / D_meters)[None, :]
-        )  # [m^2/s] brownian diffusivity (Stokes-Einstein expression)
+
+        # [m^2/s] brownian diffusivity (Stokes-Einstein expression)
+        temp_K = (air_temp + 273.15)[:, None]
+        diffusivity = (kB/(3 * np.pi * μ_air)*temp_K*(Cc / D_meters)[None, :])  
+        
         Schmidt_number = ν_air / diffusivity  # Schmidt number
-        Stokes_number = (
-            (u_friction**2)[:, None] * vg / ν_air / g
-        )  # Stokes number
+        Stokes_number = ((u_friction**2)[:, None] * vg / ν_air / g)  # Stokes number
         Cd_momentum = κ**2 / ((np.log(hrz0)) ** 2)  # drag coefficient for momentum
         E_brownian = Schmidt_number ** (-2 / 3)  # Brownian factor
-        E_impaction = (Stokes_number**β_EIM) / (
-            constants.alpha_EIM + Stokes_number**β_EIM
-        )  # Impaction factor (Giorgi, 1986)
+
+        # Impaction factor (Giorgi, 1986)
+        E_impaction = (Stokes_number**β_EIM) / (constants.alpha_EIM + Stokes_number**β_EIM)  
         E_interception = 0  # Interception factor (=0 in this model)
-        R1 = np.exp(
-            -np.sqrt(Stokes_number)
-        )  # 'stick' factor for boundary layer resistance computation
+
+        # 'stick' factor for boundary layer resistance computation
+        R1 = np.exp(-np.sqrt(Stokes_number))  
         R1[R1 <= tol] = tol  # to avoid division by 0
         if Ra:
             aerodynamic_resistance = 1 / (Cd_momentum * wind_speed)
@@ -222,18 +220,10 @@ class PhysicalBase(SoilingBase):
         else:
             _print_if("Choose whether or not considering the aerodynamic resistance", verbose)
 
-        boundary_layer_resistance = 1 / (
-            constants.eps0
-            * u_friction[:, None]
-            * R1
-            * (E_brownian + E_impaction + E_interception)
-        )  # [s/m]
+        boundary_layer_resistance = 1/(constants.eps0*u_friction[:, None]*R1*
+                                       (E_brownian + E_impaction + E_interception))  # [s/m]
 
-        vt = 1 / (
-            np.reshape(aerodynamic_resistance, (-1, 1))
-            + boundary_layer_resistance
-        )  # [m/s]
-
+        vt = 1/( np.reshape(aerodynamic_resistance, (-1, 1)) + boundary_layer_resistance )  #[m/s]
         vz = (vg + vt).transpose()  # [m/s]
 
         return (aerodynamic_resistance, boundary_layer_resistance, vg, vt, vz)
@@ -267,9 +257,10 @@ class PhysicalBase(SoilingBase):
 
             helios.pdfqN[f] = np.empty((Nhelios, Ntimes, Nd))
             for idx in range(helios.tilt[f].shape[0]):
-                Fd = (
-                    np.cos(rad(helios.tilt[f][idx, :])) * vz
-                )  # Flux per unit concentration at each time, for each heliostat [m/s] (Eq. 28 in [1] without Cd)
+                
+                # Flux per unit concentration at each time, for each heliostat [m/s] (Eq. 28 in [1] without Cd)
+                Fd = (cosd(helios.tilt[f][idx, :]) * vz)  
+                
                 if Fd.min() < 0:
                     warnings.warn(
                         "Deposition velocity is negative (min value: "
@@ -294,61 +285,54 @@ class PhysicalBase(SoilingBase):
 
         for f in files:
             D_meters = dust.D[f] * 1e-6  # Change to µm
-            youngs_modulus_composite = (
-                4
-                / 3
-                * (
-                    (1 - dust.poisson[f] ** 2) / dust.youngs_modulus[f]
-                    + (1 - helios.poisson**2) / helios.youngs_modulus
-                )
-                ** (-1)
-            )
-            # [N/m2] composite Young modulus
-            hamaker_system = np.sqrt(
-                dust.hamaker[f] * helios.hamaker
-            )  # [J] system Hamaker constant (Israelachvili)
-            work_adh = hamaker_system / (12 * np.pi * constants.D0**2)  # [J/m^2] work of adhesion
-            radius_sep = (
-                (3 * np.pi * work_adh * D_meters**2) / (8 * youngs_modulus_composite)
-            ) ** (
-                1 / 3
-            )  # [m] contact radius at separation (JKR model)
-            F_adhesion = (
-                3 / 4 * np.pi * work_adh * D_meters
-            )  # [N] van der Waals adhesion force (JKR model)
-            F_gravity = dust.rho[f] * np.pi / 6 * g * D_meters**3  # [N] weight force
 
-            if (
-                helios.stow_tilt is None
-            ):  # No common stow angle supplied. Need to use raw tilts to compute removal moments
+            # composite Young modulus [N/m^2]
+            dust_compliance = (1 - dust.poisson[f] ** 2) / dust.youngs_modulus[f]
+            helios_compliance = (1 - helios.poisson**2) / helios.youngs_modulus
+            youngs_modulus_composite = 4 / 3 / (dust_compliance + helios_compliance)
+
+            # [J] system Hamaker constant (Israelachvili)
+            hamaker_system = np.sqrt(dust.hamaker[f] * helios.hamaker)  
+            work_adh = hamaker_system / (12 * np.pi * constants.D0**2)  # [J/m^2] work of adhesion
+
+            # [m] contact radius at separation (JKR model)
+            radius_sep = ((3*np.pi*work_adh*D_meters**2)/(8*youngs_modulus_composite))**(1/3)
+
+            # [N] van der Waals adhesion force (JKR model)
+            F_adhesion = (3 / 4 * np.pi * work_adh * D_meters)  
+            
+            # [N] weight force
+            F_gravity = dust.rho[f] * np.pi / 6 * g * D_meters**3  
+
+            if helios.stow_tilt is None: # (No stow, use raw tilts) 
                 _print_if(
                     "  No common stow_tilt. Use values in helios.tilt to compute removal moments. This might take some time.",
                     verbose,
                 )
                 Nhelios = helios.tilt[f].shape[0]
                 Ntimes = helios.tilt[f].shape[1]
-                helios.pdfqN[f] = cumulative_trapezoid(
-                    y=helios.pdfqN[f], dx=dt[f], axis=1, initial=0
-                )  # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
+
+                # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
+                helios.pdfqN[f]= cumulative_trapezoid(y=helios.pdfqN[f], dx=dt[f], 
+                                                      axis=1, initial=0)  
                 for h in range(Nhelios):
                     for k in range(Ntimes):
-                        mom_removal = (
-                            np.sin(rad(helios.tilt[f][h, k]))
-                            * F_gravity
-                            * np.sqrt((D_meters**2) / 4 - radius_sep**2)
-                        )  # [Nm] removal moment exerted by gravity at each tilt for each diameter
-                        mom_adhesion = (
-                            F_adhesion + F_gravity * np.cos(rad(helios.tilt[f][h, k]))
-                        ) * radius_sep  # [Nm] adhesion moment
-                        helios.pdfqN[f][
-                            h, k:, mom_adhesion < mom_removal
-                        ] = 0  # ALL dust desposited at this diameter up to this point falls off
-                        # if any(mom_adhesion<mom_removal):
-                        #     _print_if("Some dust is removed",verbose)
 
-                helios.pdfqN[f] = np.gradient(
-                    helios.pdfqN[f], dt[f], axis=1
-                )  # Take derivative so that pdfqN is the rate at wich dust is deposited at each diameter
+                        # [Nm] removal moment exerted by gravity at each tilt for each diameter
+                        mom_removal= (sind(helios.tilt[f][h, k])*F_gravity*np.sqrt((D_meters**2)/4
+                                                                                    - radius_sep**2))  
+
+                        # [Nm] adhesion moment
+                        mom_adhesion= (F_adhesion+F_gravity*cosd(helios.tilt[f][h, k]))*radius_sep
+
+                        # ALL dust desposited at this diameter up to this point falls off
+                        helios.pdfqN[f][h, k:, mom_adhesion < mom_removal] = 0  
+
+                        if any(mom_adhesion<mom_removal):
+                            _print_if("Some dust is removed",verbose)
+
+                # Take derivative so that pdfqN is the rate at wich dust is deposited at each diameter
+                helios.pdfqN[f] = np.gradient(helios.pdfqN[f], dt[f], axis=1)  
 
             else:  # common stow angle at night for all heliostats. Assumes tilt at night is close to vertical at night.
                 # Since the heliostats are stowed at a large tilt angle at night, we assume that any dust that falls off at this stow
@@ -357,17 +341,16 @@ class PhysicalBase(SoilingBase):
                     "  Using common stow_tilt. Assumes all heliostats are stored at helios.stow_tilt at night.",
                     verbose,
                 )
-                mom_removal = (
-                    np.sin(rad(helios.stow_tilt))
-                    * F_gravity
-                    * np.sqrt((D_meters**2) / 4 - radius_sep**2)
-                )  # [Nm] removal moment exerted by gravity
-                mom_adhesion = (
-                    F_adhesion + F_gravity * np.cos(rad(helios.stow_tilt))
-                ) * radius_sep  # [Nm] adhesion moment
-                helios.pdfqN[f][
-                    :, :, mom_adhesion < mom_removal
-                ] = 0  # Remove this diameter from consideration
+                
+                # [Nm] removal moment exerted by gravity
+                mom_removal = (sind(helios.stow_tilt)*F_gravity*np.sqrt((D_meters**2)/4 
+                                                                        - radius_sep**2))
+                
+                # [Nm] adhesion moment
+                mom_adhesion = (F_adhesion + F_gravity * cosd(helios.stow_tilt))*radius_sep  
+
+                # Remove this diameter from consideration
+                helios.pdfqN[f][:, :, mom_adhesion < mom_removal] = 0  
 
         self.helios = helios
 
@@ -384,6 +367,7 @@ class PhysicalBase(SoilingBase):
         files = list(sim_in.wind_speed.keys())
         for f in files:
             D_meters = dust.D[f] * 1e-6
+            D2 = D_meters**2
             helios.delta_soiled_area[f] = np.empty(
                 (helios.tilt[f].shape[0], helios.tilt[f].shape[1])
             )
@@ -410,7 +394,9 @@ class PhysicalBase(SoilingBase):
             # Compute the area coverage by dust at each time step
             N_helios = helios.tilt[f].shape[0]
             N_times = helios.tilt[f].shape[1]
+            DT = sim_in.dt[f]
             for ii in range(N_helios):
+                ext_weights = extinction_weighting[f][ii, :]
                 for jj in range(N_times):
 
                     # if loss_model == 'geometry':
@@ -423,48 +409,26 @@ class PhysicalBase(SoilingBase):
                     #     helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.pi/4 *np.trapezoid(helios.pdfqN[f][ii,jj,:]*\
                     #         (D_meters**2)*sim_in.dt[f],np.log10(dust.D[f]))
                     # else: # loss_model == "mie"
-                    helios.delta_soiled_area[f][ii, jj] = (
-                        alpha[jj]
-                        * np.pi
-                        / 4
-                        * np.trapezoid(
-                            helios.pdfqN[f][ii, jj, :]
-                            * (D_meters**2)
-                            * sim_in.dt[f]
-                            * extinction_weighting[f][ii, :],
-                            np.log10(dust.D[f]),
-                        )
-                    )  # pdfqN includes cos(tilt)
+
+                    # pdfqN includes cos(tilt)
+                    number_density = helios.pdfqN[f][ii, jj, :]
+                    int_val = np.trapezoid(number_density*D2*DT*ext_weights,np.log10(dust.D[f]),)
+                    helios.delta_soiled_area[f][ii, jj] = (alpha[jj]*np.pi/4*int_val)  
 
             # variance of noise for each measurement
             if sigma_dep is not None:
                 theta = np.radians(self.helios.tilt[f])
-                helios.delta_soiled_area_variance[f] = sigma_dep**2 * (
-                    alpha**2 * np.cos(theta) ** 2
-                )
+                helios.delta_soiled_area_variance[f]= sigma_dep**2 * (alpha**2 * np.cos(theta)**2)
 
             elif self.sigma_dep is not None:
                 theta = np.radians(self.helios.tilt[f])
-                helios.delta_soiled_area_variance[f] = self.sigma_dep**2 * (
-                    alpha**2 * np.cos(theta) ** 2
-                )
+                sigma_dep = self.sigma_dep
+                helios.delta_soiled_area_variance[f]= sigma_dep**2 * (alpha**2 * np.cos(theta)**2)
 
         self.helios = helios
 
-    def plot_area_flux(
-        self,
-        sim_data,
-        exp_idx,
-        hel_id,
-        air_temp,
-        wind_speed,
-        tilt=0.0,
-        hrz0=None,
-        constants=None,
-        ax=None,
-        Ra=True,
-        verbose=True,
-    ):
+    def plot_area_flux(self,sim_data,exp_idx,hel_id,air_temp, wind_speed,tilt=0.0,hrz0=None,
+                       constants=None, ax=None, Ra=True, verbose=True):
 
         dummy_sim = SimulationInputs()
         dummy_sim.dust = Dust()
@@ -624,7 +588,7 @@ class ConstantMeanBase(SoilingBase):
             for ii in range(N_helios):
                 for jj in range(N_times):
                     helios.delta_soiled_area[f][ii, jj] = (
-                        alpha[jj] * np.cos(rad(helios.tilt[f][ii, jj])) * mu_tilde
+                        alpha[jj] * cosd(helios.tilt[f][ii, jj]) * mu_tilde
                     )
 
             # Predict confidence interval if sigma_dep is defined. Fixed tilt assumed in this class.
