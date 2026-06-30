@@ -1,5 +1,4 @@
 import numpy as np
-from numpy import radians as rad
 import pandas as pd
 import matplotlib.pyplot as plt
 import warnings
@@ -28,6 +27,7 @@ from heliosoil.utilities import (
     cosd,
     sind
 )
+from heliosoil.dust_distributions import GaussianMixtureModel, NumberDistribution
 
 tol = np.finfo(float).eps  # machine floating point precision
 
@@ -160,7 +160,7 @@ class PhysicalBase(SoilingBase):
 
         # computation of the gravitational settling velocity
         vg = (g * (D_meters**2) * Cc * (dust.rho[f])) / (18 * μ_air)
-        
+    
         # terminal velocity [m/s] if Re<0.1
         Re = ρ_air * vg * D_meters / μ_air  # Reynolds number for vg(Re<0.1)
         for ii in range(constants.N_iter):
@@ -1083,65 +1083,64 @@ class Dust:
                         f
                     )
                 )
-
-            # computation of the dust size distribution
-            N_components = len(self.Nd[ii])
-            nNd = np.zeros((len(Dii), N_components))
-            for jj in range(N_components):
-                Ndjj = self.Nd[ii][jj]
-                lsjj = self.log10_sig[ii][jj]
-                lmjj = self.log10_mu[ii][jj]
-                nNd[:, jj] = (
-                    Ndjj
-                    / (np.sqrt(2 * np.pi) * lsjj)
-                    * np.exp(-((np.log10(Dii) - lmjj) ** 2) / (2 * lsjj**2))
-                )
-
-            pdfNii = (
-                np.sum(nNd, axis=1) * 1e6
-            )  # pdfN (number) distribution dN[m^-3]/dLog10(D[µm]), 1e6 factor from { V(cm^3->m^3) 1e6 }
-            self.pdfN[ii] = pdfNii
-            self.pdfA[ii] = (
-                pdfNii * (np.pi / 4 * Dii**2) * 1e-12
-            )  # pdfA (area) dA[m^2/m^3]/dLog10(D[µm]), 1e-12 factor from { D^2(µm^2->m^2) 1e-12}
-            self.pdfM[ii] = (
-                pdfNii * (rhoii * np.pi / 6 * Dii**3) * 1e-9
-            )  # pdfm (mass) dm[µg/m^3]/dLog10(D[µm]), 1e-9 factor from { D^3(µm^3->m^3) 1e-18 , m(kg->µg) 1e9}
-            self.TSP[ii] = np.trapezoid(self.pdfM[ii], np.log10(Dii))
-            self.PMT[ii] = self.TSP[ii]
-            self.PM10[ii] = np.trapezoid(
-                self.pdfM[ii][Dii <= 10], np.log10(Dii[Dii <= 10])
-            )  # PM10 = np.trapezoid(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
+            self._compute_distributions(ii)
 
             self.hamaker[ii] = float(table.loc["hamaker_dust"].Value)
             self.poisson[ii] = float(table.loc["poisson_dust"].Value)
             self.youngs_modulus[ii] = float(table.loc["youngs_modulus_dust"].Value)
 
-        # add dust measurements if they are PMX
-        for dt in dust_measurement_type:
-            if dt not in [
-                None,
-                "TSP",
-                "PMT",
-            ]:  # another concentration is of interest (possibly because we have PMX measurements)
-                X = dt[2::]
-                if len(X) in [1, 2]:  # integer, e.g. PM20
-                    X = int(X)
-                    att = "PM{0:d}".format(X)
-                elif len(X) == 3:  # decimal, e.g. PM2.5
-                    att = "PM" + "_".join(X.split("."))
-                    X = float(X)
+            # add dust measurements if they are PMX
+            for dt in dust_measurement_type:
+                if dt not in [
+                    None,
+                    "TSP",
+                    "PMT",
+                ]:  # another concentration is of interest (possibly because we have PMX measurements)
+                    X = dt[2::]
+                    if len(X) in [1, 2]:  # integer, e.g. PM20
+                        X = int(X)
+                        att = "PM{0:d}".format(X)
+                    elif len(X) == 3:  # decimal, e.g. PM2.5
+                        att = "PM" + "_".join(X.split("."))
+                        X = float(X)
 
-                new_meas = {f: None for f, _ in enumerate(experiment_files)}
-                for ii, _ in enumerate(experiment_files):
-                    new_meas[ii] = np.trapezoid(self.pdfM[ii][Dii <= X], np.log10(Dii[Dii <= X]))
+                    new_meas = {f: None for f, _ in enumerate(experiment_files)}
+                    for ii, _ in enumerate(experiment_files):
+                        new_meas[ii] = np.trapezoid(self.pdfM[ii][Dii <= X], np.log10(Dii[Dii <= X]))
 
-                setattr(self, att, new_meas)
-                _print_if(
-                    "Added " + att + " attribute to dust class to all experiment dust classes",
-                    verbose,
-                )
+                    setattr(self, att, new_meas)
+                    _print_if(
+                        "Added " + att + " attribute to dust class to all experiment dust classes",
+                        verbose,
+                    )
 
+    def _compute_distributions(self,f):
+        
+        # Dust size distribution, built from the number-concentration Gaussian
+        # mixture via the dust_distributions classes. Unit factors reconcile
+        # those classes' conventions with this class's stored units:
+        #   pdfN : density() is per cm^3   -> * 1e6 gives per m^3
+        #   pdfA : to_area().density() is already [m^2/m^3]/dLog10(D)
+        #   pdfM : to_mass() expects rho in g/cm^3, so rho[kg/m^3] * 1e-3
+        Df = self.D[f]
+        rhof = self.rho[f]
+        log10_Df = np.log10(Df)
+
+        number = NumberDistribution(
+            GaussianMixtureModel(self.Nd[f], self.log10_mu[f], self.log10_sig[f])
+        )
+
+        self.pdfN[f] = number.density(log10_Df) * 1e6  # dN[m^-3]/dLog10(D[µm])
+        self.pdfA[f] = number.to_area().density(log10_Df)  # dA[m^2/m^3]/dLog10(D[µm])
+        self.pdfM[f] = number.to_mass(float(rhof * 1e-3)).density(
+            log10_Df
+        )  # dm[µg/m^3]/dLog10(D[µm])
+        self.TSP[f] = np.trapezoid(self.pdfM[f], np.log10(Df))
+        self.PMT[f] = self.TSP[f]
+        self.PM10[f] = np.trapezoid(
+            self.pdfM[f][Df <= 10], np.log10(Df[Df <= 10])
+        )  # PM10 = np.trapezoid(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
+       
     def plot_distributions(
         self, figsize: Tuple[float, float] = (5, 5)
     ) -> Tuple[plt.Figure, Any, List[Any]]:

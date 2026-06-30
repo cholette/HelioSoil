@@ -1,0 +1,48 @@
+{
+  "case": "trimodal_silica",
+  "heliosoil_version": "0.3.0",
+  "numpy_version": "2.2.6",
+  "python": "3.10.11",
+  "platform": "Windows-10-10.0.26100-SP0",
+  "git_sha": "0880a76550de7c67f19fea6c434cf0dffc5d1409",
+  "units": {
+    "pdfN": "d#/dlog10(D) per cm^3",
+    "pdfM": "d(ug)/dlog10(D) per m^3",
+    "pdfA": "d(um^2)/dlog10(D) per cm^3",
+    "PM2.5/PM10/TSP": "ug/m^3"
+  },
+  "conversions_current_to_std": {
+    "pdfN": 1e-06,
+    "pdfM": 1.0,
+    "pdfA": 1000000.0,
+    "PM": 1.0
+  },
+  "mixture": {
+    "Nd": [
+      3000.0,
+      999.875,
+      0.125
+    ],
+    "mu": [
+      0.0117,
+      0.051231,
+      0.8226
+    ],
+    "sigma": [
+      1.71061,
+      2.239,
+      2.512
+    ],
+    "rho": 2000.0
+  },
+  "grid": {
+    "n": 2000,
+    "D_min_um": 0.001,
+    "D_max_um": 10000.0
+  },
+  "expected_integrals_ug_per_m3": {
+    "PM2.5": 2.8138635604729636,
+    "PM10": 4.224631452970554,
+    "TSP": 5.953533897101188
+  }
+}
