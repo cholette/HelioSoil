@@ -4,7 +4,7 @@
   "numpy_version": "2.2.6",
   "python": "3.10.11",
   "platform": "Windows-10-10.0.26100-SP0",
-  "git_sha": "0880a76550de7c67f19fea6c434cf0dffc5d1409",
+  "git_sha": "5e08983a3f7647019a54aa1408d30ab26c4f26c6",
   "units": {
     "pdfN": "d#/dlog10(D) per cm^3",
     "pdfM": "d(ug)/dlog10(D) per m^3",
@@ -35,8 +35,8 @@
     "D_max_um": 10000.0
   },
   "expected_integrals_ug_per_m3": {
-    "PM2.5": 217.52104668891343,
-    "PM10": 260.0310756127391,
-    "TSP": 260.41120358829323
+    "PM2.5": 217.78753765770057,
+    "PM10": 260.0352162557412,
+    "TSP": 260.4112035882932
   }
 }

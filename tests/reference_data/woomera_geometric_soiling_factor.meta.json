@@ -3,7 +3,7 @@
   "numpy_version": "2.2.6",
   "python": "3.10.11",
   "platform": "Windows-10-10.0.26100-SP0",
-  "git_sha": "7360eb51de7d89a0b6e31201ece8ad52317e8fa4",
+  "git_sha": "5e08983a3f7647019a54aa1408d30ab26c4f26c6",
   "loss_model": "geometry",
   "config": {
     "n_trucks": 4,

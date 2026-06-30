@@ -1106,13 +1106,24 @@ class Dust:
 
                     new_meas = {f: None for f, _ in enumerate(experiment_files)}
                     for ii, _ in enumerate(experiment_files):
-                        new_meas[ii] = np.trapezoid(self.pdfM[ii][Dii <= X], np.log10(Dii[Dii <= X]))
+                        new_meas[ii] = self.pm_concentration(ii, X)
 
                     setattr(self, att, new_meas)
                     _print_if(
                         "Added " + att + " attribute to dust class to all experiment dust classes",
                         verbose,
                     )
+
+    def _number_distribution(self, f):
+        """NumberDistribution for experiment f (weights = Nd [1/cm^3])."""
+        return NumberDistribution(
+            GaussianMixtureModel(self.Nd[f], self.log10_mu[f], self.log10_sig[f])
+        )
+
+    def pm_concentration(self, f, cutoff_um):
+        """Mass concentration [µg/m^3] of particles with D <= cutoff_um (analytic)."""
+        mass = self._number_distribution(f).to_mass(float(self.rho[f] * 1e-3))
+        return float(mass.cumulative(np.log10(cutoff_um)))
 
     def _compute_distributions(self,f):
         
@@ -1126,20 +1137,18 @@ class Dust:
         rhof = self.rho[f]
         log10_Df = np.log10(Df)
 
-        number = NumberDistribution(
-            GaussianMixtureModel(self.Nd[f], self.log10_mu[f], self.log10_sig[f])
-        )
+        number = self._number_distribution(f)
+        mass = number.to_mass(float(rhof * 1e-3))
 
         self.pdfN[f] = number.density(log10_Df) * 1e6  # dN[m^-3]/dLog10(D[µm])
         self.pdfA[f] = number.to_area().density(log10_Df)  # dA[m^2/m^3]/dLog10(D[µm])
-        self.pdfM[f] = number.to_mass(float(rhof * 1e-3)).density(
-            log10_Df
-        )  # dm[µg/m^3]/dLog10(D[µm])
-        self.TSP[f] = np.trapezoid(self.pdfM[f], np.log10(Df))
+        self.pdfM[f] = mass.density(log10_Df)  # dm[µg/m^3]/dLog10(D[µm])
+
+        # PM cutoffs and TSP from the analytic mass CDF [µg/m^3] (grid-independent).
+        # TSP is the total mass = sum of the mixture weights.
+        self.TSP[f] = float(mass.distribution.weights.sum())
         self.PMT[f] = self.TSP[f]
-        self.PM10[f] = np.trapezoid(
-            self.pdfM[f][Df <= 10], np.log10(Df[Df <= 10])
-        )  # PM10 = np.trapezoid(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
+        self.PM10[f] = float(mass.cumulative(np.log10(10.0)))
        
     def plot_distributions(
         self, figsize: Tuple[float, float] = (5, 5)

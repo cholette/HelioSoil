@@ -137,13 +137,9 @@ def _standard_pdfs(dust):
 
 
 def _standard_integrals(dust):
-    """PM2.5 / PM10 / TSP in ug/m^3. PM2.5 replicates import_dust's recipe."""
-    D = dust.D[FILE]
-    pdfM = dust.pdfM[FILE]
-    mask = D <= 2.5
-    pm25 = float(np.trapezoid(pdfM[mask], np.log10(D[mask])))
+    """PM2.5 / PM10 / TSP in ug/m^3, from the analytic mass CDF."""
     return {
-        "PM2.5": pm25 * PM_CURRENT_TO_STD,
+        "PM2.5": float(dust.pm_concentration(FILE, 2.5)) * PM_CURRENT_TO_STD,
         "PM10": float(dust.PM10[FILE]) * PM_CURRENT_TO_STD,
         "TSP": float(dust.TSP[FILE]) * PM_CURRENT_TO_STD,
     }
