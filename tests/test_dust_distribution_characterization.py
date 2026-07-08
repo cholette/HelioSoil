@@ -85,14 +85,15 @@ CASES = {
     },
 }
 
-# --- current Dust output units -> target standard units (exact) --------------
-# pdfN: current [1/m^3]/dlog10  ->  standard [1/cm^3]/dlog10
-PDFN_CURRENT_TO_STD = 1e-6
-# pdfM: current [ug/m^3]/dlog10 (already standard)
+# --- Dust now emits standard units natively (Phase 3b); these conversions are
+# --- the migration ledger, all 1.0 now. --------------------------------------
+# pdfN [1/cm^3]/dlog10
+PDFN_CURRENT_TO_STD = 1.0
+# pdfM [ug/m^3]/dlog10
 PDFM_CURRENT_TO_STD = 1.0
-# pdfA: current [m^2/m^3]/dlog10 -> standard [um^2/cm^3]/dlog10
-PDFA_CURRENT_TO_STD = 1e6
-# PM*/TSP: current [ug/m^3] (already standard)
+# pdfA [um^2/cm^3]/dlog10
+PDFA_CURRENT_TO_STD = 1.0
+# PM*/TSP [ug/m^3]
 PM_CURRENT_TO_STD = 1.0
 
 REF_DIR = Path(__file__).parent / "reference_data"

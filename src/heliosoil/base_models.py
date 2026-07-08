@@ -30,6 +30,7 @@ from heliosoil.utilities import (
 from heliosoil.dust_distributions import GaussianMixtureModel, NumberDistribution
 
 tol = np.finfo(float).eps  # machine floating point precision
+_CM3_TO_M3 = 1e6  # number-concentration conversion: cm^-3 -> m^-3
 
 
 class SoilingBase:
@@ -269,8 +270,8 @@ class PhysicalBase(SoilingBase):
                     )
                     Fd[Fd < 0] = 0
                 helios.pdfqN[f][idx, :, :] = (
-                    Fd.transpose() * dust.pdfN[f]
-                )  # Dust flux pdf, i.e. [dq[particles/(s*m^2)]/dLog_{10}(D[µm]) ] deposited on 1m2.
+                    Fd.transpose() * dust.pdfN[f] * _CM3_TO_M3
+                )  # dust flux pdf [1/(s*m^2)]/dLog10(D); pdfN cm^-3 -> m^-3 via _CM3_TO_M3
 
         self.helios = helios
 
@@ -975,7 +976,7 @@ class Dust:
         init=False,
         default_factory=dict,
         metadata={
-            "units": "[1/m³]/log10([µm])",
+            "units": "[1/cm³]/dLog10([µm])",
             "description": "Number distribution dN/d(log10(D))",
         },
     )
@@ -991,7 +992,7 @@ class Dust:
         init=False,
         default_factory=dict,
         metadata={
-            "units": "[m2/m³]/dLog10([µm])",
+            "units": "[µm²/cm³]/dLog10([µm])",
             "description": "Area distribution dA/dLog10(D)",
         },
     )
@@ -1128,11 +1129,10 @@ class Dust:
     def _compute_distributions(self,f):
         
         # Dust size distribution, built from the number-concentration Gaussian
-        # mixture via the dust_distributions classes. Unit factors reconcile
-        # those classes' conventions with this class's stored units:
-        #   pdfN : density() is per cm^3   -> * 1e6 gives per m^3
-        #   pdfA : to_area().density() is already [m^2/m^3]/dLog10(D)
-        #   pdfM : to_mass() expects rho in g/cm^3, so rho[kg/m^3] * 1e-3
+        # mixture via the dust_distributions classes and stored in standard units:
+        #   pdfN : d#/dLog10(D) per cm^3     (density() is already per cm^3)
+        #   pdfA : d(µm^2)/dLog10(D) per cm^3   (to_area().density() * 1e6)
+        #   pdfM : d(µg)/dLog10(D) per m^3   (to_mass expects rho in g/cm^3)
         Df = self.D[f]
         rhof = self.rho[f]
         log10_Df = np.log10(Df)
@@ -1140,8 +1140,8 @@ class Dust:
         number = self._number_distribution(f)
         mass = number.to_mass(float(rhof * 1e-3))
 
-        self.pdfN[f] = number.density(log10_Df) * 1e6  # dN[m^-3]/dLog10(D[µm])
-        self.pdfA[f] = number.to_area().density(log10_Df)  # dA[m^2/m^3]/dLog10(D[µm])
+        self.pdfN[f] = number.density(log10_Df)  # dN[cm^-3]/dLog10(D[µm])
+        self.pdfA[f] = number.to_area().density(log10_Df) * 1e6  # dA[µm^2/cm^3]/dLog10
         self.pdfM[f] = mass.density(log10_Df)  # dm[µg/m^3]/dLog10(D[µm])
 
         # PM cutoffs and TSP from the analytic mass CDF [µg/m^3] (grid-independent).
@@ -1176,7 +1176,7 @@ class Dust:
             ax1 = axes1[i, 0]
             ax1.set_xscale("log")
             ax1.set_xlabel(r"Diameter $D$ [$\mu$m]")
-            ax1.set_ylabel(r"dN/dlog$D$ [# m$^{-3}$]", color="tab:red")
+            ax1.set_ylabel(r"dN/dlog$D$ [# cm$^{-3}$]", color="tab:red")
             ax1.plot(d, n_pdf, color="tab:red")
             ax1.tick_params(axis="y", labelcolor="tab:red")
             ax1.grid(True)
@@ -1210,7 +1210,7 @@ class Dust:
             ax = axes[i, 0]
             ax.set_xscale("log")
             ax.set_xlabel(r"Diameter $D$ [$\mu$m]")
-            ax.set_ylabel(r"dA/dlog$D$ [m$^2$ m$^{-3}$]", color="black")
+            ax.set_ylabel(r"dA/dlog$D$ [µm$^2$ cm$^{-3}$]", color="black")
             ax.plot(d, a_pdf, color="black")
             ax.tick_params(axis="y", labelcolor="black")
             ax.set_title("Area PDF")
