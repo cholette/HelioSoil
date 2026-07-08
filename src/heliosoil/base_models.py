@@ -332,7 +332,7 @@ class PhysicalBase(SoilingBase):
                         if any(mom_adhesion<mom_removal):
                             _print_if("Some dust is removed",verbose)
 
-                # Take derivative so that pdfqN is the rate at wich dust is deposited at each diameter
+                # Take derivative so that pdfqN is the rate at which dust is deposited at each diameter
                 helios.pdfqN[f] = np.gradient(helios.pdfqN[f], dt[f], axis=1)  
 
             else:  # common stow angle at night for all heliostats. Assumes tilt at night is close to vertical at night.
@@ -980,22 +980,6 @@ class Dust:
             "description": "Number distribution dN/d(log10(D))",
         },
     )
-    pdfM: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={
-            "units": "[µg/m³]/dLog10(D[µm])",
-            "description": "Mass distribution dm/dLog10(D)",
-        },
-    )
-    pdfA: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={
-            "units": "[µm²/cm³]/dLog10([µm])",
-            "description": "Area distribution dA/dLog10(D)",
-        },
-    )
     hamaker: Dict[int, float] = field(
         init=False,
         default_factory=dict,
@@ -1126,13 +1110,20 @@ class Dust:
         mass = self._number_distribution(f).to_mass(float(self.rho[f] * 1e-3))
         return float(mass.cumulative(np.log10(cutoff_um)))
 
+    def pdf_mass(self, f):
+        """Mass distribution dm/dLog10(D) [µg/m^3] on the D[f] grid (derived)."""
+        mass = self._number_distribution(f).to_mass(float(self.rho[f] * 1e-3))
+        return mass.density(np.log10(self.D[f]))
+
+    def pdf_area(self, f):
+        """Area distribution dA/dLog10(D) [µm^2/cm^3] on the D[f] grid (derived)."""
+        return self._number_distribution(f).to_area().density(np.log10(self.D[f]))
+
     def _compute_distributions(self,f):
         
-        # Dust size distribution, built from the number-concentration Gaussian
-        # mixture via the dust_distributions classes and stored in standard units:
-        #   pdfN : d#/dLog10(D) per cm^3     (density() is already per cm^3)
-        #   pdfA : d(µm^2)/dLog10(D) per cm^3   (to_area().density() * 1e6)
-        #   pdfM : d(µg)/dLog10(D) per m^3   (to_mass expects rho in g/cm^3)
+        # Number distribution sampled on the D grid [dN/dLog10(D) per cm^3].
+        # Mass and area distributions are derived on demand via pdf_mass() /
+        # pdf_area(); PM10/TSP come from the analytic mass CDF (grid-independent).
         Df = self.D[f]
         rhof = self.rho[f]
         log10_Df = np.log10(Df)
@@ -1141,11 +1132,8 @@ class Dust:
         mass = number.to_mass(float(rhof * 1e-3))
 
         self.pdfN[f] = number.density(log10_Df)  # dN[cm^-3]/dLog10(D[µm])
-        self.pdfA[f] = number.to_area().density(log10_Df) * 1e6  # dA[µm^2/cm^3]/dLog10
-        self.pdfM[f] = mass.density(log10_Df)  # dm[µg/m^3]/dLog10(D[µm])
 
-        # PM cutoffs and TSP from the analytic mass CDF [µg/m^3] (grid-independent).
-        # TSP is the total mass = sum of the mixture weights.
+        # TSP is the total mass (sum of the mixture weights) [µg/m^3].
         self.TSP[f] = float(mass.distribution.weights.sum())
         self.PMT[f] = self.TSP[f]
         self.PM10[f] = float(mass.cumulative(np.log10(10.0)))
@@ -1171,7 +1159,7 @@ class Dust:
         for i in range(N):
             d = self.D[i]
             n_pdf = self.pdfN[i]
-            m_pdf = self.pdfM[i]
+            m_pdf = self.pdf_mass(i)
 
             ax1 = axes1[i, 0]
             ax1.set_xscale("log")
@@ -1206,7 +1194,7 @@ class Dust:
 
         for i in range(N):
             d = self.D[i]
-            a_pdf = self.pdfA[i]
+            a_pdf = self.pdf_area(i)
             ax = axes[i, 0]
             ax.set_xscale("log")
             ax.set_xlabel(r"Diameter $D$ [$\mu$m]")

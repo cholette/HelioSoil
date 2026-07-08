@@ -131,8 +131,8 @@ def _standard_pdfs(dust):
         {
             "D_um": dust.D[FILE],
             "pdfN_per_cm3_per_dlog10D": dust.pdfN[FILE] * PDFN_CURRENT_TO_STD,
-            "pdfM_ug_per_m3_per_dlog10D": dust.pdfM[FILE] * PDFM_CURRENT_TO_STD,
-            "pdfA_um2_per_cm3_per_dlog10D": dust.pdfA[FILE] * PDFA_CURRENT_TO_STD,
+            "pdfM_ug_per_m3_per_dlog10D": dust.pdf_mass(FILE) * PDFM_CURRENT_TO_STD,
+            "pdfA_um2_per_cm3_per_dlog10D": dust.pdf_area(FILE) * PDFA_CURRENT_TO_STD,
         }
     )
 
