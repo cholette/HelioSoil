@@ -39,6 +39,14 @@ from .field_models import (
 # From fitting
 from .fitting import SemiPhysical, ConstantMeanDeposition
 
+# From horizontal_impaction
+from .horizontal_impaction import (
+    ConstantMeanWindBase,
+    ConstantMeanWindDeposition,
+    wind_projection_factors,
+    parse_orientation_names,
+)
+
 # From cleaning_optimization
 from .cleaning_optimization import (
     OptimizationProblem,
@@ -69,6 +77,7 @@ from .utilities import (
     _ensure_list,
     _check_keys,
     _import_option_helper,
+    cardinal_to_azimuth,
 )
 
 from .paper_specific_utilities import (
@@ -78,6 +87,7 @@ from .paper_specific_utilities import (
     daily_soiling_rate,
     fit_quality_plots,
     summarize_fit_quality,
+    regression_performance_stats,
     daily_soiling_tilt_all_data,
     plot_experiment_PA,
 )
@@ -106,6 +116,11 @@ __all__ = [
     # fitting
     "SemiPhysical",
     "ConstantMeanDeposition",
+    # horizontal_impaction
+    "ConstantMeanWindBase",
+    "ConstantMeanWindDeposition",
+    "wind_projection_factors",
+    "parse_orientation_names",
     # cleaning_optimization
     "OptimizationProblem",
     "optimize_periodic_schedule",
@@ -133,6 +148,7 @@ __all__ = [
     "_ensure_list",
     "_check_keys",
     "_import_option_helper",
+    "cardinal_to_azimuth",
     # Version
     "__version__",
     # paper_specific_utilities
@@ -142,6 +158,7 @@ __all__ = [
     "daily_soiling_rate",
     "fit_quality_plots",
     "summarize_fit_quality",
+    "regression_performance_stats",
     "daily_soiling_tilt_all_data",
     "plot_experiment_PA",
 ]

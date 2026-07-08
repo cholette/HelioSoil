@@ -9,11 +9,14 @@ from collections import defaultdict
 os.environ["MIEPYTHON_USE_JIT"] = "1"
 import miepython  # noqa: E402
 
+
 def sind(theta):
     return np.sin(np.deg2rad(theta))
 
+
 def cosd(theta):
     return np.cos(np.deg2rad(theta))
+
 
 def get_project_root(subdir: str = None) -> Path:
     """
@@ -319,7 +322,7 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
         sim_dat.days = {}
 
     for f in files:
-        if isinstance(trim_ranges, list) | isinstance(trim_ranges,np.ndarray):
+        if isinstance(trim_ranges, list) | isinstance(trim_ranges, np.ndarray):
             assert isinstance(trim_ranges[f], list) or isinstance(
                 trim_ranges[f], np.ndarray
             ), "trim_ranges must be a list of lists or a list of 1D np.arrays"
@@ -735,11 +738,13 @@ def get_training_data(d, file_start, time_to_remove_at_end=0, helios=False):
     if not helios:
         for ii, f in enumerate(files):
             mirror_names[ii] = list(
-                pd.read_excel(os.path.join(d,f), sheet_name="Reflectance_Average").columns[1::]
+                pd.read_excel(os.path.join(d, f), sheet_name="Reflectance_Average").columns[1::]
             )
     else:
         for ii, f in enumerate(files):
-            mirror_names[ii] = list(pd.read_excel(os.path.join(d,f), sheet_name="Heliostats_Ref").columns[1::])
+            mirror_names[ii] = list(
+                pd.read_excel(os.path.join(d, f), sheet_name="Heliostats_Ref").columns[1::]
+            )
 
     # get mirror names that show up in all files
     common = []
@@ -748,7 +753,7 @@ def get_training_data(d, file_start, time_to_remove_at_end=0, helios=False):
             if all([(ele in S) and (ele not in common) for S in mirror_names]):
                 common.append(ele)
 
-    files = [os.path.join(d,f) for f in files]
+    files = [os.path.join(d, f) for f in files]
 
     return files, training_intervals, mirror_names, common
 
@@ -788,6 +793,37 @@ def wind_rose(simulation_data, exp_idx):
 
     return fig, wax
 
+
+def cardinal_to_azimuth(cardinal: str) -> float:
+    """
+    Convert a 16-point cardinal direction string to a compass azimuth.
+    Degrees clockwise from North (N=0, E=90, S=180, W=270).
+    """
+    angles = {
+        "N": 0,
+        "NNE": 22.5,
+        "NE": 45,
+        "ENE": 67.5,
+        "E": 90,
+        "ESE": 112.5,
+        "SE": 135,
+        "SSE": 157.5,
+        "S": 180,
+        "SSW": 202.5,
+        "SW": 225,
+        "WSW": 247.5,
+        "W": 270,
+        "WNW": 292.5,
+        "NW": 315,
+        "NNW": 337.5,
+    }
+    key = cardinal.strip().upper()
+    if key not in angles:
+        raise ValueError(f"Unknown cardinal direction: '{cardinal}'")
+
+    return angles[key]
+
+
 def cardinal_to_uv(cardinal: str) -> tuple[float, float]:
     """
     Convert a cardinal direction string to (U, V) unit vector components.
@@ -795,17 +831,30 @@ def cardinal_to_uv(cardinal: str) -> tuple[float, float]:
     Direction is where the wind is GOING (not coming from).
     """
     angles = {
-        'N':   90, 'NNE': 67.5, 'NE':  45, 'ENE': 22.5,
-        'E':    0, 'ESE': -22.5, 'SE': -45, 'SSE': -67.5,
-        'S':  -90, 'SSW': -112.5, 'SW': -135, 'WSW': -157.5,
-        'W':  180, 'WNW': 157.5, 'NW': 135, 'NNW': 112.5,
+        "N": 90,
+        "NNE": 67.5,
+        "NE": 45,
+        "ENE": 22.5,
+        "E": 0,
+        "ESE": -22.5,
+        "SE": -45,
+        "SSE": -67.5,
+        "S": -90,
+        "SSW": -112.5,
+        "SW": -135,
+        "WSW": -157.5,
+        "W": 180,
+        "WNW": 157.5,
+        "NW": 135,
+        "NNW": 112.5,
     }
     key = cardinal.strip().upper()
     if key not in angles:
         raise ValueError(f"Unknown cardinal direction: '{cardinal}'")
-    
+
     theta = np.deg2rad(angles[key])
     return np.cos(theta), np.sin(theta)
+
 
 def soiling_rates_summary(ref_data, sim_data, verbose=False):
 
@@ -897,6 +946,7 @@ def soiling_rates_summary(ref_data, sim_data, verbose=False):
                 )
 
     return df_ref_data
+
 
 def loss_table_from_sim(sim_res, sim_data):
     table_data = []
@@ -1046,5 +1096,3 @@ def loss_table_from_plot(ax):
     # print(df_plot)
 
     return df_plot
-
-

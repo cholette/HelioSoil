@@ -530,11 +530,15 @@ def soiling_rate(alphas: np.ndarray, alphas2: np.ndarray, save_file: str, M: int
         imodel = data["model"]
         log_param_hat = data["transformed_parameters"]
         log_param_hat_cov = data["transformed_parameter_covariance"]
-        mu_tilde, sigma_dep = np.exp(log_param_hat)
 
-    assert isinstance(
-        imodel, smf.ConstantMeanDeposition
-    ), "Model in saved file must be constant-mean type."
+    # `type(...) is ...` (not isinstance) since ConstantMeanWindDeposition is also a
+    # ConstantMeanDeposition subclass, but has a 5-parameter vector on a mixed
+    # log/linear scale that np.exp(log_param_hat) below cannot unpack correctly.
+    assert type(imodel) is smf.ConstantMeanDeposition, (
+        "Model in saved file must be plain constant-mean type (not a subclass such as "
+        "ConstantMeanWindDeposition, whose parameter vector has a different length/scale)."
+    )
+    mu_tilde, sigma_dep = np.exp(log_param_hat)
 
     # simulate
     sims = np.zeros((M, len(alphas)))
@@ -802,6 +806,57 @@ def summarize_fit_quality(
     fig.savefig(save_file + "_fit_quality.pdf", bbox_inches="tight")
 
     return fig, ax
+
+
+def regression_performance_stats(model, reflectance_data, experiments, mirrors=None):
+    """
+    Compare predicted vs. measured reflectance and summarize the fit with standard
+    regression metrics: mean bias error (MBE), mean absolute error (MAE), root mean
+    squared error (RMSE), and the coefficient of determination (R^2).
+
+    Requires model.helios.soiling_factor to already be populated for `experiments`
+    (e.g. by calling model.predict_soiling_factor(...) or model.plot_soiling_factor(...)
+    beforehand) with tilt/azimuth set consistently with `reflectance_data`.
+
+    Args:
+        model: a fitted soiling model exposing helios.soiling_factor.
+        reflectance_data: ReflectanceMeasurements with matching prediction_indices,
+            average, and rho0 for each file in `experiments`.
+        experiments (list): file indices (as used to key simulation_inputs/reflectance_data)
+            to pool together when computing the statistics.
+        mirrors (array-like of int, optional): column indices to include. Default: all mirrors.
+
+    Returns:
+        dict with keys "MBE", "MAE", "RMSE", "R2", "N" (pooled across `experiments`).
+    """
+    pi = reflectance_data.prediction_indices
+    meas = reflectance_data.average
+    rho0 = reflectance_data.rho0
+    sf = model.helios.soiling_factor
+
+    pred_list, meas_list = [], []
+    for f in experiments:
+        m = meas[f] if mirrors is None else meas[f][:, mirrors]
+        r0 = rho0[f] if mirrors is None else rho0[f][mirrors]
+        sfm = sf[f] if mirrors is None else sf[f][mirrors, :]
+        pred = r0 * sfm[:, pi[f]].transpose()
+        pred_list.append(pred.flatten())
+        meas_list.append(m.flatten())
+
+    pred_flat = np.concatenate(pred_list)
+    meas_flat = np.concatenate(meas_list)
+    resid = pred_flat - meas_flat
+
+    ss_res = np.sum(resid**2)
+    ss_tot = np.sum((meas_flat - np.mean(meas_flat)) ** 2)
+
+    return {
+        "MBE": np.mean(resid),
+        "MAE": np.mean(np.abs(resid)),
+        "RMSE": np.sqrt(np.mean(resid**2)),
+        "R2": 1 - ss_res / ss_tot,
+        "N": meas_flat.size,
+    }
 
 
 def daily_soiling_tilt_all_data(

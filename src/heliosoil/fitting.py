@@ -567,11 +567,11 @@ class CommonFittingMethods:
                 a.set_ylim(ymin, ymax)
 
         fig.autofmt_xdate()
+        fig.suptitle(fig_title, fontsize=16)
+        fig.tight_layout()
         if save_path is not None:
             fig.savefig(save_path)
 
-        fig.suptitle(fig_title, fontsize=16)
-        fig.tight_layout()
         if return_handles:
             return fig, ax, mean_predictions, CI_lower_predictions, CI_upper_predictions
         else:
