@@ -28,24 +28,13 @@ from .base_models import (
 )
 
 # From field_models
-from .field_models import (
-    CentralTowerPlant,
-    FieldModel,
-    SimplifiedFieldModel,
-    ReceiverParameters,
-    PlantParameters,
-)
+from .field_models import CentralTowerPlant, FieldModel, SimplifiedFieldModel, ReceiverParameters, PlantParameters
 
 # From fitting
 from .fitting import SemiPhysical, ConstantMeanDeposition
 
 # From horizontal_impaction
-from .horizontal_impaction import (
-    ConstantMeanWindBase,
-    ConstantMeanWindDeposition,
-    wind_projection_factors,
-    parse_orientation_names,
-)
+from .horizontal_impaction import ConstantMeanWindBase, ConstantMeanWindDeposition, wind_projection_factors, parse_orientation_names
 
 # From cleaning_optimization
 from .cleaning_optimization import (

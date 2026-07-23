@@ -66,52 +66,26 @@ def _import_copylot():
 class ReceiverParameters:
     """Default parameters for central receiver configuration."""
 
-    receiver_type: str = field(
-        default="External cylindrical",
-        metadata={"description": "Type of receiver (External cylindrical or Flat plate)"},
-    )
-    tower_height: float = field(
-        default=120.0, metadata={"units": "m", "description": "Height of receiver tower"}
-    )
-    panel_height: float = field(
-        default=30.5, metadata={"units": "m", "description": "Height of receiver panel"}
-    )
-    width_diameter: float = field(
-        default=15.8, metadata={"units": "m", "description": "Width/diameter of receiver"}
-    )
+    receiver_type: str = field(default="External cylindrical", metadata={"description": "Type of receiver (External cylindrical or Flat plate)"})
+    tower_height: float = field(default=120.0, metadata={"units": "m", "description": "Height of receiver tower"})
+    panel_height: float = field(default=30.5, metadata={"units": "m", "description": "Height of receiver panel"})
+    width_diameter: float = field(default=15.8, metadata={"units": "m", "description": "Width/diameter of receiver"})
     orientation_elevation: Optional[float] = field(
-        default=None,
-        metadata={"units": "degrees", "description": "Elevation angle for flat plate receiver"},
+        default=None, metadata={"units": "degrees", "description": "Elevation angle for flat plate receiver"}
     )
-    thermal_losses: float = field(
-        default=105,
-        metadata={"units": "MW", "description": "Constant thermal losses from receiver"},
-    )
-    thermal_max: float = field(
-        default=1000.0, metadata={"units": "MW", "description": "Maximum thermal power"}
-    )
-    thermal_min: float = field(
-        default=210, metadata={"units": "MW", "description": "Minimum thermal power"}
-    )
+    thermal_losses: float = field(default=105, metadata={"units": "MW", "description": "Constant thermal losses from receiver"})
+    thermal_max: float = field(default=1000.0, metadata={"units": "MW", "description": "Maximum thermal power"})
+    thermal_min: float = field(default=210, metadata={"units": "MW", "description": "Minimum thermal power"})
 
 
 @dataclass
 class PlantParameters:
     """Parameters for power plant configuration."""
 
-    power_block_efficiency: float = field(
-        default=0.42,
-        metadata={"units": "fraction", "description": "Power block conversion efficiency"},
-    )
-    heliostat_aim_point_strategy: str = field(
-        default="Image size priority", metadata={"description": "Heliostat aim point strategy"}
-    )
-    electricity_price: float = field(
-        default=100.0, metadata={"units": "$/MWh", "description": "Price of electricity"}
-    )
-    plant_other_maintenance: float = field(
-        default=0.0, metadata={"units": "$/MWh", "description": "Non-cleaning maintenance costs"}
-    )
+    power_block_efficiency: float = field(default=0.42, metadata={"units": "fraction", "description": "Power block conversion efficiency"})
+    heliostat_aim_point_strategy: str = field(default="Image size priority", metadata={"description": "Heliostat aim point strategy"})
+    electricity_price: float = field(default=100.0, metadata={"units": "$/MWh", "description": "Price of electricity"})
+    plant_other_maintenance: float = field(default=0.0, metadata={"units": "$/MWh", "description": "Non-cleaning maintenance costs"})
 
 
 class CentralTowerPlant:
@@ -190,9 +164,7 @@ class CentralTowerPlant:
         if self._receiver.receiver_type == "Flat plate":
             if "receiver_orientation_elevation" not in table.index:
                 raise ValueError("Missing receiver_orientation_elevation for Flat plate")
-            self._receiver.orientation_elevation = float(
-                table.loc["receiver_orientation_elevation"].Value
-            )
+            self._receiver.orientation_elevation = float(table.loc["receiver_orientation_elevation"].Value)
 
         # Update remaining parameters
         self._receiver.tower_height = float(table.loc["receiver_tower_height"].Value)
@@ -217,31 +189,18 @@ class FieldCommonMethods:
     def sun_angles(self, simulation_inputs: SimulationInputs, verbose=True):
         sim_in = simulation_inputs
 
-        _print_if(
-            "Calculating sun apparent movement and angles for "
-            + str(sim_in.N_simulations)
-            + " simulations",
-            verbose,
-        )
+        _print_if("Calculating sun apparent movement and angles for " + str(sim_in.N_simulations) + " simulations", verbose)
 
         files = list(sim_in.time.keys())
         for f in files:
-            self.sun.angles_and_clearsky_dni(
-                self.latitude, self.longitude, sim_in.time[f], tz_offset=self.timezone_offset
-            )
+            self.sun.angles_and_clearsky_dni(self.latitude, self.longitude, sim_in.time[f], tz_offset=self.timezone_offset)
 
         # Check if DNI data exists in the simulation inputs
-        if (
-            f not in sim_in.dni
-            or not isinstance(sim_in.dni[f], (list, np.ndarray))
-            or len(sim_in.dni[f]) == 0
-        ):
+        if f not in sim_in.dni or not isinstance(sim_in.dni[f], (list, np.ndarray)) or len(sim_in.dni[f]) == 0:
             print("No DNI in weather data file using clear sky DNI")
             sim_in.dni[f] = self.sun.DNI[f]
 
-    def helios_angles(
-        self, plant, verbose: bool = True, aoi_model: str = "second_surface", d: float = None
-    ):
+    def helios_angles(self, plant, verbose: bool = True, aoi_model: str = "second_surface", d: float = None):
         sun = self.sun
         aoi_models = ["first_surface", "second_surface", "heimsath"]
         assert len(sun.elevation) > 0, "You need to call sun_angles() before helios_angles()"
@@ -250,28 +209,19 @@ class FieldCommonMethods:
         helios = self.helios
         files = list(sun.elevation.keys())
         N_sims = len(files)
-        _print_if(
-            "Calculating heliostat movement and angles for " + str(N_sims) + " simulations",
-            verbose,
-        )
+        _print_if("Calculating heliostat movement and angles for " + str(N_sims) + " simulations", verbose)
 
         for f in files:
             stowangle = sun.stow_angle
             h_tower = plant.receiver["tower_height"]
-            helios.dist = np.sqrt(
-                helios.x**2 + helios.y**2
-            )  # horizontal distance between mirror and tower
-            helios.elevation_angle_to_tower = np.degrees(
-                np.arctan((h_tower / helios.dist))
-            )  # elevation angle from heliostats to tower
+            helios.dist = np.sqrt(helios.x**2 + helios.y**2)  # horizontal distance between mirror and tower
+            helios.elevation_angle_to_tower = np.degrees(np.arctan((h_tower / helios.dist)))  # elevation angle from heliostats to tower
 
             T_m = np.array(
                 [-helios.y, -helios.x, np.ones((len(helios.x))) * h_tower]
             )  # relative position of tower from mirror (left-handed ref.sys.)
             L_m = np.sqrt(np.sum(T_m**2, axis=0))  # distance mirror-tower [m]
-            t_m = (
-                T_m / L_m
-            )  # unit vector in the direction of the tower (from mirror, left-handed ref.sys.)
+            t_m = T_m / L_m  # unit vector in the direction of the tower (from mirror, left-handed ref.sys.)
             s_m = np.array(
                 [
                     np.cos(rad(sun.elevation[f])) * np.cos(rad(sun.azimuth[f])),
@@ -281,13 +231,9 @@ class FieldCommonMethods:
             )  # unit vector of direction of the sun from mirror (left-handed)
             s_m = np.transpose(s_m)
             THETA_m = 0.5 * np.arccos(s_m.dot(t_m))
-            THETA_m = np.transpose(
-                THETA_m
-            )  # incident angle (the angle a ray of sun makes with the normal to the surface of the mirrors) in radians
+            THETA_m = np.transpose(THETA_m)  # incident angle (the angle a ray of sun makes with the normal to the surface of the mirrors) in radians
             helios.incidence_angle[f] = np.degrees(THETA_m)  # incident angle in degrees
-            helios.incidence_angle[f][
-                :, sun.elevation[f] <= stowangle
-            ] = np.nan  # heliostats are stored vertically at night facing north
+            helios.incidence_angle[f][:, sun.elevation[f] <= stowangle] = np.nan  # heliostats are stored vertically at night facing north
 
             # apply the formula (Guo et al.) to obtain the components of the normal for each mirror
             A_norm = np.zeros((len(helios.x), max(s_m.shape), min(s_m.shape)))
@@ -305,27 +251,17 @@ class FieldCommonMethods:
             # Ed = np.degrees(np.arctan2(N,E))
             # Hd = np.degrees(np.arctan2(H,np.sqrt(E**2+N**2)))
 
-            helios.elevation[f] = np.degrees(
-                np.arctan(H / (np.sqrt(N**2 + E**2)))
-            )  # [deg] elevation angle of the heliostats
-            helios.elevation[f][:, sun.elevation[f] <= stowangle] = (
-                90 - helios.stow_tilt
-            )  # heliostats are stored at stow_tilt at night facing north
+            helios.elevation[f] = np.degrees(np.arctan(H / (np.sqrt(N**2 + E**2))))  # [deg] elevation angle of the heliostats
+            helios.elevation[f][:, sun.elevation[f] <= stowangle] = 90 - helios.stow_tilt  # heliostats are stored at stow_tilt at night facing north
             helios.tilt[f] = 90 - helios.elevation[f]  # [deg] tilt angle of the heliostats
-            helios.azimuth[f] = np.degrees(
-                np.arctan2(E, N)
-            )  # [deg] azimuth angle of the heliostat
+            helios.azimuth[f] = np.degrees(np.arctan2(E, N))  # [deg] azimuth angle of the heliostat
 
             if aoi_model.lower() == "first_surface":
-                helios.inc_ref_factor[f] = (1 + np.sin(rad(helios.incidence_angle[f]))) / np.cos(
-                    rad(helios.incidence_angle[f])
-                )  # first surface
+                helios.inc_ref_factor[f] = (1 + np.sin(rad(helios.incidence_angle[f]))) / np.cos(rad(helios.incidence_angle[f]))  # first surface
                 helios.aoi_model = "first_surface"
                 _print_if("First surface loss model", verbose)
             elif aoi_model.lower() == "second_surface":
-                helios.inc_ref_factor[f] = 2 / np.cos(
-                    rad(helios.incidence_angle[f])
-                )  # second surface model
+                helios.inc_ref_factor[f] = 2 / np.cos(rad(helios.incidence_angle[f]))  # second surface model
                 helios.aoi_model = "second_surface"
                 _print_if("Second surface loss model", verbose)
             elif aoi_model.lower() == "heimsath":
@@ -353,10 +289,7 @@ class FieldCommonMethods:
         """
         sim_in = simulation_inputs
         N_sims = sim_in.N_simulations
-        _print_if(
-            "Calculating reflectance losses with cleaning for " + str(N_sims) + " simulations",
-            verbose,
-        )
+        _print_if("Calculating reflectance losses with cleaning for " + str(N_sims) + " simulations", verbose)
 
         helios = self.helios
         n_helios = helios.x.shape[0]
@@ -376,14 +309,10 @@ class FieldCommonMethods:
                 clean_idx = np.where(cleans[fi][hh, :])[0]
                 # clean_at_0 = True  # kept true if sector hh-th is cleaned on day 0
                 if len(clean_idx) > 0 and clean_idx[0] != 0:
-                    clean_idx = np.insert(
-                        clean_idx, 0, 0
-                    )  # insert clean_idx = 0 to compute soiling since the beginning
+                    clean_idx = np.insert(clean_idx, 0, 0)  # insert clean_idx = 0 to compute soiling since the beginning
                     # clean_at_0 = False  # true only when sector hh-th is cleaned on day 0
                 if len(clean_idx) == 0 or clean_idx[-1] != (sra.shape[0]):
-                    clean_idx = np.append(
-                        clean_idx, sra.shape[0]
-                    )  # append clean_idx = 8760 to compute soiling until the end
+                    clean_idx = np.append(clean_idx, sra.shape[0])  # append clean_idx = 8760 to compute soiling until the end
 
                 clean_idx_n = np.arange(len(clean_idx))
                 for cc in clean_idx_n[:-1]:
@@ -397,9 +326,7 @@ class FieldCommonMethods:
                 # else:
                 sra[0] = temp_soil[hh, -1]
                 for cc in clean_idx_n[:-1]:
-                    temp_soil2[hh, clean_idx[cc] : clean_idx[cc + 1]] = np.cumsum(
-                        sra[clean_idx[cc] : clean_idx[cc + 1]]
-                    )
+                    temp_soil2[hh, clean_idx[cc] : clean_idx[cc + 1]] = np.cumsum(sra[clean_idx[cc] : clean_idx[cc + 1]])
 
             self.apply_aoi_model(temp_soil2, f)
 
@@ -408,7 +335,7 @@ class FieldCommonMethods:
 
         return area_loss
 
-    def apply_aoi_model(self,nn_area_loss,f:int,inplace:bool=True):
+    def apply_aoi_model(self, nn_area_loss, f: int, inplace: bool = True):
         helios = self.helios
         if helios.aoi_model == "heimsath":
             ξ = 1.0 - 2.0 * nn_area_loss
@@ -416,20 +343,16 @@ class FieldCommonMethods:
             φ = np.deg2rad(helios.incidence_angle[f])
             sf = ξ ** (np.cos(φ) ** (-d))
         elif helios.aoi_model in ["first_surface", "second_surface"]:
-            sf = (
-                1 - nn_area_loss * helios.inc_ref_factor[f]
-            )  # hourly soiling factor for each sector of the solar field
+            sf = 1 - nn_area_loss * helios.inc_ref_factor[f]  # hourly soiling factor for each sector of the solar field
         else:
             raise ValueError("helios.aoi_model not recognized. ")
-        
+
         if inplace:
             helios.soiling_factor[f] = sf
         else:
             return helios.soiling_factor[f]
 
-    def optical_efficiency(
-        self, plant, simulation_inputs, climate_file, verbose=True, n_az=10, n_el=10
-    ):
+    def optical_efficiency(self, plant, simulation_inputs, climate_file, verbose=True, n_az=10, n_el=10):
         """
         Computes the optical efficiency of a heliostat field for a given set of simulation inputs and climate data.
 
@@ -462,16 +385,16 @@ class FieldCommonMethods:
                 lon = line[7]
                 tz = line[-2]
         elif climate_file.split(".")[-1] == "csv":
-            print('Processing weather data as a TMY .csv file...')
+            print("Processing weather data as a TMY .csv file...")
             with open(climate_file) as f:
                 headers = f.readline()
-                headers = [h.lower() for h in headers.split(',')]
+                headers = [h.lower() for h in headers.split(",")]
                 line = f.readline()
                 line = line.split(",")
 
-                lat = line[headers.index('latitude')]
-                lon = line[headers.index('longitude')]
-                tz = line[headers.index('time zone')]
+                lat = line[headers.index("latitude")]
+                lon = line[headers.index("longitude")]
+                tz = line[headers.index("time zone")]
         else:
             raise ValueError("Climate file type must be .epw or a TMY .csv")
 
@@ -485,11 +408,7 @@ class FieldCommonMethods:
         with working_directory(project_root):
             cp = copylot.CoPylot()
         r = cp.data_create()
-        assert cp.data_set_string(
-            r,
-            "ambient.0.weather_file",
-            climate_file,
-        )
+        assert cp.data_set_string(r, "ambient.0.weather_file", climate_file)
 
         # layout setup
         assert cp.data_set_number(r, "heliostat.0.height", helios.height)
@@ -501,15 +420,11 @@ class FieldCommonMethods:
         except Exception:
             assert cp.data_set_string(r, "receiver.0.rec_type", "External cylindrical")
         if plant.receiver["receiver_type"] == "External cylindrical":
-            assert cp.data_set_number(
-                r, "receiver.0.rec_diameter", plant.receiver["width_diameter"]
-            )
+            assert cp.data_set_number(r, "receiver.0.rec_diameter", plant.receiver["width_diameter"])
         elif plant.receiver["receiver_type"] == "Flat plate":
             assert cp.data_set_number(r, "receiver.0.rec_width", plant.receiver["width_diameter"])
             try:
-                assert cp.data_set_number(
-                    r, "receiver.0.rec_elevation", plant.receiver["orientation_elevation"]
-                )
+                assert cp.data_set_number(r, "receiver.0.rec_elevation", plant.receiver["orientation_elevation"])
             except Exception:
                 assert cp.data_set_number(r, "receiver.0.rec_elevation", -35)
         assert cp.data_set_number(r, "receiver.0.rec_diameter", plant.receiver["width_diameter"])
@@ -520,16 +435,12 @@ class FieldCommonMethods:
         ff = helios.full_field
         N_helios = ff["id"].shape[0]
         zz = [0 for ii in range(N_helios)]
-        layout = [
-            [0, ff["x"][ii], ff["y"][ii], zz[ii]] for ii in range(N_helios)
-        ]  # [list(id),list(ff['x']),list(ff['y']),list(zz)]
+        layout = [[0, ff["x"][ii], ff["y"][ii], zz[ii]] for ii in range(N_helios)]  # [list(id),list(ff['x']),list(ff['y']),list(zz)]
         assert cp.assign_layout(r, layout)
         field = cp.get_layout_info(r)
 
         # simulation parameters
-        assert cp.data_set_number(
-            r, "fluxsim.0.flux_time_type", 0
-        )  # 1 for time simulation, 0 for solar angles
+        assert cp.data_set_number(r, "fluxsim.0.flux_time_type", 0)  # 1 for time simulation, 0 for solar angles
         assert cp.data_set_number(
             r, "fluxsim.0.flux_dni", 1000.0
         )  # set the simulation DNI to 1000 W/m2. Only used to display indicative receiver power.
@@ -547,9 +458,7 @@ class FieldCommonMethods:
 
         # buliding the lookup table for grid of solar angles
         total_iterations = len(az_grid) * len(el_grid)
-        progress_bar = tqdm(
-            total=total_iterations, desc="Computing optical efficiency grid", leave=True
-        )
+        progress_bar = tqdm(total=total_iterations, desc="Computing optical efficiency grid", leave=True)
 
         for ii in range(len(az_grid)):
             for jj in range(len(el_grid)):
@@ -561,15 +470,11 @@ class FieldCommonMethods:
 
                 effs = dat["efficiency"]
                 if dat_summary["Power absorbed by the receiver"] == " -nan(ind)":
-                    raise ValueError(
-                        "SolarPILOT unable to simulate with current parameter configuration"
-                    )
+                    raise ValueError("SolarPILOT unable to simulate with current parameter configuration")
                 else:
                     # Update progress bar description with current power
                     current_power = dat_summary["Power absorbed by the receiver"]
-                    progress_bar.set_description(
-                        f"Computing grid - Power: {current_power:.2e} kW (az={az_grid[ii]:.1f}°, el={el_grid[jj]:.1f}°)"
-                    )
+                    progress_bar.set_description(f"Computing grid - Power: {current_power:.2e} kW (az={az_grid[ii]:.1f}°, el={el_grid[jj]:.1f}°)")
 
                 for kk in range(Ns):
                     idx = np.where(sec_ids == kk)[0]
@@ -587,26 +492,24 @@ class FieldCommonMethods:
             helios.optical_efficiency[f] = np.zeros((Ns, T))
             for ll in range(Ns):
                 opt_fun = RectBivariateSpline(el_grid, az_grid, eff_grid[ll, :, :].T, kx=1, ky=1)
-                helios.optical_efficiency[f][ll, :] = np.array(
-                    [opt_fun(sun.elevation[f][tt], sun.azimuth[f][tt])[0, 0] for tt in range(T)]
-                )
+                helios.optical_efficiency[f][ll, :] = np.array([opt_fun(sun.elevation[f][tt], sun.azimuth[f][tt])[0, 0] for tt in range(T)])
             _print_if("Done!", verbose)
         self.helios = helios
 
-    def plot_soiling_factor(self,file:int=None,hour:int=None):
+    def plot_soiling_factor(self, file: int = None, hour: int = None):
         Ns = self.helios.x.shape[0]  # Number of sectors
         sid = self.helios.full_field["sector_id"]
-        v = self.helios.soiling_factor[file][:,hour]
-        fig,ax = plt.subplots()
+        v = self.helios.soiling_factor[file][:, hour]
+        fig, ax = plt.subplots()
         norm = Normalize(vmin=np.nanmin(v), vmax=1.0)
         sf = np.ones_like(self.helios.full_field["x"])
         for ii in range(Ns):
-            mask = (sid == ii)
-            xx,yy = self.helios.full_field["x"][mask],self.helios.full_field["y"][mask]
+            mask = sid == ii
+            xx, yy = self.helios.full_field["x"][mask], self.helios.full_field["y"][mask]
             sf[mask] = v[ii]
-            sc = ax.scatter( xx,yy,c=v[ii]*np.ones_like(xx),cmap=plt.get_cmap('viridis'), norm=norm)
+            sc = ax.scatter(xx, yy, c=v[ii] * np.ones_like(xx), cmap=plt.get_cmap("viridis"), norm=norm)
 
-        fig.colorbar(sc, ax=ax, label='Soiling Factor')
+        fig.colorbar(sc, ax=ax, label="Soiling Factor")
 
         # Add plot styling
         ax.set_xlabel("Distance from receiver - X [m]")
@@ -617,29 +520,20 @@ class FieldCommonMethods:
         plt.tight_layout()
 
         dat = self.helios.full_field.copy()
-        dat['soiling_factor'] = sf
-        return fig,ax,dat
+        dat["soiling_factor"] = sf
+        return fig, ax, dat
+
 
 class FieldModel(PhysicalBase, FieldCommonMethods):
-    def __init__(
-        self,
-        file_params,
-        file_SF,
-        cleaning_rate: Optional[float] = None,
-        num_sectors: Optional[Union[int, Tuple[int, int], str]] = None,
-    ):
+    def __init__(self, file_params, file_SF, cleaning_rate: Optional[float] = None, num_sectors: Optional[Union[int, Tuple[int, int], str]] = None):
         super().__init__()
         super().import_site_data_and_constants(file_params)
 
         self.sun = Sun()
         self.sun.import_sun(file_params)
 
-        self.helios.import_helios(
-            file_params, file_SF, cleaning_rate=cleaning_rate, num_sectors=num_sectors
-        )
-        if not (isinstance(self.helios.stow_tilt, float)) and not (
-            isinstance(self.helios.stow_tilt, int)
-        ):
+        self.helios.import_helios(file_params, file_SF, cleaning_rate=cleaning_rate, num_sectors=num_sectors)
+        if not (isinstance(self.helios.stow_tilt, float)) and not (isinstance(self.helios.stow_tilt, int)):
             self.helios.stow_tilt = None
 
     def compute_acceptance_angles(self, plant, verbose=True):
@@ -667,30 +561,17 @@ class FieldModel(PhysicalBase, FieldCommonMethods):
 
         max_accept = max([self.helios.acceptance_angles[f].max() for f in files])
         min_accept = min([self.helios.acceptance_angles[f].min() for f in files])
-        _print_if(
-            f"Acceptance angle range: ({min_accept * 1e3:.1f}, {max_accept * 1e3:.1f}) [mrad]",
-            verbose,
-        )
+        _print_if(f"Acceptance angle range: ({min_accept * 1e3:.1f}, {max_accept * 1e3:.1f}) [mrad]", verbose)
 
 
 class SimplifiedFieldModel(ConstantMeanBase, FieldCommonMethods):
-    def __init__(
-        self,
-        file_params,
-        file_SF,
-        cleaning_rate: float = None,
-        num_sectors: Optional[Union[int, Tuple[int, int], str]] = None,
-    ):
+    def __init__(self, file_params, file_SF, cleaning_rate: float = None, num_sectors: Optional[Union[int, Tuple[int, int], str]] = None):
         super().__init__()
         super().import_site_data_and_constants(file_params)
 
         self.sun = Sun()
         self.sun.import_sun(file_params)
 
-        self.helios.import_helios(
-            file_params, file_SF, cleaning_rate=cleaning_rate, num_sectors=num_sectors
-        )
-        if not (isinstance(self.helios.stow_tilt, float)) and not (
-            isinstance(self.helios.stow_tilt, int)
-        ):
+        self.helios.import_helios(file_params, file_SF, cleaning_rate=cleaning_rate, num_sectors=num_sectors)
+        if not (isinstance(self.helios.stow_tilt, float)) and not (isinstance(self.helios.stow_tilt, int)):
             self.helios.stow_tilt = None

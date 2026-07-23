@@ -8,13 +8,7 @@ import scipy.stats as sps
 import heliosoil.base_models as smb
 import heliosoil.fitting as smf
 import heliosoil.utilities as smu
-from heliosoil.paper_specific_utilities import (
-    plot_for_paper,
-    daily_soiling_rate,
-    fit_quality_plots,
-    summarize_fit_quality,
-    plot_experiment_PA,
-)
+from heliosoil.paper_specific_utilities import plot_for_paper, daily_soiling_rate, fit_quality_plots, summarize_fit_quality, plot_experiment_PA
 
 # CHOOSE WHETHER TO USE DAILY AVERAGE OF REFLECTANCE VALUES OR NOT
 DAILY_AVERAGE = False
@@ -33,9 +27,7 @@ second_surf = True  # True if using the second-surface model. Otherwise, use fir
 d = f"{main_directory}/data/port_augusta/"
 time_to_remove_at_end = [0, 0, 0, 0, 0, 0]
 train_experiments = [0]  # indices for training experiments from 0 to len(files)-1
-train_mirrors = [
-    "OSE_M2_T00"
-]  # ,"ONW_M5_T00"] # which mirrors within the experiments are used for
+train_mirrors = ["OSE_M2_T00"]  # ,"ONW_M5_T00"] # which mirrors within the experiments are used for
 # train_mirrors = ["OSE_M3_T30"]#,"ONW_M5_T00"] # which mirrors within the experiments are used for
 k_factor = "import"  # None sets equal to 1.0, "import" imports from the file
 dust_type = "TSP"
@@ -43,9 +35,7 @@ number_of_measurements = 6.0
 
 # %% Get file list and time intervals. Import training data.
 parameter_file = d + "parameters_port_augusta_experiments.xlsx"
-files, training_intervals, mirror_name_list, all_mirrors = smu.get_training_data(
-    d, "PortAugusta_Data_", time_to_remove_at_end=time_to_remove_at_end
-)
+files, training_intervals, mirror_name_list, all_mirrors = smu.get_training_data(d, "PortAugusta_Data_", time_to_remove_at_end=time_to_remove_at_end)
 # training_intervals[0][1] -= np.datetime64(36,'h')
 
 orientation = [[s[1] + s[2] for s in mirrors] for mirrors in mirror_name_list]
@@ -65,11 +55,7 @@ plot_title = "Training: " + str(train_mirrors) + ", Exp: " + str(t)
 # %% Import training data
 imodel = smf.SemiPhysical(parameter_file)
 imodel_constant = smf.ConstantMeanDeposition(parameter_file)
-sim_data_train = smb.SimulationInputs(
-    files_train,
-    k_factors=k_factor,
-    dust_type=dust_type,
-)
+sim_data_train = smb.SimulationInputs(files_train, k_factors=k_factor, dust_type=dust_type)
 reflect_data_train = smb.ReflectanceMeasurements(
     files_train,
     sim_data_train.time,
@@ -85,13 +71,9 @@ if DAILY_AVERAGE:
     reflect_data_train = smu.daily_average(reflect_data_train, sim_data_train.time, dt=None)
 
 # Trim (if required) training data
-sim_data_train, reflect_data_train = smu.trim_experiment_data(
-    sim_data_train, reflect_data_train, training_intervals
-)
+sim_data_train, reflect_data_train = smu.trim_experiment_data(sim_data_train, reflect_data_train, training_intervals)
 
-sim_data_train, reflect_data_train = smu.trim_experiment_data(
-    sim_data_train, reflect_data_train, "reflectance_data"
-)
+sim_data_train, reflect_data_train = smu.trim_experiment_data(sim_data_train, reflect_data_train, "reflectance_data")
 
 # %% Plot training data
 
@@ -123,9 +105,7 @@ if DAILY_AVERAGE:
     reflect_data_total = smu.daily_average(reflect_data_total, sim_data_total.time, dt=None)
 
 # %% Trim data and plot
-sim_data_total, reflect_data_total = smu.trim_experiment_data(
-    sim_data_total, reflect_data_total, "reflectance_data"
-)
+sim_data_total, reflect_data_total = smu.trim_experiment_data(sim_data_total, reflect_data_total, "reflectance_data")
 
 for ii, experiment in enumerate(sim_data_total.dt.keys()):
     if any("augusta".lower() in value.lower() for value in sim_data_total.files):
@@ -157,13 +137,10 @@ if DAILY_AVERAGE:
 # %% PLOT REFLECTANCE DATA FOR 4 CAMPAIGNS AFTER DAILY AVERAGE
 
 if DAILY_AVERAGE:
-
     fig, ax = plt.subplots(nrows=2, ncols=2, sharey=True, figsize=(16, 16))
     fmt = "${0:s}$"
     names = ["SE1", "SE2", "SE3", "SE4", "SE5", "NW1", "NW2", "NW3", "NW4", "NW5"]
-    label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(
-        reflect_data_total.reflectometer_incidence_angle[0]
-    )
+    label_str = r"Reflectance at {0:.1f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0])
 
     for f, exp in enumerate(files):
         ave = reflect_data_total.average[f]
@@ -172,14 +149,7 @@ if DAILY_AVERAGE:
         date_format = mdates.DateFormatter("%Y-%m-%d")
 
         for ii in range(ave.shape[1]):
-            ax[f // 2, np.mod(f, 2)].errorbar(
-                t,
-                ave[:, ii],
-                yerr=1.96 * std[:, ii],
-                label=fmt.format(names[ii]),
-                marker="o",
-                capsize=4.0,
-            )
+            ax[f // 2, np.mod(f, 2)].errorbar(t, ave[:, ii], yerr=1.96 * std[:, ii], label=fmt.format(names[ii]), marker="o", capsize=4.0)
         ax[f // 2, np.mod(f, 2)].grid(True)
         ax[f // 2, np.mod(f, 2)].xaxis.set_major_formatter(date_format)
         ax[f // 2, np.mod(f, 2)].xaxis.set_major_locator(mdates.DayLocator(interval=1))
@@ -190,23 +160,14 @@ if DAILY_AVERAGE:
         title_str = "Campaign " + f"{f + 1}"
         ax[f // 2, np.mod(f, 2)].set_title(title_str, fontsize=20)
 
-        plt.setp(
-            ax[f // 2, np.mod(f, 2)].get_xticklabels(),
-            rotation=20,
-            horizontalalignment="right",
-            fontsize=15,
-        )
+        plt.setp(ax[f // 2, np.mod(f, 2)].get_xticklabels(), rotation=20, horizontalalignment="right", fontsize=15)
         plt.tight_layout
 
-    [
-        [ax[kk, jj].set_ylim((0.855, 0.965)) for jj in range(ax.shape[1])]
-        for kk in range(ax.shape[0])
-    ]
+    [[ax[kk, jj].set_ylim((0.855, 0.965)) for jj in range(ax.shape[1])] for kk in range(ax.shape[0])]
 
 # %% PLOT EXPERIMENTAL DATA AFTER DAILY AVERAGE
 
 for f in range(len(files)):
-
     lgd_size = 15
     fig, ax = plt.subplots(nrows=3, figsize=(12, 15))
 
@@ -216,33 +177,16 @@ for f in range(len(files)):
     lgd_label = [lg[:5].replace("O", "").replace("_M", "") for lg in mirror_name_list[f]]
     for ii in range(ave.shape[1]):
         if lgd_label[ii] == "W1":
-            ax[0].errorbar(
-                t,
-                ave[:, ii],
-                yerr=1.96 * std[:, ii],
-                label=lgd_label[ii],
-                linestyle="dashed",
-                marker="o",
-                capsize=4.0,
-            )
+            ax[0].errorbar(t, ave[:, ii], yerr=1.96 * std[:, ii], label=lgd_label[ii], linestyle="dashed", marker="o", capsize=4.0)
         else:
-            ax[0].errorbar(
-                t, ave[:, ii], yerr=1.96 * std[:, ii], label=lgd_label[ii], marker="o", capsize=4.0
-            )
+            ax[0].errorbar(t, ave[:, ii], yerr=1.96 * std[:, ii], label=lgd_label[ii], marker="o", capsize=4.0)
     ax[0].grid(True)
-    label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(
-        reflect_data_total.reflectometer_incidence_angle[0]
-    )
+    label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0])
     ax[0].set_ylabel(label_str)
     ax[0].legend(fontsize=lgd_size, loc="center right", bbox_to_anchor=(1.15, 0.5))
     plt.suptitle("Raygen Experiments Summary ", fontsize=20, x=0.5, y=0.92)
 
-    ax[1].plot(
-        sim_data_total.time[f],
-        sim_data_total.dust_conc_mov_avg[f],
-        color="brown",
-        label="Measurements",
-    )
+    ax[1].plot(sim_data_total.time[f], sim_data_total.dust_conc_mov_avg[f], color="brown", label="Measurements")
     # label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
     ax[1].axhline(
         y=sim_data_total.dust_concentration[f].mean(),
@@ -257,14 +201,9 @@ for f in range(len(files)):
     ax[1].legend(fontsize=lgd_size)
     ax[1].set_ylim(0, 50)
 
-    ax[2].plot(
-        sim_data_total.time[f], sim_data_total.wind_speed[f], color="green", label="Measurements"
-    )
+    ax[2].plot(sim_data_total.time[f], sim_data_total.wind_speed[f], color="green", label="Measurements")
     ax[2].axhline(
-        y=sim_data_total.wind_speed[f].mean(),
-        color="green",
-        ls="--",
-        label=r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean()),
+        y=sim_data_total.wind_speed[f].mean(), color="green", ls="--", label=r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean())
     )
     label_str = r"Wind Speed [$m\,/\,s$]"
     ax[2].set_ylabel(label_str, color="green")
@@ -280,30 +219,18 @@ for m, mir in enumerate(train_mirrors):
         diff_days = -diff_array_times.astype("timedelta64[s]").astype("int") / 3600 / 24
         idx_mir = reflect_data_total.mirror_names[exp].index(mir)
         diff_ref = -np.diff(reflect_data_total.average[exp][:, idx_mir], axis=0)
-        diff_rates = (
-            diff_ref * 100 / diff_days
-        )  # contain soiling rates for mir in training_mirrors
+        diff_rates = diff_ref * 100 / diff_days  # contain soiling rates for mir in training_mirrors
 
-        df_dust = pd.DataFrame(
-            {"Time": sim_data_total.time[exp], "Value": sim_data_total.dust_concentration[exp]}
-        )
+        df_dust = pd.DataFrame({"Time": sim_data_total.time[exp], "Value": sim_data_total.dust_concentration[exp]})
         retiming_vector = pd.to_datetime(reflect_data_total.times[exp])
-        df_dust["Interval"] = pd.cut(
-            df_dust["Time"], bins=retiming_vector, right=False, labels=False
-        )
+        df_dust["Interval"] = pd.cut(df_dust["Time"], bins=retiming_vector, right=False, labels=False)
         df_dust_retime = pd.DataFrame(
-            {
-                "Time": retiming_vector[1:],
-                "Mean_TSP": df_dust.groupby("Interval")["Value"].mean().values,
-                "Soiling_Rate": diff_rates,
-            }
+            {"Time": retiming_vector[1:], "Mean_TSP": df_dust.groupby("Interval")["Value"].mean().values, "Soiling_Rate": diff_rates}
         )
         df_sorted = df_dust_retime.sort_values(by="Mean_TSP")
         print(df_dust_retime)
         print(df_sorted)
-        plt.plot(
-            df_sorted["Mean_TSP"], df_sorted["Soiling_Rate"], marker="o", linestyle="-", color="b"
-        )
+        plt.plot(df_sorted["Mean_TSP"], df_sorted["Soiling_Rate"], marker="o", linestyle="-", color="b")
         # plt.hist(df_sorted['Soiling_Rate'], bins='auto', edgecolor='black')
         plt.xlabel("Mean_TSP, µg/m3")
         plt.ylabel("Soiling_Rate, %/day")
@@ -321,9 +248,7 @@ file_inds = np.arange(len(files_train))
 imodel_constant = smu.set_extinction_coefficients(imodel_constant, ext_weights, file_inds)
 
 # %% Fit semi-physical model & plot on training data
-log_param_hat, log_param_cov = imodel.fit_mle(
-    sim_data_train, reflect_data_train, transform_to_original_scale=False
-)
+log_param_hat, log_param_cov = imodel.fit_mle(sim_data_train, reflect_data_train, transform_to_original_scale=False)
 
 s = np.sqrt(np.diag(log_param_cov))
 param_ci = log_param_hat + 1.96 * s * np.array([[-1], [1]])
@@ -356,9 +281,7 @@ _, _, _ = imodel.plot_soiling_factor(
 )
 
 # %% Fit constant mean model & plot on training data
-log_param_hat_con, log_param_cov_con = imodel_constant.fit_mle(
-    sim_data_train, reflect_data_train, transform_to_original_scale=False
-)
+log_param_hat_con, log_param_cov_con = imodel_constant.fit_mle(sim_data_train, reflect_data_train, transform_to_original_scale=False)
 s_con = np.sqrt(np.diag(log_param_cov_con))
 param_ci_con = log_param_hat_con + 1.96 * s_con * np.array([[-1], [1]])
 lower_ci_con = imodel_constant.transform_scale(param_ci_con[0, :])
@@ -366,9 +289,7 @@ upper_ci_con = imodel_constant.transform_scale(param_ci_con[1, :])
 param_hat_con = imodel_constant.transform_scale(log_param_hat_con)
 mu_tilde, sigma_dep_con = param_hat_con
 print(f"mu_tilde: {mu_tilde:.2e} [{lower_ci_con[0]:.2e},{upper_ci_con[0]:.2e}] [p.p./day]")
-print(
-    f"sigma_dep (constant mean model): {sigma_dep_con:.2e} [{lower_ci_con[1]:.2e},{upper_ci_con[1]:.2e}] [p.p./day]"
-)
+print(f"sigma_dep (constant mean model): {sigma_dep_con:.2e} [{lower_ci_con[1]:.2e},{upper_ci_con[1]:.2e}] [p.p./day]")
 
 imodel_constant.update_model_parameters(param_hat_con)
 imodel_constant.save(
@@ -436,9 +357,7 @@ labels = ["Low", "Medium", "High", "Maximum"]
 colors = ["blue", "green", "purple", "black"]
 fsz = 16
 
-sims, a, a2 = daily_soiling_rate(
-    sim_data_total, cm_save_file, M=100000, percents=pers, dust_type=dust_type
-)
+sims, a, a2 = daily_soiling_rate(sim_data_total, cm_save_file, M=100000, percents=pers, dust_type=dust_type)
 # xL,xU = np.percentile(sims,[0.1,99.9])
 xL, xU = -0.25, 3.0
 lg = np.linspace(xL, xU, 1000)
@@ -460,9 +379,7 @@ ax.set_xlabel("Loss (percentage points)", fontsize=fsz + 2)
 ax.legend(fontsize=fsz)
 
 fig.set_size_inches(5, 4)
-fig.savefig(
-    f"{main_directory}/results/losses_port_augusta.pdf", dpi=300, bbox_inches="tight", pad_inches=0
-)
+fig.savefig(f"{main_directory}/results/losses_port_augusta.pdf", dpi=300, bbox_inches="tight", pad_inches=0)
 
 # %% Highest only
 
@@ -484,12 +401,7 @@ ax.set_xlabel("Loss (percentage points)", fontsize=fsz + 2)
 # ax.legend(fontsize=fsz)
 
 fig.set_size_inches(5, 4)
-fig.savefig(
-    f"{main_directory}/results/highest_losses_port_augusta.pdf",
-    dpi=300,
-    bbox_inches="tight",
-    pad_inches=0,
-)
+fig.savefig(f"{main_directory}/results/highest_losses_port_augusta.pdf", dpi=300, bbox_inches="tight", pad_inches=0)
 
 # %% Fit quality plots (semi-physical)
 mirror_idxs = list(range(len(all_mirrors)))

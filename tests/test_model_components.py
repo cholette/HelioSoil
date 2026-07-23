@@ -32,12 +32,7 @@ import types
 import numpy as np
 import pytest
 
-from heliosoil.dust_distributions import (
-    GaussianMixtureModel,
-    NumberDistribution,
-    MassDistribution,
-    AreaDistribution,
-)
+from heliosoil.dust_distributions import GaussianMixtureModel, NumberDistribution, MassDistribution, AreaDistribution
 from heliosoil.base_models import ConstantMeanBase, PhysicalBase
 
 
@@ -135,16 +130,14 @@ def test_dust_distribution_mean_shifts():
 # Shared helpers for the soiling-rate tests
 # ---------------------------------------------------------------------------
 
+
 def _helios_stub(**arrays):
     """A minimal stand-in for the Heliostats object.
 
     Only the attributes read/written by ``calculate_delta_soiled_area`` are
     provided; output dicts start empty and are populated by the method.
     """
-    helios = types.SimpleNamespace(
-        delta_soiled_area={},
-        delta_soiled_area_variance={},
-    )
+    helios = types.SimpleNamespace(delta_soiled_area={}, delta_soiled_area_variance={})
     for name, value in arrays.items():
         setattr(helios, name, value)
     return helios
@@ -154,6 +147,7 @@ def _helios_stub(**arrays):
 # 2. ConstantMeanBase.calculate_delta_soiled_area  (SimplifiedFieldModel core)
 # ---------------------------------------------------------------------------
 
+
 def test_constant_mean_delta_soiled_area():
     """delta = (c_dust / density) * cos(tilt) * mu_tilde, elementwise."""
     f = 0
@@ -161,10 +155,7 @@ def test_constant_mean_delta_soiled_area():
     density = 35.0  # PM10 reference value [arbitrary, consistent units]
 
     # tilt deliberately includes 0 deg (cos=1) and 90 deg (cos=0) limits.
-    tilt = np.array(
-        [[0.0, 30.0, 60.0, 90.0],
-         [10.0, 45.0, 80.0, 15.0]]
-    )
+    tilt = np.array([[0.0, 30.0, 60.0, 90.0], [10.0, 45.0, 80.0, 15.0]])
     dust_conc = np.array([20.0, 50.0, 80.0, 110.0])
 
     model = ConstantMeanBase()
@@ -173,7 +164,7 @@ def test_constant_mean_delta_soiled_area():
     model.helios = _helios_stub(tilt={f: tilt})
 
     sim_in = types.SimpleNamespace(
-        time={f: None},                              # only keys are used
+        time={f: None},  # only keys are used
         dust=types.SimpleNamespace(PM10={f: density}),
         dust_concentration={f: dust_conc},
         dust_type={f: "PM10"},
@@ -181,16 +172,12 @@ def test_constant_mean_delta_soiled_area():
 
     model.calculate_delta_soiled_area(sim_in, verbose=False)
 
-    alpha = dust_conc / density                      # shape (N_times,)
+    alpha = dust_conc / density  # shape (N_times,)
     expected = alpha[None, :] * np.cos(np.radians(tilt)) * mu_tilde
-    np.testing.assert_allclose(
-        model.helios.delta_soiled_area[f], expected, rtol=RTOL, atol=ATOL
-    )
+    np.testing.assert_allclose(model.helios.delta_soiled_area[f], expected, rtol=RTOL, atol=ATOL)
 
     # Explicit limit checks: tilt=0 -> alpha*mu_tilde; tilt=90 -> 0.
-    np.testing.assert_allclose(
-        model.helios.delta_soiled_area[f][0, 0], alpha[0] * mu_tilde, rtol=RTOL
-    )
+    np.testing.assert_allclose(model.helios.delta_soiled_area[f][0, 0], alpha[0] * mu_tilde, rtol=RTOL)
     assert abs(model.helios.delta_soiled_area[f][0, 3]) < 1e-12
 
 
@@ -210,24 +197,20 @@ def test_constant_mean_delta_soiled_area_variance():
     model.helios = _helios_stub(tilt={f: tilt})
 
     sim_in = types.SimpleNamespace(
-        time={f: None},
-        dust=types.SimpleNamespace(PM10={f: density}),
-        dust_concentration={f: dust_conc},
-        dust_type={f: "PM10"},
+        time={f: None}, dust=types.SimpleNamespace(PM10={f: density}), dust_concentration={f: dust_conc}, dust_type={f: "PM10"}
     )
 
     model.calculate_delta_soiled_area(sim_in, verbose=False)
 
     alpha = dust_conc / density
     expected_var = sigma_dep**2 * (alpha**2 * np.cos(np.radians(tilt)) ** 2)
-    np.testing.assert_allclose(
-        model.helios.delta_soiled_area_variance[f], expected_var, rtol=RTOL, atol=ATOL
-    )
+    np.testing.assert_allclose(model.helios.delta_soiled_area_variance[f], expected_var, rtol=RTOL, atol=ATOL)
 
 
 # ---------------------------------------------------------------------------
 # 3. PhysicalBase.calculate_delta_soiled_area  (FieldModel core)
 # ---------------------------------------------------------------------------
+
 
 def test_physical_delta_soiled_area():
     """
@@ -254,14 +237,10 @@ def test_physical_delta_soiled_area():
 
     model = PhysicalBase()
     model.sigma_dep = None
-    model.helios = _helios_stub(
-        tilt={f: tilt},
-        pdfqN={f: pdfqN},
-        extinction_weighting={f: extinction_weighting},
-    )
+    model.helios = _helios_stub(tilt={f: tilt}, pdfqN={f: pdfqN}, extinction_weighting={f: extinction_weighting})
 
     sim_in = types.SimpleNamespace(
-        wind_speed={f: np.zeros(N_times)},           # only keys are used
+        wind_speed={f: np.zeros(N_times)},  # only keys are used
         dust=types.SimpleNamespace(D={f: D_um}, PM10={f: density}),
         dust_concentration={f: dust_conc},
         dust_type={f: "PM10"},
@@ -271,21 +250,14 @@ def test_physical_delta_soiled_area():
     model.calculate_delta_soiled_area(sim_in, verbose=False)
 
     # Independent vectorised reference.
-    alpha = dust_conc / density                      # (N_times,)
+    alpha = dust_conc / density  # (N_times,)
     D_m = D_um * 1e-6
     log10_D = np.log10(D_um)
-    integrand = (
-        pdfqN
-        * (D_m**2)[None, None, :]
-        * dt
-        * extinction_weighting[:, None, :]
-    )
-    integral = _trapezoid(integrand, log10_D, axis=2)     # (N_helios, N_times)
+    integrand = pdfqN * (D_m**2)[None, None, :] * dt * extinction_weighting[:, None, :]
+    integral = _trapezoid(integrand, log10_D, axis=2)  # (N_helios, N_times)
     expected = alpha[None, :] * (np.pi / 4.0) * integral
 
-    np.testing.assert_allclose(
-        model.helios.delta_soiled_area[f], expected, rtol=RTOL, atol=ATOL
-    )
+    np.testing.assert_allclose(model.helios.delta_soiled_area[f], expected, rtol=RTOL, atol=ATOL)
 
 
 def test_physical_delta_soiled_area_scales_with_concentration():
@@ -306,9 +278,7 @@ def test_physical_delta_soiled_area_scales_with_concentration():
     def run(conc):
         model = PhysicalBase()
         model.sigma_dep = None
-        model.helios = _helios_stub(
-            tilt={f: tilt}, pdfqN={f: pdfqN}, extinction_weighting={f: Qext}
-        )
+        model.helios = _helios_stub(tilt={f: tilt}, pdfqN={f: pdfqN}, extinction_weighting={f: Qext})
         sim_in = types.SimpleNamespace(
             wind_speed={f: np.zeros(N_times)},
             dust=types.SimpleNamespace(D={f: D_um}, PM10={f: density}),

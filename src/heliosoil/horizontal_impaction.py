@@ -29,14 +29,7 @@ from scipy.optimize import minimize_scalar
 
 import heliosoil.base_models as smb
 from heliosoil.fitting import ConstantMeanDeposition, CommonFittingMethods
-from heliosoil.utilities import (
-    _print_if,
-    _check_keys,
-    _parse_dust_str,
-    cosd,
-    sind,
-    cardinal_to_azimuth,
-)
+from heliosoil.utilities import _print_if, _check_keys, _parse_dust_str, cosd, sind, cardinal_to_azimuth
 
 
 def wind_projection_factors(tilt_deg, azimuth_deg, wind_dir_deg):
@@ -85,8 +78,7 @@ def parse_orientation_names(names):
         token = str(name).split("_")[0].strip().upper()
         if not token.startswith("O"):
             raise ValueError(
-                f"Cannot parse orientation from mirror name '{name}': expected a "
-                f"leading 'O' + cardinal-direction token (e.g. 'ON_M1_T00')."
+                f"Cannot parse orientation from mirror name '{name}': expected a leading 'O' + cardinal-direction token (e.g. 'ON_M1_T00')."
             )
         cardinal = token[1:]
         try:
@@ -131,14 +123,7 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
             _print_if(f"No sigma_dep_gamma model defined in {file_params}.", verbose)
 
     def calculate_delta_soiled_area(
-        self,
-        simulation_inputs,
-        mu_tilde=None,
-        sigma_dep=None,
-        omega_windward=None,
-        omega_leeward=None,
-        sigma_dep_gamma=None,
-        verbose=True,
+        self, simulation_inputs, mu_tilde=None, sigma_dep=None, omega_windward=None, omega_leeward=None, sigma_dep_gamma=None, verbose=True
     ):
         _print_if("Calculating soil deposited in a timestep [m^2/m^2]", verbose)
 
@@ -169,9 +154,7 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
         if sigma_dep_gamma is not None or self.sigma_dep_gamma is not None:
             sigma_dep_gamma = self.sigma_dep_gamma if sigma_dep_gamma is None else sigma_dep_gamma
             if sigma_dep_gamma is not None:
-                _print_if(
-                    "Using supplied value for sigma_dep_gamma = " + str(sigma_dep_gamma), verbose
-                )
+                _print_if("Using supplied value for sigma_dep_gamma = " + str(sigma_dep_gamma), verbose)
 
         files = list(sim_in.time.keys())
         for f in files:
@@ -212,31 +195,19 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
 
             p_windward, p_leeward = wind_projection_factors(tilt, azimuth, wind_dir)
 
-            wind_term = wind_speed[None, :] * (
-                p_windward * omega_windward + p_leeward * omega_leeward
-            )
+            wind_term = wind_speed[None, :] * (p_windward * omega_windward + p_leeward * omega_leeward)
             helios.delta_soiled_area[f] = alpha[None, :] * (cosd(tilt) * mu_tilde + wind_term)
 
             if sigma_dep is not None or sigma_dep_gamma is not None:
                 s2_dep = sigma_dep**2 if sigma_dep is not None else 0.0
                 s2_gamma = sigma_dep_gamma**2 if sigma_dep_gamma is not None else 0.0
-                dsav = alpha**2 * (
-                    s2_dep * cosd(tilt) ** 2
-                    + s2_gamma * wind_speed[None, :] ** 2 * (p_windward + p_leeward) ** 2
-                )
+                dsav = alpha**2 * (s2_dep * cosd(tilt) ** 2 + s2_gamma * wind_speed[None, :] ** 2 * (p_windward + p_leeward) ** 2)
                 helios.delta_soiled_area_variance[f] = dsav
 
         self.helios = helios
 
     def random_delta_soiled_area(
-        self,
-        simulation_inputs,
-        mu_tilde=None,
-        sigma_dep=None,
-        omega_windward=None,
-        omega_leeward=None,
-        sigma_dep_gamma=None,
-        verbose=True,
+        self, simulation_inputs, mu_tilde=None, sigma_dep=None, omega_windward=None, omega_leeward=None, sigma_dep_gamma=None, verbose=True
     ):
         """
         Simulates the delta soiled area with randomness in the deposition velocity and
@@ -286,14 +257,7 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
         table = pd.read_excel(file_params, index_col="Parameter")
         self.helios.nominal_reflectance = float(table.loc["nominal_reflectance"].Value)
 
-    def helios_angles(
-        self,
-        simulation_inputs,
-        reflectance_data,
-        verbose=True,
-        second_surface=True,
-        orientations=None,
-    ):
+    def helios_angles(self, simulation_inputs, reflectance_data, verbose=True, second_surface=True, orientations=None):
         """
         Sets helios.tilt (as in ConstantMeanDeposition.helios_angles) and additionally
         populates helios.azimuth[f], shape (N_helios, N_times), from mirror-name
@@ -306,13 +270,7 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
                 - dict[file -> array-like of length N_helios]: explicit azimuths per file.
                 - array-like of length N_helios: same azimuths applied to every file.
         """
-        ConstantMeanDeposition.helios_angles(
-            self,
-            simulation_inputs,
-            reflectance_data,
-            verbose=verbose,
-            second_surface=second_surface,
-        )
+        ConstantMeanDeposition.helios_angles(self, simulation_inputs, reflectance_data, verbose=verbose, second_surface=second_surface)
 
         files = list(simulation_inputs.time.keys())
         helios = self.helios
@@ -327,25 +285,14 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
                 az = np.asarray(orientations, dtype=float)
 
             if az.shape[0] != N_helios:
-                raise ValueError(
-                    f"Number of orientations ({az.shape[0]}) does not match the number "
-                    f"of heliostats ({N_helios}) for file {f}."
-                )
+                raise ValueError(f"Number of orientations ({az.shape[0]}) does not match the number of heliostats ({N_helios}) for file {f}.")
 
             helios.azimuth[f] = np.tile(az[:, None], (1, N_times))
 
         self.helios = helios
 
     def predict_soiling_factor(
-        self,
-        simulation_inputs,
-        rho0=None,
-        mu_tilde=None,
-        sigma_dep=None,
-        omega_windward=None,
-        omega_leeward=None,
-        sigma_dep_gamma=None,
-        verbose=True,
+        self, simulation_inputs, rho0=None, mu_tilde=None, sigma_dep=None, omega_windward=None, omega_leeward=None, sigma_dep_gamma=None, verbose=True
     ):
         sim_in = simulation_inputs
         self.calculate_delta_soiled_area(
@@ -363,9 +310,7 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
             for f in self.helios.soiling_factor.keys():
                 inc_factor = self.helios.inc_ref_factor[f]
                 dsav = self.helios.delta_soiled_area_variance[f]
-                self.helios.soiling_factor_prediction_variance[f] = inc_factor**2 * np.cumsum(
-                    dsav, axis=1
-                )
+                self.helios.soiling_factor_prediction_variance[f] = inc_factor**2 * np.cumsum(dsav, axis=1)
         else:
             self.helios.soiling_factor_prediction_variance = {}
 
@@ -401,23 +346,17 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
         self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0, verbose=False)
         sf = self.helios.soiling_factor
 
-        s2total = self._compute_variance_of_measurements(
-            sigma_dep, sim_in, reflectance_data=reflectance_data
-        )
+        s2total = self._compute_variance_of_measurements(sigma_dep, sim_in, reflectance_data=reflectance_data)
 
         for f in files:
             delta_r = np.diff(meas[f], axis=0)
             rho_prediction = r0 * sf[f][:, pi[f]].transpose()
             mu_delta_r = np.diff(rho_prediction, axis=0)
-            loglike += np.sum(
-                -0.5 * np.log(s2total[f]) - (delta_r - mu_delta_r) ** 2 / (2 * s2total[f])
-            )
+            loglike += np.sum(-0.5 * np.log(s2total[f]) - (delta_r - mu_delta_r) ** 2 / (2 * s2total[f]))
 
         return -loglike
 
-    def _compute_variance_of_measurements(
-        self, sigma_dep, simulation_inputs, reflectance_data=None
-    ):
+    def _compute_variance_of_measurements(self, sigma_dep, simulation_inputs, reflectance_data=None):
         # `sigma_dep` is passed positionally by the shared likelihood machinery
         # (heliosoil.fitting.CommonFittingMethods); sigma_dep_gamma is read from
         # self, which update_model_parameters keeps in sync immediately before
@@ -464,18 +403,12 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
             p_windward, p_leeward = wind_projection_factors(tilt, azimuth, wind_dir)
 
             c2t_dep = np.cumsum(alpha**2 * cosd(tilt) ** 2, axis=1).transpose()
-            c2t_gamma = np.cumsum(
-                alpha**2 * wind_speed[None, :] ** 2 * (p_windward + p_leeward) ** 2, axis=1
-            ).transpose()
+            c2t_gamma = np.cumsum(alpha**2 * wind_speed[None, :] ** 2 * (p_windward + p_leeward) ** 2, axis=1).transpose()
 
             ind1 = pif[0:-1]
             ind2 = [x - 1 for x in pif[1::]]
             s2total[f] = (
-                b**2
-                * (
-                    s2_dep * (c2t_dep[ind2, :] - c2t_dep[ind1, :])
-                    + s2_gamma * (c2t_gamma[ind2, :] - c2t_gamma[ind1, :])
-                )
+                b**2 * (s2_dep * (c2t_dep[ind2, :] - c2t_dep[ind1, :]) + s2_gamma * (c2t_gamma[ind2, :] - c2t_gamma[ind1, :]))
                 + meas_sig[0:-1, :] ** 2
                 + meas_sig[1::, :] ** 2
             )
@@ -519,33 +452,18 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
             "fit_mle instead."
         )
 
-    def fit_mle(
-        self,
-        simulation_inputs,
-        reflectance_data,
-        verbose=True,
-        x0=None,
-        transform_to_original_scale=False,
-        save_file=None,
-        **optim_kwargs,
-    ):
+    def fit_mle(self, simulation_inputs, reflectance_data, verbose=True, x0=None, transform_to_original_scale=False, save_file=None, **optim_kwargs):
         _check_keys(simulation_inputs, reflectance_data)
 
         if x0 is None:
-            _print_if(
-                "Getting initial mu_tilde/sigma_dep guess via the plain constant-mean "
-                "fit (omega_windward = omega_leeward = 0) ...",
-                verbose,
-            )
+            _print_if("Getting initial mu_tilde/sigma_dep guess via the plain constant-mean fit (omega_windward = omega_leeward = 0) ...", verbose)
             omega_windward_saved, omega_leeward_saved = self.omega_windward, self.omega_leeward
             self.omega_windward, self.omega_leeward = 0.0, 0.0
             p0, sse = self.fit_least_squares(simulation_inputs, reflectance_data, verbose=False)
             self.omega_windward, self.omega_leeward = omega_windward_saved, omega_leeward_saved
 
             def nloglike1D(s):
-                return self._negative_log_likelihood(
-                    [p0, 0.0, 0.0, s, s], simulation_inputs, reflectance_data
-                )
+                return self._negative_log_likelihood([p0, 0.0, 0.0, s, s], simulation_inputs, reflectance_data)
 
             s0 = minimize_scalar(nloglike1D, bounds=(smb.tol, sse), method="Bounded")
             x0 = np.array([p0, 0.0, 0.0, s0.x, s0.x])
@@ -553,13 +471,7 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
 
         _print_if("Getting MLE estimates ... ", verbose)
         y, y_cov = CommonFittingMethods.fit_mle(
-            self,
-            simulation_inputs,
-            reflectance_data,
-            verbose=False,
-            x0=x0,
-            transform_to_original_scale=False,
-            **optim_kwargs,
+            self, simulation_inputs, reflectance_data, verbose=False, x0=x0, transform_to_original_scale=False, **optim_kwargs
         )
         H_log = np.linalg.inv(y_cov)
 
@@ -574,27 +486,13 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
         s = np.sqrt(np.diag(x_hat_cov))
         x_ci = x_hat + 1.96 * s * np.array([[-1], [1]])
         for i, name in enumerate(self._PARAM_NAMES):
-            label = (
-                name
-                if transform_to_original_scale
-                else f"log({name})" if self._LOG_TRANSFORM[i] else name
-            )
+            label = name if transform_to_original_scale else f"log({name})" if self._LOG_TRANSFORM[i] else name
             _print_if(f"{label} = {x_hat[i]:.3e}", verbose)
-            _print_if(
-                f"95% confidence interval for {label}: [{x_ci[0, i]:.3e}, {x_ci[1, i]:.3e}]",
-                verbose,
-            )
+            _print_if(f"95% confidence interval for {label}: [{x_ci[0, i]:.3e}, {x_ci[1, i]:.3e}]", verbose)
 
         return x_hat, x_hat_cov
 
-    def save(
-        self,
-        file_name,
-        log_p_hat=None,
-        log_p_hat_cov=None,
-        training_simulation_data=None,
-        training_reflectance_data=None,
-    ):
+    def save(self, file_name, log_p_hat=None, log_p_hat_cov=None, training_simulation_data=None, training_reflectance_data=None):
         with open(file_name, "wb") as f:
             save_data = {"model": self, "type": "constant-mean-wind"}
             if log_p_hat is not None:

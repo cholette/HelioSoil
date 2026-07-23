@@ -29,10 +29,7 @@ import heliosoil.base_models as smb
 import heliosoil.fitting as smf
 import heliosoil.utilities as smu
 from heliosoil.horizontal_impaction import ConstantMeanWindDeposition
-from heliosoil.paper_specific_utilities import (
-    regression_performance_stats,
-    plot_for_paper,
-)
+from heliosoil.paper_specific_utilities import regression_performance_stats, plot_for_paper
 
 # ============================== Configuration ===============================
 main_directory = smu.get_project_root()
@@ -53,20 +50,10 @@ second_surf = True  # True: second-surface AOI model, False: first-surface
 time_to_remove_at_end = 0  # scalar or per-file list, see smu.get_training_data
 # ==============================================================================
 
-MODEL_CLASSES = {
-    "constant_mean": smf.ConstantMeanDeposition,
-    "constant_mean_wind": ConstantMeanWindDeposition,
-    "semi_physical": smf.SemiPhysical,
-}
+MODEL_CLASSES = {"constant_mean": smf.ConstantMeanDeposition, "constant_mean_wind": ConstantMeanWindDeposition, "semi_physical": smf.SemiPhysical}
 PARAM_NAMES = {
     "constant_mean": ["mu_tilde", "sigma_dep"],
-    "constant_mean_wind": [
-        "mu_tilde",
-        "omega_windward",
-        "omega_leeward",
-        "sigma_dep",
-        "sigma_dep_gamma",
-    ],
+    "constant_mean_wind": ["mu_tilde", "omega_windward", "omega_leeward", "sigma_dep", "sigma_dep_gamma"],
     "semi_physical": ["hrz0", "sigma_dep"],
 }
 if MODEL_TYPE not in MODEL_CLASSES:
@@ -90,9 +77,7 @@ def extract(x, ind):
 
 # %% Get file list, time intervals, and the mirrors common to every campaign
 parameter_file = os.path.join(DATA_DIR, PARAMETER_FILE_NAME)
-files, training_intervals, mirror_name_list, all_mirrors = smu.get_training_data(
-    DATA_DIR, FILE_PREFIX, time_to_remove_at_end=time_to_remove_at_end
-)
+files, training_intervals, mirror_name_list, all_mirrors = smu.get_training_data(DATA_DIR, FILE_PREFIX, time_to_remove_at_end=time_to_remove_at_end)
 if train_mirrors is None:
     train_mirrors = all_mirrors
 test_experiments = [f for f in range(len(files)) if f not in train_experiments]
@@ -112,12 +97,8 @@ reflect_data_train = smb.ReflectanceMeasurements(
     import_tilts=True,
     imported_column_names=train_mirrors,
 )
-sim_data_train, reflect_data_train = smu.trim_experiment_data(
-    sim_data_train, reflect_data_train, training_intervals_train
-)
-sim_data_train, reflect_data_train = smu.trim_experiment_data(
-    sim_data_train, reflect_data_train, "reflectance_data"
-)
+sim_data_train, reflect_data_train = smu.trim_experiment_data(sim_data_train, reflect_data_train, training_intervals_train)
+sim_data_train, reflect_data_train = smu.trim_experiment_data(sim_data_train, reflect_data_train, "reflectance_data")
 
 imodel.helios_angles(sim_data_train, reflect_data_train, second_surface=second_surf)
 
@@ -128,9 +109,7 @@ if MODEL_TYPE == "semi_physical":
     imodel.helios.compute_extinction_weights(sim_data_train, imodel.loss_model, verbose=True)
     ext_weights = imodel.helios.extinction_weighting[0].copy()
 
-log_param_hat, log_param_cov = imodel.fit_mle(
-    sim_data_train, reflect_data_train, transform_to_original_scale=False
-)
+log_param_hat, log_param_cov = imodel.fit_mle(sim_data_train, reflect_data_train, transform_to_original_scale=False)
 # The parameter transform is model-specific (e.g. constant_mean_wind logs mu_tilde/
 # sigma_dep/sigma_dep_gamma but leaves omega_windward/omega_leeward linear); the
 # script only needs imodel.transform_scale to go from the fitted (possibly
@@ -164,9 +143,7 @@ reflect_data_total = smb.ReflectanceMeasurements(
     import_tilts=True,
     imported_column_names=train_mirrors,
 )
-sim_data_total, reflect_data_total = smu.trim_experiment_data(
-    sim_data_total, reflect_data_total, "reflectance_data"
-)
+sim_data_total, reflect_data_total = smu.trim_experiment_data(sim_data_total, reflect_data_total, "reflectance_data")
 
 imodel.helios_angles(sim_data_total, reflect_data_total, second_surface=second_surf)
 if MODEL_TYPE == "semi_physical":
@@ -188,16 +165,8 @@ print(f"  R2   = {stats_out_of_sample['R2']:.3f}")
 
 stats_df = pd.DataFrame(
     [
-        {
-            "split": "in_sample",
-            "experiments": str(train_experiments),
-            **stats_in_sample,
-        },
-        {
-            "split": "out_of_sample",
-            "experiments": str(test_experiments),
-            **stats_out_of_sample,
-        },
+        {"split": "in_sample", "experiments": str(train_experiments), **stats_in_sample},
+        {"split": "out_of_sample", "experiments": str(test_experiments), **stats_out_of_sample},
     ]
 ).set_index("split")
 stats_df.to_csv(f"{results_dir}/performance_stats.csv")
@@ -207,13 +176,5 @@ stats_df.to_csv(f"{results_dir}/performance_stats.csv")
 # rdat.mirror_names[e] == train_mirrors for every e (same imported_column_names used
 # throughout), so `orientation` just needs to be built once, in that same order.
 orientation = [[orientation_code(name) for name in train_mirrors] for _ in files]
-fig, ax, ref_output = plot_for_paper(
-    imodel,
-    reflect_data_total,
-    sim_data_total,
-    train_experiments,
-    train_mirrors,
-    orientation,
-    figsize=(16, 15),
-)
+fig, ax, ref_output = plot_for_paper(imodel, reflect_data_total, sim_data_total, train_experiments, train_mirrors, orientation, figsize=(16, 15))
 fig.savefig(f"{results_dir}/all_campaigns.pdf", bbox_inches="tight")

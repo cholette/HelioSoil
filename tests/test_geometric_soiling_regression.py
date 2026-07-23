@@ -72,11 +72,7 @@ ATOL = 1e-12
 
 def _demo_paths():
     d = get_project_root() / "examples" / "woomera_demo"
-    return (
-        str(d / "parameters.xlsx"),
-        str(d / "SF_woomera_SolarPILOT.csv"),
-        str(d / "woomera_data.xlsx"),
-    )
+    return (str(d / "parameters.xlsx"), str(d / "SF_woomera_SolarPILOT.csv"), str(d / "woomera_data.xlsx"))
 
 
 def _run_geometric_soiling_factor():
@@ -96,9 +92,7 @@ def _run_geometric_soiling_factor():
     model.adhesion_removal(sim, verbose=False)
     model.calculate_delta_soiled_area(sim, verbose=False)
 
-    cleans = smu.simple_annual_cleaning_schedule(
-        model.helios.tilt[FILE].shape[0], N_TRUCKS, N_CLEANS, dt=sim.dt[FILE] / 3600.0
-    )
+    cleans = smu.simple_annual_cleaning_schedule(model.helios.tilt[FILE].shape[0], N_TRUCKS, N_CLEANS, dt=sim.dt[FILE] / 3600.0)
     model.reflectance_loss(sim, {FILE: cleans}, verbose=False)
     return np.asarray(model.helios.soiling_factor[FILE], dtype=np.float64)
 
@@ -115,24 +109,12 @@ def _to_frame(sf):
     n_sectors, n_hours = sf.shape
     s_idx, t_idx = _sample_indices(n_sectors, n_hours)
     data = sf[np.ix_(s_idx, t_idx)].T  # rows = hours, cols = sectors
-    return pd.DataFrame(
-        data,
-        index=pd.Index(t_idx, name="hour"),
-        columns=[f"sector_{s}" for s in s_idx],
-    )
+    return pd.DataFrame(data, index=pd.Index(t_idx, name="hour"), columns=[f"sector_{s}" for s in s_idx])
 
 
 def _git_sha():
     try:
-        return (
-            subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],
-                cwd=str(get_project_root()),
-                stderr=subprocess.DEVNULL,
-            )
-            .decode()
-            .strip()
-        )
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(get_project_root()), stderr=subprocess.DEVNULL).decode().strip()
     except Exception:
         return None
 
@@ -150,13 +132,7 @@ def _write_reference(sf):
                 "platform": platform.platform(),
                 "git_sha": _git_sha(),
                 "loss_model": "geometry",
-                "config": {
-                    "n_trucks": N_TRUCKS,
-                    "n_cleans": N_CLEANS,
-                    "cleaning_rate": CLEANING_RATE,
-                    "dust_type": DUST_TYPE,
-                    "file": FILE,
-                },
+                "config": {"n_trucks": N_TRUCKS, "n_cleans": N_CLEANS, "cleaning_rate": CLEANING_RATE, "dust_type": DUST_TYPE, "file": FILE},
                 "soiling_factor_shape": list(sf.shape),
                 "time_sampling": "hourly (all)",
                 "n_sector_samples": N_SECTOR_SAMPLES,
@@ -172,10 +148,7 @@ def test_woomera_geometric_soiling_factor():
 
     if UPDATE:
         _write_reference(sf)
-        pytest.skip(
-            f"Baseline written to {REF_CSV}. Commit it (and its .meta.json), then "
-            "re-run without HELIOSOIL_UPDATE_REFERENCES to verify."
-        )
+        pytest.skip(f"Baseline written to {REF_CSV}. Commit it (and its .meta.json), then re-run without HELIOSOIL_UPDATE_REFERENCES to verify.")
 
     if not REF_CSV.exists():
         pytest.fail(
@@ -190,9 +163,7 @@ def test_woomera_geometric_soiling_factor():
     computed = _to_frame(sf)
 
     # A changed sampling grid means the field shape changed -- itself a regression.
-    assert list(computed.columns) == list(expected.columns), (
-        f"sampled sectors changed: {list(computed.columns)} vs {list(expected.columns)}"
-    )
+    assert list(computed.columns) == list(expected.columns), f"sampled sectors changed: {list(computed.columns)} vs {list(expected.columns)}"
     assert list(computed.index) == list(expected.index), "sampled hours changed vs baseline"
 
     np.testing.assert_allclose(

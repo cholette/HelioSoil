@@ -12,12 +12,7 @@ import numpy as np
 import pytest
 
 import heliosoil.base_models as smb
-from heliosoil.horizontal_impaction import (
-    ConstantMeanWindBase,
-    ConstantMeanWindDeposition,
-    wind_projection_factors,
-    parse_orientation_names,
-)
+from heliosoil.horizontal_impaction import ConstantMeanWindBase, ConstantMeanWindDeposition, wind_projection_factors, parse_orientation_names
 
 RTOL = 1e-10
 ATOL = 0.0
@@ -26,10 +21,7 @@ ATOL = 0.0
 def _wind_helios_stub(**arrays):
     """Minimal stand-in for Heliostats, carrying only what calculate_delta_soiled_area
     (and, where present, compute_soiling_factor/predict_soiling_factor) touch."""
-    helios = types.SimpleNamespace(
-        delta_soiled_area={},
-        delta_soiled_area_variance={},
-    )
+    helios = types.SimpleNamespace(delta_soiled_area={}, delta_soiled_area_variance={})
     for name, value in arrays.items():
         setattr(helios, name, value)
     return helios
@@ -175,12 +167,8 @@ def test_constant_mean_wind_delta_soiled_area_windward_and_leeward():
 
     alpha = dust_conc / density
     theta = np.radians(tilt)
-    expected_col0 = alpha[0] * (
-        np.cos(theta[:, 0]) * mu_tilde + wind_speed[0] * np.sin(theta[:, 0]) * omega_windward
-    )
-    expected_col1 = alpha[1] * (
-        np.cos(theta[:, 1]) * mu_tilde + wind_speed[1] * np.sin(theta[:, 1]) * omega_leeward
-    )
+    expected_col0 = alpha[0] * (np.cos(theta[:, 0]) * mu_tilde + wind_speed[0] * np.sin(theta[:, 0]) * omega_windward)
+    expected_col1 = alpha[1] * (np.cos(theta[:, 1]) * mu_tilde + wind_speed[1] * np.sin(theta[:, 1]) * omega_leeward)
 
     np.testing.assert_allclose(model.helios.delta_soiled_area[f][:, 0], expected_col0, rtol=RTOL)
     np.testing.assert_allclose(model.helios.delta_soiled_area[f][:, 1], expected_col1, rtol=RTOL)
@@ -221,13 +209,8 @@ def test_constant_mean_wind_delta_soiled_area_variance():
     delta_gamma = np.radians(azimuth - wind_dir[None, :])
     p_w = np.sin(theta) * np.maximum(0.0, np.cos(delta_gamma))
     p_l = np.sin(theta) * np.maximum(0.0, -np.cos(delta_gamma))
-    expected_var = alpha**2 * (
-        sigma_dep**2 * np.cos(theta) ** 2
-        + sigma_dep_gamma**2 * wind_speed[None, :] ** 2 * (p_w + p_l) ** 2
-    )
-    np.testing.assert_allclose(
-        model.helios.delta_soiled_area_variance[f], expected_var, rtol=RTOL, atol=ATOL
-    )
+    expected_var = alpha**2 * (sigma_dep**2 * np.cos(theta) ** 2 + sigma_dep_gamma**2 * wind_speed[None, :] ** 2 * (p_w + p_l) ** 2)
+    np.testing.assert_allclose(model.helios.delta_soiled_area_variance[f], expected_var, rtol=RTOL, atol=ATOL)
 
 
 def test_random_delta_soiled_area_matches_calculate_delta_soiled_area_mean():
@@ -468,9 +451,7 @@ def test_fit_mle_recovers_parameters_on_synthetic_data():
     # differently-scaled deposition parameter and are unsuitable for this
     # synthetic mu_tilde ~ 1e-4 scale); supply an order-of-magnitude x0 instead.
     x0 = np.array([1e-3, 1e-4, 1e-4, 1e-4, 1e-4])
-    x_hat, x_cov = model.fit_mle(
-        sim_in, ref_dat, verbose=False, x0=x0, transform_to_original_scale=True
-    )
+    x_hat, x_cov = model.fit_mle(sim_in, ref_dat, verbose=False, x0=x0, transform_to_original_scale=True)
 
     mu_hat, omega_w_hat, omega_l_hat, sigma_dep_hat, sigma_gamma_hat = x_hat
 
