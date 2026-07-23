@@ -1,5 +1,5 @@
 import heliosoil.base_models as smb
-from heliosoil.utilities import _print_if, _check_keys, _parse_dust_str
+from heliosoil.utilities import logger, _print_if, _check_keys, _parse_dust_str, _std_errors_from_cov
 import numpy as np
 from numpy import radians as rad
 from numpy.linalg import inv
@@ -108,7 +108,6 @@ class CommonFittingMethods:
         return sse
 
     def _negative_log_likelihood(self, params, simulation_inputs, reflectance_data):
-
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs, reflectance_data)
 
@@ -153,7 +152,6 @@ class CommonFittingMethods:
         return unnormalized_posterior
 
     def fit_least_squares(self, simulation_inputs, reflectance_data, verbose=True):
-
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs, reflectance_data)
 
@@ -218,6 +216,22 @@ class CommonFittingMethods:
         y = res.x
         _print_if("  " + res.message, verbose)
 
+        # One-time divergence check. transform_scale silences the transient
+        # per-iteration exp overflow the optimizer produces while probing extreme
+        # parameter values; here, at the converged optimum, we surface the genuine
+        # case where a parameter overflowed to inf in original scale -- i.e. the
+        # optimizer did not find a finite optimum (unidentifiable model / too
+        # little data), which the silenced per-step warnings would otherwise mask.
+        with np.errstate(over="ignore"):
+            x_final = self.transform_scale(y)
+        if not np.all(np.isfinite(np.asarray(x_final, dtype=float))):
+            logger.warning(
+                "Fit did not converge to finite parameters: at least one parameter "
+                "overflowed to inf in original scale (transformed optimum = "
+                f"{np.array2string(np.asarray(y), precision=3)}). The model is "
+                "likely unidentifiable from this data."
+            )
+
         _print_if("Estimating parameter covariance using numerical approximation of Hessian ... ", verbose)
         H_log = ndt.Hessian(nloglike)(y)  # Hessian is in the log transformed space
 
@@ -244,7 +258,7 @@ class CommonFittingMethods:
             _print_if("... done! \n" + fmt.format(y_hat[0], y_hat[1]), verbose)
 
             # print confidence intervals
-            s = np.sqrt(np.diag(y_cov))
+            s = _std_errors_from_cov(y_cov)
             y_ci = y_hat + 1.96 * s * np.array([[-1], [1]])
             fmt = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
             _print_if(fmt.format("log(log(hrz0))", y_ci[0, 0], y_ci[1, 0]), verbose)
@@ -505,16 +519,17 @@ class CommonFittingMethods:
 
 
 class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
-    def __init__(self, file_params):
+    def __init__(self, file_params, verbose=True):
         table = pd.read_excel(file_params, index_col="Parameter")
         super().__init__()
-        self.import_site_data_and_constants(file_params)
+        self.import_site_data_and_constants(file_params, verbose=verbose)
         self.helios.hamaker = float(table.loc["hamaker_glass"].Value)
         self.helios.poisson = float(table.loc["poisson_glass"].Value)
         self.helios.youngs_modulus = float(table.loc["youngs_modulus_glass"].Value)
         self.helios.nominal_reflectance = float(table.loc["nominal_reflectance"].Value)
         if not (isinstance(self.helios.stow_tilt, float)) and not (isinstance(self.helios.stow_tilt, int)):
             self.helios.stow_tilt = None
+        self.verbose = verbose
 
     def helios_angles(
         self,
@@ -523,7 +538,6 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
         verbose: bool = True,
         second_surface: bool = True,
     ) -> None:
-
         sim_in = simulation_inputs
         ref_dat = reflectance_data
         files = list(sim_in.time.keys())
@@ -591,7 +605,6 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
             self.helios.soiling_factor_prediction_variance = {}
 
     def fit_mle(self, simulation_inputs, reflectance_data, verbose=True, x0=None, transform_to_original_scale=False, **optim_kwargs):
-
         p_hat, p_cov = super().fit_mle(
             simulation_inputs, reflectance_data, verbose=True, x0=x0, transform_to_original_scale=transform_to_original_scale, **optim_kwargs
         )
@@ -603,14 +616,14 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
             _print_if(fmtE.format(p_hat[0], p_hat[1]), verbose)
 
             # print confidence intervals
-            s = np.sqrt(np.diag(p_cov))
+            s = _std_errors_from_cov(p_cov)
             x_ci = p_hat + 1.96 * s * np.array([[-1], [1]])
             _print_if(fmtCI.format("hrz0", x_ci[0, 0], x_ci[1, 0]), verbose)
             _print_if(fmtCI.format("sigma_dep", x_ci[0, 1], x_ci[1, 1]), verbose)
         else:
             fmtE = "log(log(hrz0)) = {0:.2e}, sigma_dep = {1:.2e}"
             _print_if(fmtE.format(p_hat[0], p_hat[1]), verbose)
-            s = np.sqrt(np.diag(p_cov))
+            s = _std_errors_from_cov(p_cov)
             y_ci = p_hat + 1.96 * s * np.array([[-1], [1]])
             _print_if(fmtCI.format("log(log(hrz0))", y_ci[0, 0], y_ci[1, 0]), verbose)
             _print_if(fmtCI.format("log(sigma_dep)", y_ci[0, 1], y_ci[1, 1]), verbose)
@@ -621,7 +634,9 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
         # direction is either "forward" (to log-scaled space) or "inverse" (back to original scale)
         x = np.array(x)
         if direction == "inverse":
-            z = np.array([np.exp(np.exp(x[0])), np.exp(x[1])])
+            # Double-exp can overflow for large log-params; inf is handled downstream.
+            with np.errstate(over="ignore"):
+                z = np.array([np.exp(np.exp(x[0])), np.exp(x[1])])
         elif direction == "forward":
             z = np.array([np.log(np.log(x[0])), np.log(x[1])])
         else:
@@ -631,7 +646,8 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
             return z
         else:
             # Jacobian for transformation. See Reparameterization at https://en.wikipedia.org/wiki/Fisher_information
-            J = np.array([[np.exp(x[0] + np.exp(x[0])), 0], [0, np.exp(x[1])]])
+            with np.errstate(over="ignore"):
+                J = np.array([[np.exp(x[0] + np.exp(x[0])), 0], [0, np.exp(x[1])]])
 
             if direction == "inverse":
                 Ji = inv(J)
@@ -689,16 +705,15 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
     simulation_inputs: smb.SimulationInputs
     reflectance_data: smb.ReflectanceMeasurements
 
-    def __init__(self, file_params):
+    def __init__(self, file_params, verbose=True):
         super().__init__()
-        self.import_site_data_and_constants(file_params)
+        self.import_site_data_and_constants(file_params, verbose=verbose)
         table = pd.read_excel(file_params, index_col="Parameter")
         self.helios.nominal_reflectance = float(table.loc["nominal_reflectance"].Value)
 
     def helios_angles(
         self, simulation_inputs: smb.SimulationInputs, reflectance_data: smb.ReflectanceMeasurements, verbose=True, second_surface=True
     ):
-
         sim_in = simulation_inputs
         ref_dat = reflectance_data
         files = list(sim_in.time.keys())
@@ -744,7 +759,6 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
         self.helios = helios
 
     def predict_soiling_factor(self, simulation_inputs: smb.SimulationInputs, rho0=None, mu_tilde=None, sigma_dep=None, verbose=True):
-
         sim_in = simulation_inputs
         self.calculate_delta_soiled_area(sim_in, mu_tilde=mu_tilde, sigma_dep=sigma_dep, verbose=verbose)
         self.compute_soiling_factor(rho0=rho0)
@@ -759,7 +773,6 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
             self.helios.soiling_factor_prediction_variance = {}
 
     def fit_map(self, simulation_inputs, reflectance_data, priors, verbose=True, x0=None, transform_to_original_scale=False, save_file=None):
-
         _print_if("Getting MAP estimates ... ", verbose)
         y, y_cov = super().fit_map(simulation_inputs, reflectance_data, priors, verbose=False, x0=x0, transform_to_original_scale=False)
 
@@ -772,7 +785,7 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
             _print_if(fmt.format(x_hat[0], x_hat[1]), verbose)
 
             # print confidence intervals
-            s = np.sqrt(np.diag(x_hat_cov))
+            s = _std_errors_from_cov(x_hat_cov)
             x_ci = x_hat + 1.96 * s * np.array([[-1], [1]])
             fmt = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
             _print_if(fmt.format("mu_tilde", x_ci[0, 0], x_ci[1, 0]), verbose)
@@ -787,7 +800,7 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
             _print_if(fmt.format(x_hat[0], x_hat[1]), verbose)
 
             # print confidence intervals
-            s = np.sqrt(np.diag(x_hat_cov))
+            s = _std_errors_from_cov(x_hat_cov)
             x_ci = x_hat + 1.96 * s * np.array([[-1], [1]])
             fmt = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
             _print_if(fmt.format("log(mu_tilde)", x_ci[0, 0], x_ci[1, 0]), verbose)
@@ -796,7 +809,6 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
         return x_hat, x_hat_cov
 
     def fit_mle(self, simulation_inputs, reflectance_data, verbose=True, x0=None, transform_to_original_scale=False, save_file=None):
-
         _print_if("Getting MLE estimates ... ", verbose)
         y, y_cov = super().fit_mle(simulation_inputs, reflectance_data, verbose=False, x0=x0, transform_to_original_scale=False)
         H_log = np.linalg.inv(y_cov)
@@ -811,7 +823,7 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
             _print_if(fmt.format(x_hat[0], x_hat[1]), verbose)
 
             # print confidence intervals
-            s = np.sqrt(np.diag(x_hat_cov))
+            s = _std_errors_from_cov(x_hat_cov)
             x_ci = x_hat + 1.96 * s * np.array([[-1], [1]])
             fmt = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
             _print_if(fmt.format("mu_tilde", x_ci[0, 0], x_ci[1, 0]), verbose)
@@ -826,7 +838,7 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
             _print_if(fmt.format(x_hat[0], x_hat[1]), verbose)
 
             # print confidence intervals
-            s = np.sqrt(np.diag(x_hat_cov))
+            s = _std_errors_from_cov(x_hat_cov)
             x_ci = x_hat + 1.96 * s * np.array([[-1], [1]])
             fmt = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
             _print_if(fmt.format("log(mu_tilde)", x_ci[0, 0], x_ci[1, 0]), verbose)

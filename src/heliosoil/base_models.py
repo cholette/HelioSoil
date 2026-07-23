@@ -1,8 +1,6 @@
 import numpy as np
-from numpy import radians as rad
 import pandas as pd
 import matplotlib.pyplot as plt
-import warnings
 import copy
 from sklearn.cluster import KMeans
 from pathlib import Path
@@ -17,6 +15,7 @@ from pysolar import solar, radiation
 import json
 from scipy.interpolate import RegularGridInterpolator
 from heliosoil.utilities import (
+    logger,
     _print_if,
     _ensure_list,
     _extinction_function,
@@ -60,7 +59,6 @@ class SoilingBase:
         self.loss_model = None  # either "geometry" or "mie"
 
     def import_site_data_and_constants(self, file_params, verbose=True):
-
         _print_if(f"\nLoading data from {file_params} ... ", verbose)
         table = pd.read_excel(file_params, index_col="Parameter")
 
@@ -92,7 +90,7 @@ class PhysicalBase(SoilingBase):
         self.hrz0 = None  # [-] site roughness height ratio
 
     def import_site_data_and_constants(self, file_params, verbose=True):
-        super().import_site_data_and_constants(file_params)
+        super().import_site_data_and_constants(file_params, verbose=verbose)
         table = pd.read_excel(file_params, index_col="Parameter")
 
         try:
@@ -230,7 +228,7 @@ class PhysicalBase(SoilingBase):
                 Fd = cosd(helios.tilt[f][idx, :]) * vz
 
                 if Fd.min() < 0:
-                    warnings.warn("Deposition velocity is negative (min value: " + str(Fd.min()) + "). Setting negative components to zero.")
+                    logger.warning("Deposition velocity is negative (min value: " + str(Fd.min()) + "). Setting negative components to zero.")
                     Fd[Fd < 0] = 0
                 helios.pdfqN[f][idx, :, :] = (
                     Fd.transpose() * dust.pdfN[f]
@@ -246,6 +244,7 @@ class PhysicalBase(SoilingBase):
         constants = self.constants
         g = constants.g
         files = list(simulation_inputs.time.keys())
+        is_dust_removed = False
 
         for f in files:
             D_meters = dust.D[f] * 1e-6  # Change to µm
@@ -287,11 +286,12 @@ class PhysicalBase(SoilingBase):
                         helios.pdfqN[f][h, k:, mom_adhesion < mom_removal] = 0
 
                         if any(mom_adhesion < mom_removal):
-                            _print_if("Some dust is removed", verbose)
+                            is_dust_removed = True
 
                 # Take derivative so that pdfqN is the rate at wich dust is deposited at each diameter
                 helios.pdfqN[f] = np.gradient(helios.pdfqN[f], dt[f], axis=1)
 
+                _print_if("Some dust is removed", verbose & is_dust_removed)
             else:  # common stow angle at night for all heliostats. Assumes tilt at night is close to vertical at night.
                 # Since the heliostats are stowed at a large tilt angle at night, we assume that any dust that falls off at this stow
                 # is never deposited. This introduces a small error since the dust deposited during the day never affects the reflectance, but faster computation.
@@ -309,7 +309,6 @@ class PhysicalBase(SoilingBase):
         self.helios = helios
 
     def calculate_delta_soiled_area(self, simulation_inputs, sigma_dep=None, verbose=True):
-
         # info and error checking
         _print_if("Calculating soil deposited in a timestep [m^2/m^2]", verbose)
 
@@ -377,7 +376,6 @@ class PhysicalBase(SoilingBase):
         self.helios = helios
 
     def plot_area_flux(self, sim_data, exp_idx, hel_id, air_temp, wind_speed, tilt=0.0, hrz0=None, constants=None, ax=None, Ra=True, verbose=True):
-
         dummy_sim = SimulationInputs()
         dummy_sim.dust = Dust()
 
@@ -453,7 +451,7 @@ class ConstantMeanBase(SoilingBase):
         self.mu_tilde = None
 
     def import_site_data_and_constants(self, file_params, verbose=True):
-        super().import_site_data_and_constants(file_params)
+        super().import_site_data_and_constants(file_params, verbose=verbose)
         table = pd.read_excel(file_params, index_col="Parameter")
         try:
             self.mu_tilde = float(table.loc["mu_tilde"].Value)  # [-] constant average deposition
@@ -467,7 +465,6 @@ class ConstantMeanBase(SoilingBase):
             _print_if(f"No sigma_dep model defined in {file_params}.", verbose)
 
     def calculate_delta_soiled_area(self, simulation_inputs, mu_tilde=None, sigma_dep=None, verbose=True):
-
         _print_if("Calculating soil deposited in a timestep [m^2/m^2]", verbose)
 
         sim_in = simulation_inputs
@@ -624,7 +621,7 @@ class SimulationInputs:
             # Import data
             self.import_weather()
             self.dust = Dust(self.files)
-            self.dust.import_dust(verbose=self.verbose)
+            self.dust.import_dust(verbose=self.verbose, dust_measurement_type=self.dust_type)
             self.import_source_intensity()
 
     def import_source_intensity(self) -> None:
@@ -636,7 +633,7 @@ class SimulationInputs:
                 self.source_wavelength[ii] = intensity["Wavelength (nm)"].to_numpy()
                 self.source_normalized_intensity[ii] = intensity["Source Intensity (W/m^2 nm)"].to_numpy()
                 norm = np.trapezoid(y=self.source_normalized_intensity[ii], x=self.source_wavelength[ii])
-                self.source_normalized_intensity[ii] /= norm
+                self.source_normalized_intensity[ii] = self.source_normalized_intensity[ii] / norm
             else:
                 self.source_normalized_intensity[ii] = None
             xl.close()
@@ -786,7 +783,6 @@ class Dust:
     )
 
     def import_dust(self, verbose=True, dust_measurement_type=None):
-
         _print_if("Importing dust properties for each experiment", verbose)
         experiment_files = self.files
         dust_measurement_type = _import_option_helper(experiment_files, dust_measurement_type)
@@ -840,23 +836,29 @@ class Dust:
             self.poisson[ii] = float(table.loc["poisson_dust"].Value)
             self.youngs_modulus[ii] = float(table.loc["youngs_modulus_dust"].Value)
 
-        # add dust measurements if they are PMX
+        # add dust measurements if they are PMX (e.g. PM2.5, PM17, PM18). PM10, TSP
+        # and PMT are already computed above, so they are skipped here.
         for dt in dust_measurement_type:
-            if dt not in [None, "TSP", "PMT"]:  # another concentration is of interest (possibly because we have PMX measurements)
-                X = dt[2::]
-                if len(X) in [1, 2]:  # integer, e.g. PM20
-                    X = int(X)
-                    att = "PM{0:d}".format(X)
-                elif len(X) == 3:  # decimal, e.g. PM2.5
-                    att = "PM" + "_".join(X.split("."))
-                    X = float(X)
+            if dt in [None, "TSP", "PMT", "PM10"]:
+                continue
 
-                new_meas = {f: None for f, _ in enumerate(experiment_files)}
-                for ii, _ in enumerate(experiment_files):
-                    new_meas[ii] = np.trapezoid(self.pdfM[ii][Dii <= X], np.log10(Dii[Dii <= X]))
+            if not str(dt).startswith("PM"):
+                continue  # not a particulate-matter cutoff, nothing to add
 
-                setattr(self, att, new_meas)
-                _print_if("Added " + att + " attribute to dust class to all experiment dust classes", verbose)
+            cutoff = dt[2::]  # diameter cutoff in µm, e.g. "18" or "2.5"
+            if "." in cutoff:  # decimal, e.g. PM2.5 -> attribute PM2_5
+                att = "PM" + "_".join(cutoff.split("."))
+            else:  # integer, e.g. PM18 -> attribute PM18
+                att = "PM{0:d}".format(int(cutoff))
+            cutoff = float(cutoff)
+
+            new_meas = {}
+            for ii, _ in enumerate(experiment_files):
+                Dii = self.D[ii]
+                new_meas[ii] = np.trapezoid(self.pdfM[ii][Dii <= cutoff], np.log10(Dii[Dii <= cutoff]))
+
+            setattr(self, att, new_meas)
+            _print_if("Added " + att + " attribute to dust class for all experiment dust classes", verbose)
 
     def plot_distributions(self, figsize: Tuple[float, float] = (5, 5)) -> Tuple[plt.Figure, Any, List[Any]]:
         """
@@ -1298,7 +1300,6 @@ class Sun:
 
 class Heliostats:
     def __init__(self):
-
         # Properties of heliostat (scalars, assumes identical heliostats)
         self.hamaker = []  # [J] hamaker constant of heliostat glass
         self.poisson = []  # [-] poisson ratio of heliostat glass
@@ -1361,7 +1362,6 @@ class Heliostats:
         num_sectors: Optional[Union[int, Tuple[int, int], str]] = None,
         verbose=True,
     ) -> None:
-
         table = pd.read_excel(file_params, index_col="Parameter")
         # self.h_tower = float(table.loc['h_tower'].Value)
         self.hamaker = float(table.loc["hamaker_glass"].Value)
@@ -1752,6 +1752,7 @@ class Heliostats:
         simulation_data: SimulationInputs,
         loss_model: str,
         num_acceptance_steps: int = 100,
+        acceptance_bin_width: Optional[float] = None,
         lookup_table_file_folder: Optional[str] = None,
         verbose: bool = True,
         show_plots: bool = False,
@@ -1770,7 +1771,15 @@ class Heliostats:
             loss_model (str): The model used to compute extinction weights. Must be either
                 'mie' (for Mie-theory-based extinction) or 'geometry' (unity extinction).
             num_acceptance_steps (int, optional): Number of discrete acceptance angles to use when creating
-                lookup tables. Required if a lookup table is requested but is invalid or does not exist.
+                lookup tables. Used only when ``acceptance_bin_width`` is None. Defaults to 100.
+            acceptance_bin_width (float, optional): Maximum spacing, in radians, between adjacent acceptance
+                angles in the lookup-table grid. When provided, it takes precedence over
+                ``num_acceptance_steps``: the grid spans ``[min, max]`` of the heliostats' acceptance angles
+                with a spacing no larger than this value, so the number of grid points scales with the actual
+                spread of acceptance angles (few or a single point for narrow/uniform fields, more for wide
+                ones). Preferred for field simulations as it bounds interpolation error and avoids the
+                degenerate constant-axis grid that a fixed step count produces when all heliostats share one
+                acceptance angle. Defaults to None.
             lookup_table_file_folder (str, optional): Directory path to read or store precomputed extinction
                 weights and angle/diameter lookup tables.
             verbose (bool, optional): If True, prints detailed progress information to stdout. Defaults to True.
@@ -1803,10 +1812,31 @@ class Heliostats:
 
                 if not is_cache_valid:
                     _print_if(f"Lookup table in {lookup_path} is invalid or missing. Regenerating...", verbose)
-                    assert num_acceptance_steps is not None, "num_acceptance_steps must be set to generate a new lookup table."
+                    assert acceptance_bin_width is not None or num_acceptance_steps is not None, (
+                        "Either acceptance_bin_width or num_acceptance_steps must be set to generate a new lookup table."
+                    )
                     lookup_path.mkdir(parents=True, exist_ok=True)
 
-                    acceptance_angles_range = {f: np.linspace(min(phia[f]), max(phia[f]), num_acceptance_steps) for f in files}
+                    if acceptance_bin_width is not None:
+                        if acceptance_bin_width <= 0:
+                            raise ValueError("acceptance_bin_width must be a positive number (radians).")
+                        # Resolution is set by a fixed bin width: the grid spans
+                        # [min, max] with spacing no larger than acceptance_bin_width,
+                        # so the point count scales with the actual spread of
+                        # acceptance angles (a single point when they are all equal).
+                        acceptance_angles_range = {}
+                        for f in files:
+                            lo, hi = float(min(phia[f])), float(max(phia[f]))
+                            span = hi - lo
+                            if span <= 0:
+                                acceptance_angles_range[f] = np.array([lo])
+                            else:
+                                n_bins = int(np.ceil(span / acceptance_bin_width))
+                                acceptance_angles_range[f] = np.linspace(lo, hi, n_bins + 1)
+                        n_pts = {f: len(acceptance_angles_range[f]) for f in files}
+                        _print_if(f"Acceptance-angle grid: bin width <= {acceptance_bin_width * 1e3:.3g} mrad, {n_pts} points per file.", verbose)
+                    else:
+                        acceptance_angles_range = {f: np.linspace(min(phia[f]), max(phia[f]), num_acceptance_steps) for f in files}
                     self._compute_extinction_weights_lookup_table(
                         sim_dat, acceptance_angles_range, verbose=verbose, save_folder=str(lookup_path), options=options
                     )
@@ -1815,11 +1845,24 @@ class Heliostats:
                 ext_weights, acc_angles, diameters = self._load_from_lookup_table(lookup_path)
 
                 for f in files:
-                    interpolator = RegularGridInterpolator((acc_angles[f], diameters), np.array(ext_weights[f]), bounds_error=False, fill_value=None)
-                    grid_angles, grid_dia = np.meshgrid(phia[f], dust.D[f], indexing="ij")
-                    points = np.stack([grid_angles.ravel(), grid_dia.ravel()], axis=1)
-                    interpolated_values = interpolator(points).reshape(len(phia[f]), len(dust.D[f]))
-                    self.extinction_weighting[f][:, :] = interpolated_values
+                    acc = np.asarray(acc_angles[f])
+                    weights = np.array(ext_weights[f])
+                    if np.unique(acc).size == 1:
+                        # Semi-physical models assign a single (reflectometer)
+                        # acceptance angle to every heliostat, so the lookup
+                        # table's acceptance-angle axis collapses to a constant
+                        # array. RegularGridInterpolator requires strictly
+                        # monotonic axes, so interpolate over diameter only (all
+                        # rows are identical) and broadcast to every heliostat.
+                        interpolator = RegularGridInterpolator((diameters,), weights[0, :], bounds_error=False, fill_value=None)
+                        row = interpolator(np.asarray(dust.D[f])[:, None])
+                        self.extinction_weighting[f][:, :] = np.broadcast_to(row, (len(phia[f]), len(dust.D[f])))
+                    else:
+                        interpolator = RegularGridInterpolator((acc, diameters), weights, bounds_error=False, fill_value=None)
+                        grid_angles, grid_dia = np.meshgrid(phia[f], dust.D[f], indexing="ij")
+                        points = np.stack([grid_angles.ravel(), grid_dia.ravel()], axis=1)
+                        interpolated_values = interpolator(points).reshape(len(phia[f]), len(dust.D[f]))
+                        self.extinction_weighting[f][:, :] = interpolated_values
 
             else:  # Direct computation without lookup table
                 _print_if("Computing extinction weights directly (no lookup table)...", verbose)
@@ -1834,13 +1877,7 @@ class Heliostats:
                             self.extinction_weighting[f][jj, :] = self.extinction_weighting[fe][he, :]
                         else:
                             ext_weight = _extinction_function(
-                                dust.D[f],
-                                sim_dat.source_wavelength[f],
-                                sim_dat.source_normalized_intensity[f],
-                                phia[f][jj],
-                                dust.m[f],
-                                verbose=verbose,
-                                **options,
+                                dust.D[f], sim_dat.source_wavelength[f], sim_dat.source_normalized_intensity[f], phia[f][jj], dust.m[f], **options
                             )
                             self.extinction_weighting[f][jj, :] = ext_weight
                             computed.append((f, jj))
@@ -1891,7 +1928,7 @@ class Heliostats:
             for h in tqdm(
                 range(len(phia[f])), desc=f"File {f}", postfix=f"Acceptance angle between {phia[f][0] * 1e3:.0f} and {phia[f][-1] * 1e3:.0f} mrad"
             ):
-                ext_weight = _extinction_function(dia, lam, intensities, phia[f][h], refractive_index, verbose=verbose, **options)
+                ext_weight = _extinction_function(dia, lam, intensities, phia[f][h], refractive_index, **options)
                 extinction_weighting[f][h, :] = ext_weight
 
             # df = pd.DataFrame(extinction_weighting[f], index=phia[f], columns=dia)

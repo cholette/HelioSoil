@@ -61,6 +61,7 @@ class OptimizationProblem:
         n_az: int = 10,
         n_el: int = 10,
         num_acceptance_steps: int = 100,
+        acceptance_bin_width: Optional[float] = None,
         extinction_table_folder: str = None,
         aoi_model: str = "second_surface",
         verbose: bool = True,
@@ -86,7 +87,13 @@ class OptimizationProblem:
             n_el (int): Number of discretization steps for the elevation angle.
                 Defaults to 10.
             num_acceptance_steps (int): Number of steps for computing acceptance angles
-                in the extinction model. Defaults to 100.
+                in the extinction model. Used only when acceptance_bin_width is None.
+                Defaults to 100.
+            acceptance_bin_width (Optional[float]): Maximum spacing, in radians, between
+                adjacent acceptance angles in the extinction lookup-table grid. When set,
+                it takes precedence over num_acceptance_steps and sizes the grid to the
+                actual spread of the field's acceptance angles. Preferred for field
+                simulations. Defaults to None.
             extinction_table_folder (str): Path to the folder containing or to store
                 extinction lookup tables. Defaults to None.
             aoi_model (str): Angle of incidence model, one of first_surface, heimsath,
@@ -123,6 +130,7 @@ class OptimizationProblem:
                 verbose=False,
                 options=extinction_options,
                 num_acceptance_steps=num_acceptance_steps,
+                acceptance_bin_width=acceptance_bin_width,
                 lookup_table_file_folder=extinction_table_folder,
             )
             fm.deposition_flux(sd)

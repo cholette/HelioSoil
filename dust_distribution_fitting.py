@@ -2,7 +2,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import heliosoil.dust_distributions as dd
-import cmdstanpy
 
 # %% Create fake distribution
 

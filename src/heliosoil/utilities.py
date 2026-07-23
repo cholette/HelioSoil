@@ -3,10 +3,43 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from copy import deepcopy
+import logging
 import os
+import re
 from collections import defaultdict
 
-os.environ["MIEPYTHON_USE_JIT"] = "1"
+# Package-wide logger. Following library convention we attach only a NullHandler
+# here (silent by default); applications/scripts opt into output via
+# configure_logging() or by configuring the "heliosoil" logger themselves.
+logger = logging.getLogger("heliosoil")
+logger.addHandler(logging.NullHandler())
+
+
+def configure_logging(level=logging.INFO, *, capture_warnings=True, fmt="%(message)s"):
+    """Attach a StreamHandler to the "heliosoil" logger and set its level so all
+    HelioSoil output is controllable from one place.
+
+    Idempotent: repeated calls update the level but do not stack duplicate
+    handlers. When ``capture_warnings`` is True, ``warnings.warn`` and NumPy
+    RuntimeWarnings are routed through logging (the "py.warnings" logger), so
+    raising ``level`` also quiets those.
+
+    Examples
+    --------
+    >>> import logging
+    >>> from heliosoil.utilities import configure_logging
+    >>> configure_logging(logging.WARNING)  # only warnings/errors
+    >>> configure_logging(logging.INFO)     # progress messages too
+    """
+    logger.setLevel(level)
+    if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.NullHandler) for h in logger.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter(fmt))
+        logger.addHandler(handler)
+    logging.captureWarnings(capture_warnings)
+
+
+os.environ["MIEPYTHON_USE_JIT"] = "1"  # enable just-in-time compilation for miepython if available
 import miepython  # noqa: E402
 
 
@@ -46,9 +79,36 @@ def _to_dict_of_lists(data):
 
 
 def _print_if(s, verbose):
-    # Helper function to control level of output display.
+    # Routine progress output. verbose=False stays silent; verbose=True emits at
+    # INFO, which the "heliosoil" logger level can suppress globally (see
+    # configure_logging).
     if verbose:
-        print(s)
+        logger.info(s)
+
+
+def _std_errors_from_cov(cov):
+    """Standard errors = sqrt of a covariance matrix's diagonal.
+
+    The covariance is the inverse of the log-likelihood Hessian at the optimum. A
+    negative diagonal entry means that Hessian is not positive-definite -- the fit
+    is ill-conditioned (under-determined data or an unidentifiable parameter), and
+    the affected standard errors / confidence intervals come back as NaN. That is a
+    real diagnostic, so we surface it with an explicit warning rather than let the
+    raw (and cryptic) NumPy "invalid value encountered in sqrt" RuntimeWarning
+    stand in for it; the errstate guard only avoids emitting that duplicate.
+    """
+    diag = np.diag(cov)
+    n_bad = int(np.sum(diag < 0))
+    if n_bad:
+        logger.warning(
+            f"Parameter covariance has {n_bad} negative diagonal entr"
+            f"{'y' if n_bad == 1 else 'ies'} (non-positive-definite Hessian): the "
+            "fit is ill-conditioned and the corresponding standard errors / "
+            "confidence intervals are NaN. Check data sufficiency and model "
+            "identifiability."
+        )
+    with np.errstate(invalid="ignore"):
+        return np.sqrt(diag)
 
 
 def _ensure_list(s):
@@ -295,8 +355,15 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
             ub = trim_ranges[f][1].astype("datetime64[m]")  # astype ensure they are comparable
         elif trim_ranges == "reflectance_data":
             assert ref_dat is not None, "Reflectance data must be supplied for trim_ranges==reflectance_data"
-            lb = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][0].astype("datetime64[m]")  # astype ensure they are comparable
-            ub = ref_dat.times[f][~np.isnan(ref_dat.average[f][:, 0])][-1].astype("datetime64[m]")  # astype ensure they are comparable
+            # Use the intersection of each mirror's valid (non-NaN) range, not just
+            # column 0's: mirrors can start/stop reporting on different days within
+            # the same campaign, and a gap in any one column would otherwise survive
+            # trimming and propagate NaNs into the likelihood/SSE downstream.
+            valid = ~np.isnan(ref_dat.average[f])
+            first_valid = np.array([ref_dat.times[f][valid[:, c]][0] for c in range(valid.shape[1])])
+            last_valid = np.array([ref_dat.times[f][valid[:, c]][-1] for c in range(valid.shape[1])])
+            lb = first_valid.max().astype("datetime64[m]")  # astype ensure they are comparable
+            ub = last_valid.min().astype("datetime64[m]")  # astype ensure they are comparable
         elif trim_ranges == "simulation_inputs":
             lb = sim_dat.time[f].values[0].astype("datetime64[m]")  # astype ensure they are comparable
             ub = sim_dat.time[f].values[-1].astype("datetime64[m]")  # astype ensure they are comparable
@@ -363,7 +430,6 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
 
 
 def daily_average(ref_dat, time_grids, dt=None):
-
     # prediction indices and times
     # tilts
 
@@ -433,7 +499,6 @@ def sample_simulation_inputs(
     dt=np.timedelta64(3600, "s"),
     verbose=True,
 ):
-
     # load in historical data files into a single pandas dataframe
     df = pd.DataFrame()
     for f in historical_files:
@@ -484,8 +549,7 @@ def sample_simulation_inputs(
         samples.to_excel(output_file_format.format(n), sheet_name=sheet_name)
 
 
-def _extinction_function(diameters, lambdas, intensities, acceptance_angle, refractive_index, grid_size_mu=int(1e4), grid_size_x=1000, verbose=False):
-
+def _extinction_function(diameters, lambdas, intensities, acceptance_angle, refractive_index, grid_size_mu=int(1e4), grid_size_x=100):
     # theta_s = np.radians(np.linspace(-180,180,grid_size_theta_s)) # angle of scattering (\theta=0 is direction of radiation)
     m = refractive_index
     lam = lambdas / 1000  # nm -> µm
@@ -517,7 +581,6 @@ def _extinction_function(diameters, lambdas, intensities, acceptance_angle, refr
 
 
 def _same_ext_coeff(helios, simulation_data):
-
     sim_dat = simulation_data
     dust = sim_dat.dust
     D = dust.D
@@ -584,9 +647,11 @@ def set_extinction_coefficients(destination_model, extinction_weights, file_inds
         if ew.shape[0] == H:
             dm.helios.extinction_weighting[f] = ew
         elif ew.shape[0] == 1:
-            print(
-                f"Warning: ext_weights had only one heliostat. Broadcasting up to {H} heliostats "
-                + f"present in the destination_model.helios.tilt in file {f}."
+            logger.info(
+                f"extinction_weights has a single heliostat; broadcasting its weights to "
+                f"all {H} heliostats in file {f}. This is expected when every heliostat "
+                f"shares one acceptance angle (e.g. the semi-physical model, trained on a "
+                f"single representative mirror)."
             )
             dm.helios.extinction_weighting[f] = np.zeros((H, D))
             for h in range(H):
@@ -666,6 +731,48 @@ def get_training_data(d, file_start, time_to_remove_at_end=0, helios=False):
     files = [os.path.join(d, f) for f in files]
 
     return files, training_intervals, mirror_names, common
+
+
+def default_training_mirrors(all_mirrors, uses_wind_variance):
+    """
+    Pick the training-mirror subset for a soiling model.
+
+    If `uses_wind_variance` is True (the model has an active wind-driven noise term,
+    e.g. normal_wind or tangential_wind in heliosoil.horizontal_impaction), every
+    mirror's tilt/azimuth combination contributes independent information to that
+    variance, so all mirrors can be used for training.
+
+    Otherwise (a purely gravitational/constant-mean model), the deposition noise
+    sigma_dep is a single stochastic process shared across all mirrors: fitting it
+    on multiple correlated mirrors overstates the independent information actually
+    available. In that case, return a single representative mirror -- the one with
+    the smallest tilt parsed from its name's "T<deg>" token (typically the 0-deg
+    mirror); ties are broken by input order.
+
+    Args:
+        all_mirrors (list[str]): mirror column names, e.g. ["ON_M1_T00", "OE_M2_T85"].
+        uses_wind_variance (bool): whether the model's stochastic term depends on
+            wind direction/mirror orientation (True) or is a single shared
+            deposition process (False).
+
+    Returns:
+        list[str]: `all_mirrors` unchanged, or a single-element list.
+    """
+    if uses_wind_variance:
+        return list(all_mirrors)
+
+    def parsed_tilt(name):
+        match = re.search(r"_T0*([0-9]+)", name)
+        return int(match.group(1)) if match else None
+
+    parseable = [(name, parsed_tilt(name)) for name in all_mirrors]
+    parseable = [(name, tilt) for name, tilt in parseable if tilt is not None]
+    if not parseable:
+        logger.warning(f"default_training_mirrors: could not parse a tilt from any mirror name in {all_mirrors}; falling back to the first mirror.")
+        return [all_mirrors[0]]
+
+    best_name, _ = min(parseable, key=lambda item: item[1])
+    return [best_name]
 
 
 def _parse_dust_str(dust_type):
@@ -767,7 +874,6 @@ def cardinal_to_uv(cardinal: str) -> tuple[float, float]:
 
 
 def soiling_rates_summary(ref_data, sim_data, verbose=False):
-
     soiling_rates = ref_data.soiling_rate
     ave_data = ref_data.average
 

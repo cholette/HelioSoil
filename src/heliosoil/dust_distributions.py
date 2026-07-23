@@ -1,4 +1,4 @@
-from enum import Enum, auto
+from enum import Enum
 from typing import Union, Sequence, Tuple
 
 import scipy.stats as sps
@@ -337,7 +337,6 @@ class DustDistribution:
         return samples
 
     def plot(self, npts=1000, ax=None, lb=1e-4, ub=1.0 - 1e-4, mplkwds={}):
-
         if ax is None:
             fig, ax = plt.subplots()
 

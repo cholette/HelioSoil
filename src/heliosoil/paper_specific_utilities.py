@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FormatStrFormatter
+from matplotlib.lines import Line2D
 import pandas as pd
 import pickle
 from typing import Union
@@ -12,6 +13,29 @@ plt.rc("xtick", labelsize=16)
 plt.rc("ytick", labelsize=16)
 plt.rc("legend", fontsize=14)
 plt.rc("axes", labelsize=18)
+
+_ORIENTATION_NAMES = {
+    "N": "North",
+    "S": "South",
+    "E": "East",
+    "W": "West",
+    "NE": "Northeast",
+    "SE": "Southeast",
+    "SW": "Southwest",
+    "NW": "Northwest",
+    "N/A": "N/A",
+}
+
+
+def _orientation_colors(files):
+    """Color-by-orientation map, keyed by which site name shows up in `files` (e.g.
+    sdat.files). Shared by plot_for_paper and plot_reflectance_by_tilt so every
+    figure colors a given orientation the same way."""
+    if any("augusta" in f.lower() for f in files):
+        return {"NW": "blue", "SE": "red"}
+    if any("yadnarie" in f.lower() for f in files):
+        return {"NE": "blue", "SE": "red", "SW": "green", "NW": "magenta", "N/A": "blue"}
+    return {"N": "blue", "S": "red", "E": "green", "W": "magenta", "N/A": "blue"}
 
 
 def plot_for_paper(
@@ -74,12 +98,7 @@ def plot_for_paper(
         hum_max = max([max(sdat.relative_humidity[f]) for f in exps])  # max relative humidity for setting y-axes
 
     # Define color for each orientation
-    if any("augusta".lower() in value.lower() for value in sdat.files):
-        colors = {"NW": "blue", "SE": "red"}
-    elif any("yadnarie".lower() in value.lower() for value in sdat.files):
-        colors = {"NE": "blue", "SE": "red", "SW": "green", "NW": "magenta", "N/A": "blue"}
-    else:
-        colors = {"N": "blue", "S": "red", "E": "green", "W": "magenta", "N/A": "blue"}
+    colors = _orientation_colors(sdat.files)
 
     ref_output = {}
     for ii, e in enumerate(exps):
@@ -108,20 +127,23 @@ def plot_for_paper(
                     2:
                 ]  # In the Mildura data the first mirror is cleaned every time and used as control reference and the 2nd is used for Heliostat comparison
 
-            idxs = idxs[0]  # take first since all predictions are the same
             ts = sdat.time[e].values[0 : rdat.prediction_indices[e][-1] + 1]
             ts = (ts - ts[0]).astype("timedelta64[s]").astype(np.float64) / 3600 / 24
 
-            for kk in idx:  # reflectance data
+            # idx (reflectance-data mirror index) and idxs (model heliostat index) are
+            # parallel arrays -- both built from the same imported mirror list, in the
+            # same order -- so zip pairs each mirror's measurement with its own prediction.
+            for kk, hh in zip(idx, idxs):  # measured (solid) + predicted (dashed), per mirror
                 m = rdat.average[e][:, kk].squeeze().copy()
                 s = rdat.sigma_of_the_mean[e][:, kk].squeeze()
                 m += 1 - m[0]  # shift up so that all start at 1.0 for visual comparison
                 error_two_sigma = 1.96 * s
 
                 color = colors[orientation[ii][kk]]
+                orientation_name = _ORIENTATION_NAMES.get(orientation[ii][kk], orientation[ii][kk])
                 if np.ndim(ax) == 1:
                     ax = np.vstack(ax)  # create a fictious 2D array with only one column
-                ax[jj, ii].errorbar(tr, m, yerr=error_two_sigma, label=f"Orientation {orientation[ii][kk]}", color=color)
+                ax[jj, ii].errorbar(tr, m, yerr=error_two_sigma, label=orientation_name, color=color, linestyle="-")
 
                 if (e in train_experiments) and (rdat.mirror_names[e][kk] in train_mirrors):
                     a = ax[jj, e]
@@ -130,20 +152,27 @@ def plot_for_paper(
                     a.patch.set_facecolor(color="yellow")
                     a.patch.set_alpha(0.2)
 
-            ym = (
-                r0 * mod.helios.soiling_factor[e][idxs, 0 : rdat.prediction_indices[e][-1] + 1]
-            )  # ensure columns are time index # +1 is required to include the last time point (slicing would exclude it)
-            # ref_output[e][jj] = ym
+                # This mirror's own prediction: for tilt-only models (constant-mean,
+                # semi-physical) every mirror at this tilt predicts identically, so these
+                # lines overlap exactly; for wind-driven models (Delta_gamma = azimuth -
+                # wind_direction) they genuinely differ by orientation. Unlabeled here (the
+                # per-orientation legend entry comes from the solid measured line above);
+                # the "Predicted" line-style key is added once, separately, below.
+                yh = r0 * mod.helios.soiling_factor[e][hh, 0 : rdat.prediction_indices[e][-1] + 1]
+                yh = yh + (1.0 - yh[0])
+                ax[jj, ii].plot(ts, yh, color=color, linestyle="--")
+
+            # Confidence interval: drawn once per tilt row from a single representative
+            # mirror (not one band per orientation), to avoid clutter from overlapping
+            # shaded regions.
+            idx0 = idxs[0]
+            ym = r0 * mod.helios.soiling_factor[e][idx0, 0 : rdat.prediction_indices[e][-1] + 1]
             ref_output[(e, int(t))] = ym.copy()
-            if ym.ndim == 1:
-                ym += 1.0 - ym[0]
-            else:
-                ym += 1.0 - ym[:, 0]
-            var_predict = mod.helios.soiling_factor_prediction_variance[e][idxs, 0 : rdat.prediction_indices[e][-1] + 1]
+            ym = ym + (1.0 - ym[0])
+            var_predict = mod.helios.soiling_factor_prediction_variance[e][idx0, 0 : rdat.prediction_indices[e][-1] + 1]
             sigma_predict = r0 * np.sqrt(var_predict)
             Lp = ym - 1.96 * sigma_predict
             Up = ym + 1.96 * sigma_predict
-            ax[jj, ii].plot(ts, ym, label="Prediction Mean", color="black")
             ax[jj, ii].fill_between(ts, Lp, Up, color="black", alpha=ci_alpha, label=r"Prediction Interval")
             ax[jj, ii].grid("on")
 
@@ -270,6 +299,13 @@ def plot_for_paper(
             unique_labels.append(label)  # Add unique label
             unique_handles.append(handle)  # Add corresponding handle
 
+    # Line-style key, separate from the per-orientation color key above: neutral color
+    # since solid/dashed (not color) is what distinguishes measured from predicted.
+    unique_handles.append(Line2D([0], [0], color="black", linestyle="-"))
+    unique_labels.append("Measured")
+    unique_handles.append(Line2D([0], [0], color="black", linestyle="--"))
+    unique_labels.append("Predicted")
+
     fig.legend(
         unique_handles,
         unique_labels,
@@ -280,6 +316,91 @@ def plot_for_paper(
     fig.subplots_adjust(wspace=0.1, hspace=0.3)
     fig.tight_layout()
     return fig, ax, ref_output
+
+
+def plot_reflectance_by_tilt(mod, rdat, sdat, experiment_index, tilt, orientation_codes, ax=None, figsize=(8, 5), ci_alpha=0.15):
+    """
+    Plot measured (solid, with 95% CI error bars) vs. predicted (dashed) reflectance
+    for every mirror at a single tilt angle, within a single campaign -- a focused,
+    one-tilt-at-a-time counterpart to plot_for_paper's full grid.
+
+    Args:
+        mod: a fitted soiling model exposing helios.soiling_factor /
+            helios.soiling_factor_prediction_variance / helios.nominal_reflectance
+            (predictions are refreshed in-place via mod.predict_soiling_factor).
+        rdat (heliosoil.base_models.ReflectanceMeasurements): reflectance data,
+            with import_tilts=True so rdat.tilts is populated.
+        sdat (heliosoil.base_models.SimulationInputs): simulation data.
+        experiment_index (int): campaign/file index (key into rdat/sdat/mod.helios).
+        tilt (float): tilt angle [deg] to select mirrors by, matched against
+            rdat.tilts[experiment_index][:, 0] (each mirror's tilt is assumed
+            constant over the campaign, as in plot_for_paper).
+        orientation_codes (list[str]): this campaign's per-mirror orientation code
+            (e.g. from orientation_code()), in the same order as
+            rdat.mirror_names[experiment_index].
+        ax (matplotlib.axes.Axes, optional): axes to draw on; a new figure/axes is
+            created (and tight_layout'd) if None.
+
+    Returns:
+        (fig, ax, stats): stats is the regression_performance_stats dict (MBE/MAE/
+        RMSE/R2/N) for this campaign restricted to mirrors at `tilt`. (None, None,
+        None) if this campaign has no mirror at `tilt`.
+    """
+    mod.predict_soiling_factor(sdat, rho0=rdat.rho0)  # ensure predictions are fresh
+    r0 = mod.helios.nominal_reflectance
+    e = experiment_index
+
+    (idx,) = np.where(rdat.tilts[e][:, 0] == tilt)
+    (idxs,) = np.where(mod.helios.tilt[e][:, 0] == tilt)
+    if len(idx) == 0:
+        return None, None, None
+
+    colors = _orientation_colors(sdat.files)
+    created_fig = ax is None
+    if created_fig:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    tr = rdat.times[e]
+    tr = (tr - tr[0]).astype("timedelta64[s]").astype(np.float64) / 3600 / 24
+    last_pred_idx = rdat.prediction_indices[e][-1]
+    ts = sdat.time[e].values[0 : last_pred_idx + 1]
+    ts = (ts - ts[0]).astype("timedelta64[s]").astype(np.float64) / 3600 / 24
+
+    for kk, hh in zip(idx, idxs):  # measured (solid) + predicted (dashed), per mirror
+        m = rdat.average[e][:, kk].squeeze().copy()
+        s = rdat.sigma_of_the_mean[e][:, kk].squeeze()
+        m += 1 - m[0]  # shift up so that all mirrors start at 1.0, for visual comparison
+
+        code = orientation_codes[kk]
+        orientation_name = _ORIENTATION_NAMES.get(code, code)
+        color = colors.get(code, "black")
+        ax.errorbar(tr, m, yerr=1.96 * s, label=f"{orientation_name} (measured)", color=color, linestyle="-", marker="o", markersize=3, capsize=3)
+
+        yh = r0 * mod.helios.soiling_factor[e][hh, 0 : last_pred_idx + 1]
+        yh = yh + (1.0 - yh[0])
+        ax.plot(ts, yh, color=color, linestyle="--", label=f"{orientation_name} (predicted)")
+
+    # Prediction interval from one representative mirror at this tilt (as in plot_for_paper)
+    idx0 = idxs[0]
+    ym = r0 * mod.helios.soiling_factor[e][idx0, 0 : last_pred_idx + 1]
+    ym = ym + (1.0 - ym[0])
+    var_predict = mod.helios.soiling_factor_prediction_variance[e][idx0, 0 : last_pred_idx + 1]
+    sigma_predict = r0 * np.sqrt(var_predict)
+    ax.fill_between(ts, ym - 1.96 * sigma_predict, ym + 1.96 * sigma_predict, color="black", alpha=ci_alpha, label="Prediction interval")
+
+    stats = regression_performance_stats(mod, rdat, [e], mirrors=idx)
+
+    ax.set_xlabel("Days")
+    ax.set_ylabel("Norm. reflectance")
+    ax.set_title(f"Campaign {e + 1}, Tilt: {tilt:.0f}" + r"$^{\circ}$" + f"  (MAE={stats['MAE']:.4f}, RMSE={stats['RMSE']:.4f})")
+    ax.grid(True)
+    ax.legend(loc="best", fontsize=9)
+    if created_fig:
+        fig.tight_layout()
+
+    return fig, ax, stats
 
 
 def plot_for_heliostats(
@@ -297,7 +418,6 @@ def plot_for_heliostats(
     figsize=None,
     lgd_size=10,
 ):
-
     mod.predict_soiling_factor(sdat, rho0=rdat.rho0)  # ensure predictions are fresh
     r0 = mod.helios.nominal_reflectance
 
@@ -725,10 +845,17 @@ def regression_performance_stats(model, reflectance_data, experiments, mirrors=N
     (e.g. by calling model.predict_soiling_factor(...) or model.plot_soiling_factor(...)
     beforehand) with tilt/azimuth set consistently with `reflectance_data`.
 
+    Predicted reflectance is model.helios.nominal_reflectance * soiling_factor, not
+    reflectance_data.rho0 * soiling_factor: soiling_factor's own initial condition is
+    already anchored to each mirror's rho0 via compute_soiling_factor (cumulative_soil0
+    = (1 - rho0/nominal_reflectance)/inc_factor), so nominal_reflectance * soiling_factor
+    exactly recovers rho0 at t=0 for every mirror; multiplying by rho0 again would not.
+
     Args:
-        model: a fitted soiling model exposing helios.soiling_factor.
-        reflectance_data: ReflectanceMeasurements with matching prediction_indices,
-            average, and rho0 for each file in `experiments`.
+        model: a fitted soiling model exposing helios.soiling_factor and
+            helios.nominal_reflectance.
+        reflectance_data: ReflectanceMeasurements with matching prediction_indices and
+            average for each file in `experiments`.
         experiments (list): file indices (as used to key simulation_inputs/reflectance_data)
             to pool together when computing the statistics.
         mirrors (array-like of int, optional): column indices to include. Default: all mirrors.
@@ -738,13 +865,12 @@ def regression_performance_stats(model, reflectance_data, experiments, mirrors=N
     """
     pi = reflectance_data.prediction_indices
     meas = reflectance_data.average
-    rho0 = reflectance_data.rho0
+    r0 = model.helios.nominal_reflectance
     sf = model.helios.soiling_factor
 
     pred_list, meas_list = [], []
     for f in experiments:
         m = meas[f] if mirrors is None else meas[f][:, mirrors]
-        r0 = rho0[f] if mirrors is None else rho0[f][mirrors]
         sfm = sf[f] if mirrors is None else sf[f][mirrors, :]
         pred = r0 * sfm[:, pi[f]].transpose()
         pred_list.append(pred.flatten())
@@ -763,7 +889,6 @@ def regression_performance_stats(model, reflectance_data, experiments, mirrors=N
 def daily_soiling_tilt_all_data(
     sim_dat: smb.SimulationInputs, model_save_file: str, M: int = 1000, dust_type="TSP", tilt: float = None, trim_percents=None
 ):
-
     # get daily sums for \alpha and \alpha^2
     df = [pd.read_excel(f, "Weather") for f in sim_dat.files]
     df = pd.concat(df)
