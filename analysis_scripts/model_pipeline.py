@@ -70,6 +70,7 @@ class PipelineConfig:
     reflectometer_incidence_angle: float = 15  # [deg]
     reflectometer_acceptance_angle: float = 12.5e-3  # [rad]
     second_surf: bool = True  # True: second-surface AOI model, False: first-surface
+    daily_average: bool = False  # True: daily-averaged reflectance, False: all measurements
     verbose: bool = False
 
     @property
@@ -124,7 +125,9 @@ def uses_wind_variance(model_type, wind_components):
     return model_type == "constant_mean_wind" and any(c in wind_components for c in ("normal_wind", "tangential_wind", "impaction_retention"))
 
 
-def build_model(parameter_file, model_type, wind_components, verbose=False):
+def build_model(
+    parameter_file: str, model_type: str, wind_components: list, verbose: bool = False
+) -> tuple[ConstantMeanWindDeposition | smf.ConstantMeanDeposition | smf.SemiPhysical, str]:
     """Construct a fresh (unfitted) model and its results-folder label."""
     if model_type == "constant_mean_wind":
         model = ConstantMeanWindDeposition(parameter_file, components=wind_components, verbose=verbose)
@@ -252,7 +255,7 @@ def _resolve_weather_column(columns, dust_type):
     raise KeyError(f"No Weather column maps to dust_type {dust_type!r}; have {list(columns)}")
 
 
-def _repoint_dust_type(sim, files, dust_type):
+def _repoint_dust_type(sim: smb.SimulationInputs, files: list, dust_type: str) -> smb.SimulationInputs:
     """Re-point an already-built SimulationInputs to `dust_type` when the raw column
     name is not directly usable by base_models (e.g. carwarp "PM2p5" for "PM2.5").
 
@@ -285,7 +288,7 @@ def _dust_type_is_direct(files, dust_type):
     return all(dust_type in pd.read_excel(f, sheet_name="Weather", nrows=0).columns for f in files)
 
 
-def build_sim_inputs(cfg, files):
+def build_sim_inputs(cfg: PipelineConfig, files: list) -> smb.SimulationInputs:
     """Construct SimulationInputs for `cfg.dust_type` -- the single place dust_type
     becomes simulation inputs. Clean, directly-usable dust types (TSP, PM10, PMT,
     PM1/PM4/PM20, and cleanly-named PM2.5) construct normally; awkwardly-named columns
@@ -297,7 +300,7 @@ def build_sim_inputs(cfg, files):
     return _repoint_dust_type(sim, files, cfg.dust_type)
 
 
-def load_data(cfg):
+def load_data(cfg: PipelineConfig):
     """Load the file list, per-campaign training intervals, common mirrors, and the
     full evaluation dataset (all campaigns, every common mirror) shared by the primary
     fit and every cross-validation fold."""
@@ -314,6 +317,8 @@ def load_data(cfg):
         imported_column_names=all_mirrors,
         verbose=cfg.verbose,
     )
+    if cfg.daily_average:
+        reflect_data_total = smu.daily_average(reflect_data_total, sim_data_total.time, sim_data_total.dt)
     sim_data_total, reflect_data_total = smu.trim_experiment_data(sim_data_total, reflect_data_total, "reflectance_data")
 
     return LoadedData(
@@ -463,4 +468,4 @@ def compile_results(cfg, run_name, workflow="model_select"):
 
     out_path = os.path.join(run_dir, "all_models_kfold_summary.csv")
     kfold_df.to_csv(out_path, index=False, float_format="%.3g")
-    print(f"wrote {out_path} ({len(kfold_frames)} (dust_type, model) run(s))")
+    print(f"wrote {out_path.relative_to(smu.get_project_root())} ({len(kfold_frames)} rows).")

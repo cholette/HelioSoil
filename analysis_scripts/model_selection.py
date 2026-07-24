@@ -46,13 +46,14 @@ CONFIG = mp.PipelineConfig(
     location="yadnarie",  # "mountisa" | "carwarp" | "yadnarie" | "qut" | "ablrf" | "wodonga"
     train_experiments=[0],  # unused by the CV sweep, but kept for a consistent config
     train_mirrors=None,  # None -> model-aware default per run; explicit list overrides every run
-    dust_type="PM10",  # fallback only; the dust type is swept per DUST_TYPES below
+    dust_type="pm2.5",  # fallback only; the dust type is swept per DUST_TYPES below
     k_factor="import",  # None sets equal to 1.0, "import" imports from the file
     second_surf=True,  # True: second-surface AOI model, False: first-surface
+    daily_average=True,  # True: daily-average reflectance targets, False: raw reflectance
     verbose=False,
 )
 
-RUN_NAME = None  # None -> "run-yy-mm-dd_hh-mm" timestamp; else a label for this run's results folder
+RUN_NAME = "daily_average"  # None -> "run-yy-mm-dd_hh-mm" timestamp; else a label for this run's results folder
 
 DUST_TYPES = None  # None -> auto-detect usable PM/TSP types for the site; else e.g. ["PM2.5", "PM10", "PMT"]
 
