@@ -10,6 +10,8 @@ subset:
 
   gravitational:    alpha_j * cos(theta_ij) * (mu_tilde + eps_j)
 
+  turbulant wind:     alpha_j * U_j * (omega_turbulent + eps_turb_j)
+
   normal_wind:      alpha_j * U_j * ( p_windward_ij * (omega_windward + eps_gamma_j)
                                      + p_leeward_ij  * (omega_leeward  + eps_gamma_j) )
                     where p_windward = sin(theta) * max(0, cos(Delta_gamma)),
@@ -185,6 +187,14 @@ def _gravitational_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
     return (alpha[None, :] * cosd(tilt)) ** 2
 
 
+def _turbulant_wind_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
+    return [alpha[None, :] * cosd(tilt) * wind_speed[None, :]]
+
+
+def _turbulant_wind_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
+    return (alpha[None, :] * cosd(tilt) * wind_speed[None, :]) ** 2
+
+
 def _normal_wind_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
     p_windward, p_leeward = wind_projection_factors(tilt, azimuth, wind_dir)
     u = alpha[None, :] * wind_speed[None, :]
@@ -248,6 +258,9 @@ class _WindComponent:
 _GRAVITATIONAL = _WindComponent(
     "gravitational", "gravitational", ("mu_tilde",), "sigma_dep", False, _gravitational_mean_bases, _gravitational_variance_basis
 )
+_TURBULENT = _WindComponent(
+    "turbulent_wind", "turbulent-wind", ("omega_turbulent",), "sigma_dep_turb", True, _turbulant_wind_mean_bases, _turbulant_wind_variance_basis
+)
 _NORMAL_WIND = _WindComponent(
     "normal_wind", "normal-wind", ("omega_windward", "omega_leeward"), "sigma_dep_gamma", True, _normal_wind_mean_bases, _normal_wind_variance_basis
 )
@@ -266,19 +279,29 @@ _IMPACTION_RETENTION = _WindComponent(
 
 # Order here is the canonical order: it fixes the parameter-vector layout and the
 # model_name string regardless of the order `components` is passed in.
-_CANONICAL_ORDER = ["gravitational", "normal_wind", "tangential_wind", "impaction_retention"]
+_CANONICAL_ORDER = ["gravitational", "turbulent_wind", "normal_wind", "tangential_wind", "impaction_retention"]
 _COMPONENTS = {
     "gravitational": _GRAVITATIONAL,
+    "turbulent_wind": _TURBULENT,
     "normal_wind": _NORMAL_WIND,
     "tangential_wind": _TANGENTIAL_WIND,
     "impaction_retention": _IMPACTION_RETENTION,
 }
-_ALL_MEAN_PARAM_NAMES = ("mu_tilde", "omega_windward", "omega_leeward", "omega_tangential", "omega_ret_windward", "omega_ret_leeward")
-_ALL_SIGMA_PARAM_NAMES = ("sigma_dep", "sigma_dep_gamma", "sigma_dep_tan", "sigma_dep_ret")
+_ALL_MEAN_PARAM_NAMES = (
+    "mu_tilde",
+    "omega_turbulent",
+    "omega_windward",
+    "omega_leeward",
+    "omega_tangential",
+    "omega_ret_windward",
+    "omega_ret_leeward",
+)
+_ALL_SIGMA_PARAM_NAMES = ("sigma_dep", "sigma_dep_turb", "sigma_dep_gamma", "sigma_dep_tan", "sigma_dep_ret")
 # Which mean parameters must be positive (log-transformed during fitting); the
 # omegas may legitimately be ~0 or negative, so they're left in linear space.
 _MEAN_PARAM_LOG = {
     "mu_tilde": True,
+    "omega_turbulent": False,
     "omega_windward": False,
     "omega_leeward": False,
     "omega_tangential": False,
