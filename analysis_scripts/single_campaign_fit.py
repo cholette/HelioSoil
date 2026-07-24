@@ -32,9 +32,10 @@ CONFIG = mp.PipelineConfig(
     location="yadnarie",  # "mountisa" | "carwarp" | "yadnarie" | "qut" | "ablrf" | "wodonga"
     train_experiments=[0],  # indices (into the sorted file list) used for training
     train_mirrors=None,  # None -> model-aware default per run; explicit list overrides every run
-    dust_type="PM2.5",  # "PM10" or "PM2.5"
+    dust_type="PM10",  # "PM10" or "PM2.5"
     k_factor="import",  # None sets equal to 1.0, "import" imports from the file
     second_surf=True,  # True: second-surface AOI model, False: first-surface
+    daily_average=True,  # True: daily-average reflectance, False: all measurements
     verbose=False,
 )
 
@@ -42,17 +43,23 @@ RUN_NAME = None  # None -> "run-yy-mm-dd_hh-mm" timestamp; else a label for this
 
 MODEL_TYPE = "constant_mean_wind"  # "constant_mean" | "constant_mean_wind" | "semi_physical" | None (run all three)
 WIND_COMPONENTS = [
-    "gravitational",
+    "turbulent_wind",
+    "normal_wind",
     "tangential_wind",
-    "impaction_retention",
-]  # only used when MODEL_TYPE == "constant_mean_wind"; None -> sweep WIND_COMPONENT_COMBOS
+]  # only used when MODEL_TYPE == "constant_mean_wind"; WIND_COMPONENTS=None -> sweep WIND_COMPONENT_COMBOS
 WIND_COMPONENT_COMBOS = [
     ["gravitational"],
+    ["gravitational", "turbulent_wind"],
     ["gravitational", "normal_wind"],
     ["gravitational", "normal_wind", "tangential_wind"],
     ["gravitational", "tangential_wind"],
     ["gravitational", "impaction_retention"],
     ["gravitational", "tangential_wind", "impaction_retention"],
+    ["turbulent_wind", "normal_wind"],
+    ["turbulent_wind", "normal_wind", "tangential_wind"],
+    ["turbulent_wind", "tangential_wind", "impaction_retention"],
+    ["turbulent_wind", "impaction_retention"],
+    ["turbulent_wind"],
     ["normal_wind"],
     ["tangential_wind"],
     ["impaction_retention"],

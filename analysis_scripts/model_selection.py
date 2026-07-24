@@ -43,7 +43,7 @@ import model_pipeline as mp
 
 # ============================== Configuration ===============================
 CONFIG = mp.PipelineConfig(
-    location="yadnarie",  # "mountisa" | "carwarp" | "yadnarie" | "qut" | "ablrf" | "wodonga"
+    location="carwarp",  # "mountisa" | "carwarp" | "yadnarie" | "qut" | "ablrf" | "wodonga"
     train_experiments=[0],  # unused by the CV sweep, but kept for a consistent config
     train_mirrors=None,  # None -> model-aware default per run; explicit list overrides every run
     dust_type="pm2.5",  # fallback only; the dust type is swept per DUST_TYPES below
@@ -53,7 +53,7 @@ CONFIG = mp.PipelineConfig(
     verbose=False,
 )
 
-RUN_NAME = "daily_average_v2"  # None -> "run-yy-mm-dd_hh-mm" timestamp; else a label for this run's results folder
+RUN_NAME = "turbulent_wind"  # None -> "run-yy-mm-dd_hh-mm" timestamp; else a label for this run's results folder
 
 DUST_TYPES = None  # None -> auto-detect usable PM/TSP types for the site; else e.g. ["PM2.5", "PM10", "PMT"]
 
@@ -61,13 +61,17 @@ MODEL_TYPE = None  # "constant_mean" | "constant_mean_wind" | "semi_physical" | 
 WIND_COMPONENTS = None  # only used when MODEL_TYPE == "constant_mean_wind"; None -> sweep WIND_COMPONENT_COMBOS
 WIND_COMPONENT_COMBOS = [
     ["gravitational"],
+    ["gravitational", "turbulent_wind"],
     ["gravitational", "normal_wind"],
     ["gravitational", "normal_wind", "tangential_wind"],
     ["gravitational", "tangential_wind"],
     ["gravitational", "impaction_retention"],
     ["gravitational", "tangential_wind", "impaction_retention"],
-    ["normal_wind", "tangential_wind"],
-    ["tangential_wind", "impaction_retention"],
+    ["turbulent_wind", "normal_wind"],
+    ["turbulent_wind", "normal_wind", "tangential_wind"],
+    ["turbulent_wind", "tangential_wind", "impaction_retention"],
+    ["turbulent_wind", "impaction_retention"],
+    ["turbulent_wind"],
     ["normal_wind"],
     ["tangential_wind"],
     ["impaction_retention"],
@@ -184,7 +188,7 @@ def main():
 
     files = smu.get_training_data(CONFIG.data_dir, CONFIG.file_prefix)[0]
     dust_types = DUST_TYPES or mp.available_dust_types(CONFIG, files=files)
-    print(f"[dust] sweeping dust types: {dust_types}")
+    print(f"[dust] {CONFIG.location!r} sweeping dust types: {dust_types}")
     if len(dust_types) == 1:
         print(f"[dust] {CONFIG.location!r} has a single usable dust type ({dust_types[0]!r}); no PM-type comparison.")
 
