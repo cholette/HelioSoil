@@ -34,7 +34,13 @@ from .field_models import CentralTowerPlant, FieldModel, SimplifiedFieldModel, R
 from .fitting import SemiPhysical, ConstantMeanDeposition
 
 # From horizontal_impaction
-from .horizontal_impaction import ConstantMeanWindBase, ConstantMeanWindDeposition, wind_projection_factors, parse_orientation_names
+from .horizontal_impaction import (
+    ConstantMeanWindBase,
+    ConstantMeanWindDeposition,
+    wind_projection_factors,
+    wind_tangential_factor,
+    parse_orientation_names,
+)
 
 # From cleaning_optimization
 from .cleaning_optimization import (
@@ -58,11 +64,15 @@ from .utilities import (
     daily_average,
     sample_simulation_inputs,
     get_training_data,
+    default_training_mirrors,
     wind_rose,
     soiling_rates_summary,
     loss_table_from_sim,
     loss_hel_table_from_sim,
+    logger,
+    configure_logging,
     _print_if,
+    _std_errors_from_cov,
     _ensure_list,
     _check_keys,
     _import_option_helper,
@@ -109,6 +119,7 @@ __all__ = [
     "ConstantMeanWindBase",
     "ConstantMeanWindDeposition",
     "wind_projection_factors",
+    "wind_tangential_factor",
     "parse_orientation_names",
     # cleaning_optimization
     "OptimizationProblem",
@@ -128,12 +139,16 @@ __all__ = [
     "daily_average",
     "sample_simulation_inputs",
     "get_training_data",
+    "default_training_mirrors",
     "wind_rose",
     "soiling_rates_summary",
     "loss_table_from_sim",
     "loss_hel_table_from_sim",
     "DustDistribution",
+    "logger",
+    "configure_logging",
     "_print_if",
+    "_std_errors_from_cov",
     "_ensure_list",
     "_check_keys",
     "_import_option_helper",
