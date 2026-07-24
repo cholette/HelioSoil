@@ -53,7 +53,7 @@ CONFIG = mp.PipelineConfig(
     verbose=False,
 )
 
-RUN_NAME = "daily_average"  # None -> "run-yy-mm-dd_hh-mm" timestamp; else a label for this run's results folder
+RUN_NAME = "daily_average_v2"  # None -> "run-yy-mm-dd_hh-mm" timestamp; else a label for this run's results folder
 
 DUST_TYPES = None  # None -> auto-detect usable PM/TSP types for the site; else e.g. ["PM2.5", "PM10", "PMT"]
 
@@ -78,7 +78,7 @@ CV_MAX_FOLDS_PER_SIZE = None  # None -> use every combination; else randomly sam
 # ==============================================================================
 
 
-def cross_validate_run(cfg, data, model_type, wind_components, run_name, dust_type):
+def cross_validate_run(cfg: mp.PipelineConfig, data: mp.LoadedData, model_type: str, wind_components: list, run_name: str, dust_type: str) -> None:
     """Leave-n-campaigns-out cross-validation for one (dust_type, model_type,
     wind_components) configuration, sweeping the number of training campaigns."""
     print(f"\n{'=' * 80}\ndust_type={dust_type!r}  model_type={model_type!r}  wind_components={wind_components}\n{'=' * 80}")

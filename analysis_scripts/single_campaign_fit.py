@@ -62,7 +62,7 @@ TILT_ANGLES_TO_PLOT = (0, 30, 60, 90, 180)  # [deg] per-campaign measured-vs-pre
 # ==============================================================================
 
 
-def report_run(cfg, data, model_type, wind_components, run_name):
+def report_run(cfg: mp.PipelineConfig, data: mp.LoadedData, model_type: str, wind_components: list, run_name: str) -> None:
     """Fit one (model_type, wind_components) configuration on the training
     campaign(s) and write its fitted parameters, performance stats, and plots."""
     print(f"\n{'=' * 80}\nmodel_type={model_type!r}  wind_components={wind_components}\n{'=' * 80}")

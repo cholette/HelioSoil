@@ -154,7 +154,7 @@ def build_runs(model_type, wind_components, wind_component_combos):
     return runs
 
 
-def resolve_training_mirrors(cfg, all_mirrors, model_type, wind_components):
+def resolve_training_mirrors(cfg: PipelineConfig, all_mirrors: list, model_type: str, wind_components: list) -> list[str]:
     """train_mirrors from the config overrides every run; otherwise pick the
     model-aware default (see smu.default_training_mirrors)."""
     if cfg.train_mirrors is not None:
@@ -162,7 +162,7 @@ def resolve_training_mirrors(cfg, all_mirrors, model_type, wind_components):
     return smu.default_training_mirrors(all_mirrors, uses_wind_variance(model_type, wind_components))
 
 
-def resolve_run_dir(cfg, workflow, run_name):
+def resolve_run_dir(cfg: PipelineConfig, workflow: str, run_name: str | None = None) -> str:
     """Resolve (and create) the results/{workflow}/{site}/{run_name} folder. run_name
     =None -> a "run-yy-mm-dd_hh-mm" timestamp. If the folder already exists, prompt
     before overwriting and abort (SystemExit) on anything but "y". Returns the
@@ -177,7 +177,7 @@ def resolve_run_dir(cfg, workflow, run_name):
     return run_name
 
 
-def results_dir_and_label(cfg, model_type, wind_components, workflow, run_name, subdir=None):
+def results_dir_and_label(cfg: PipelineConfig, model_type: str, wind_components: list, workflow: str, run_name: str, subdir: str | None = None):
     """Build (and create) the model results folder, returning (results_dir, label).
 
     Path is results/{workflow}/{site}/{run_name}/{label}, with an optional `subdir`
@@ -202,7 +202,7 @@ def results_dir_and_label(cfg, model_type, wind_components, workflow, run_name, 
 # safe base and re-point the concentration + cutoff density (build_sim_inputs).
 
 
-def _normalize_dust_name(col):
+def _normalize_dust_name(col: str) -> str | None:
     """Map a Weather-sheet column name to a canonical dust_type ("TSP", "PMT",
     "PM10", "PM2.5", ...), or None if it is not a particulate-matter column."""
     c = str(col).strip().lower().replace(" ", "")
@@ -217,14 +217,14 @@ def _normalize_dust_name(col):
     return f"PM{num}" if "." in num else f"PM{int(num)}"
 
 
-def _weather_columns(files):
+def _weather_columns(files: list) -> list[str]:
     """Columns common to every campaign file's Weather sheet, in first-file order."""
     per_file = [list(pd.read_excel(f, sheet_name="Weather", nrows=0).columns) for f in files]
     common = set.intersection(*(set(cols) for cols in per_file)) if per_file else set()
     return [c for c in per_file[0] if c in common] if per_file else []
 
 
-def available_dust_types(cfg, files=None):
+def available_dust_types(cfg: PipelineConfig, files: list | None = None) -> list[str]:
     """Normalized dust/PM types usable for this location: the PM/TSP columns common to
     every campaign file (first-file order, de-duplicated). Single-element (e.g.
     ["TSP"]) for sites that cannot benefit from a PM-type comparison."""
@@ -239,7 +239,7 @@ def available_dust_types(cfg, files=None):
     return out
 
 
-def _dust_cutoff(dust_type):
+def _dust_cutoff(dust_type: str) -> float:
     """Upper diameter cutoff [µm] for a dust_type; np.inf for whole-distribution
     measures (TSP / PMT)."""
     if dust_type.startswith("TSP") or dust_type == "PMT":
@@ -247,7 +247,7 @@ def _dust_cutoff(dust_type):
     return float(dust_type[2:])
 
 
-def _resolve_weather_column(columns, dust_type):
+def _resolve_weather_column(columns: list, dust_type: str) -> str:
     """The actual Weather column whose normalized name matches dust_type."""
     for col in columns:
         if _normalize_dust_name(col) == dust_type:
@@ -280,12 +280,45 @@ def _repoint_dust_type(sim: smb.SimulationInputs, files: list, dust_type: str) -
     return sim
 
 
-def _dust_type_is_direct(files, dust_type):
+def _dust_type_is_direct(files: list, dust_type: str) -> bool:
     """True if `dust_type` can be handed straight to SimulationInputs: an exact
     Weather column of that name exists in every file, and import_dust can parse it."""
     if _normalize_dust_name(dust_type) is None:  # not TSP/PMT/PM<number>
         return False
     return all(dust_type in pd.read_excel(f, sheet_name="Weather", nrows=0).columns for f in files)
+
+
+def build_training_inputs(
+    cfg: PipelineConfig, data: LoadedData, train_mirrors_run: list, train_exps: list
+) -> tuple[smb.SimulationInputs, smb.ReflectanceMeasurements]:
+    """Build the SimulationInputs and ReflectanceMeasurements for a training fold.
+
+    The training fold is defined by `train_exps` (indices into the full file list) and
+    `train_mirrors_run` (the common mirrors used for training this fold).
+
+    Returns the SimulationInputs and ReflectanceMeasurements trimmed to the training reflectance_data interval (the latter is a subset of the former).
+    """
+    files_train = extract(data.files, train_exps)
+    intervals_train = extract(data.training_intervals, train_exps)
+
+    sim_train_raw = build_sim_inputs(cfg, files_train)
+    reflect_train_raw = smb.ReflectanceMeasurements(
+        files_train,
+        sim_train_raw.time,
+        number_of_measurements=cfg.number_of_measurements,
+        reflectometer_incidence_angle=cfg.reflectometer_incidence_angle,
+        reflectometer_acceptance_angle=cfg.reflectometer_acceptance_angle,
+        import_tilts=True,
+        imported_column_names=train_mirrors_run,
+        verbose=cfg.verbose,
+    )
+    if cfg.daily_average:
+        reflect_train_raw = smu.daily_average(reflect_train_raw, sim_train_raw.time, sim_train_raw.dt)
+
+    sim_train, reflect_train = smu.trim_experiment_data(sim_train_raw, reflect_train_raw, intervals_train)
+    sim_train, reflect_train = smu.trim_experiment_data(sim_train, reflect_train, "reflectance_data")
+
+    return sim_train, reflect_train
 
 
 def build_sim_inputs(cfg: PipelineConfig, files: list) -> smb.SimulationInputs:
@@ -332,7 +365,9 @@ def load_data(cfg: PipelineConfig):
     )
 
 
-def fit_and_evaluate(cfg, data, model_type, wind_components, train_mirrors_run, train_exps, test_exps):
+def fit_and_evaluate(
+    cfg: PipelineConfig, data: LoadedData, model_type: str, wind_components: list, train_mirrors_run: list, train_exps: list, test_exps: list
+) -> dict:
     """
     Build a fresh model, fit it on `train_exps` (using `train_mirrors_run`), and score
     it against the full evaluation dataset (all campaigns, all common mirrors) for both
@@ -344,23 +379,7 @@ def fit_and_evaluate(cfg, data, model_type, wind_components, train_mirrors_run, 
     """
     verbose = cfg.verbose
     model, _ = build_model(data.parameter_file, model_type, wind_components, verbose=verbose)
-
-    files_train = extract(data.files, train_exps)
-    intervals_train = extract(data.training_intervals, train_exps)
-
-    sim_train = build_sim_inputs(cfg, files_train)
-    reflect_train = smb.ReflectanceMeasurements(
-        files_train,
-        sim_train.time,
-        number_of_measurements=cfg.number_of_measurements,
-        reflectometer_incidence_angle=cfg.reflectometer_incidence_angle,
-        reflectometer_acceptance_angle=cfg.reflectometer_acceptance_angle,
-        import_tilts=True,
-        imported_column_names=train_mirrors_run,
-        verbose=verbose,
-    )
-    sim_train, reflect_train = smu.trim_experiment_data(sim_train, reflect_train, intervals_train)
-    sim_train, reflect_train = smu.trim_experiment_data(sim_train, reflect_train, "reflectance_data")
+    sim_train, reflect_train = build_training_inputs(cfg, data, train_mirrors_run, train_exps)
 
     model.helios_angles(sim_train, reflect_train, second_surface=cfg.second_surf, verbose=verbose)
 
@@ -415,7 +434,7 @@ def fit_and_evaluate(cfg, data, model_type, wind_components, train_mirrors_run, 
     }
 
 
-def compile_results(cfg, run_name, workflow="model_select"):
+def compile_results(cfg: PipelineConfig, run_name: str, workflow: str = "model_select") -> None:
     """After a model_selection run, stack every (dust_type, model)
     cross_validation_summary.csv for this site into all_models_kfold_summary.csv,
     sorted within each training-set size by out-of-sample RMSE (best first).
@@ -468,4 +487,4 @@ def compile_results(cfg, run_name, workflow="model_select"):
 
     out_path = os.path.join(run_dir, "all_models_kfold_summary.csv")
     kfold_df.to_csv(out_path, index=False, float_format="%.3g")
-    print(f"wrote {out_path.relative_to(smu.get_project_root())} ({len(kfold_frames)} rows).")
+    print(f"wrote {out_path} ({len(kfold_frames)} rows).")

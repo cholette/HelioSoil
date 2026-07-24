@@ -663,7 +663,9 @@ def set_extinction_coefficients(destination_model, extinction_weights, file_inds
     return dm
 
 
-def get_training_data(d, file_start, time_to_remove_at_end=0, helios=False):
+def get_training_data(
+    d: str, file_start: str, time_to_remove_at_end: int = 0, helios: bool = False
+) -> tuple[list[str], np.ndarray, list[list[str]], list[str]]:
     """
     Get training data for a soiling model.
 
@@ -699,16 +701,17 @@ def get_training_data(d, file_start, time_to_remove_at_end=0, helios=False):
         else:
             return np.datetime64(f"{x[0:4]}-{x[4:6]}-{x[6::]}T00:00:00")
 
+    # get training intervals from file names
     for ii, f in enumerate(files):
-        f = f.split(".")[0]
-        dates = [parse_date(s) for s in f.split("_") if s.replace("-", "").isnumeric()]
+        f = f.split(".")[0]  # remove file extension
+        dates = [parse_date(s) for s in f.split("_") if s.replace("-", "").isnumeric()]  # parse dates from file name
         assert len(dates) == 2, "File name must contain start and end dates in YYYYMMDD or YYYY-MM-DD format."
-        s = min(dates)
-        e = max(dates)
+        s = min(dates)  # get the start date
+        e = max(dates)  # get the end date
 
         e += np.timedelta64(1, "D")  # since I'm appending midnight, need to use next day to get all data
         e -= np.timedelta64(time_to_remove_at_end[ii], "h")  # leave specified testing time at the end (in hours)
-        training_intervals.append(np.array([s, e]))
+        training_intervals.append(np.array([s, e]))  # append the start and end dates to the list
 
     training_intervals = np.stack(training_intervals).astype("datetime64[m]")
 
@@ -733,7 +736,7 @@ def get_training_data(d, file_start, time_to_remove_at_end=0, helios=False):
     return files, training_intervals, mirror_names, common
 
 
-def default_training_mirrors(all_mirrors, uses_wind_variance):
+def default_training_mirrors(all_mirrors: list[str], uses_wind_variance: bool) -> list[str]:
     """
     Pick the training-mirror subset for a soiling model.
 
