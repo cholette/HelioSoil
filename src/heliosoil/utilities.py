@@ -14,6 +14,32 @@ from collections import defaultdict
 logger = logging.getLogger("heliosoil")
 logger.addHandler(logging.NullHandler())
 
+# Distinct negative-band conditions already reported by resolve_dust_concentration,
+# so a warning fires once rather than on every fit iteration (see that function).
+_negative_band_warned = set()
+
+
+class _DedupWarningFilter(logging.Filter):
+    """Emit each distinct warning/error message once per process.
+
+    A cross-validation sweep re-runs the same fit across many models and folds, so a
+    genuine per-fit diagnostic (ill-conditioned Hessian, etc.) repeats verbatim and
+    drowns the log. Records below WARNING (progress output like the per-fold PASS
+    lines) pass through untouched -- only WARNING and above are collapsed."""
+
+    def __init__(self):
+        super().__init__()
+        self._seen = set()
+
+    def filter(self, record):
+        if record.levelno < logging.WARNING:
+            return True
+        key = (record.levelno, record.getMessage())
+        if key in self._seen:
+            return False
+        self._seen.add(key)
+        return True
+
 
 def configure_logging(level=logging.INFO, *, capture_warnings=True, fmt="%(message)s"):
     """Attach a StreamHandler to the "heliosoil" logger and set its level so all
@@ -22,7 +48,8 @@ def configure_logging(level=logging.INFO, *, capture_warnings=True, fmt="%(messa
     Idempotent: repeated calls update the level but do not stack duplicate
     handlers. When ``capture_warnings`` is True, ``warnings.warn`` and NumPy
     RuntimeWarnings are routed through logging (the "py.warnings" logger), so
-    raising ``level`` also quiets those.
+    raising ``level`` also quiets those. A ``_DedupWarningFilter`` on the handler
+    keeps a repeated warning from being emitted more than once.
 
     Examples
     --------
@@ -35,6 +62,7 @@ def configure_logging(level=logging.INFO, *, capture_warnings=True, fmt="%(messa
     if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.NullHandler) for h in logger.handlers):
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter(fmt))
+        handler.addFilter(_DedupWarningFilter())
         logger.addHandler(handler)
     logging.captureWarnings(capture_warnings)
 
@@ -132,6 +160,62 @@ def _import_option_helper(file_list, option):
         option = [option] * len(file_list)
 
     return option
+
+
+def _is_reference_mirror_column(name):
+    """True if a Reflectance_Average/Reflectance_Sigma column name marks a
+    reference mirror -- re-cleaned before each day's measurement round, so its
+    reading tracks day-to-day instrument/environmental drift -- rather than a
+    soiling-subject mirror: a case-insensitive "_ref" suffix, e.g.
+    "OW_M1_T0_Ref", "SomeMirror_ref"."""
+    return str(name).strip().lower().endswith("_ref")
+
+
+def _safe_nanargmax(a, axis=0):
+    """np.nanargmax, but returns 0 instead of raising for an all-NaN column.
+
+    Pairs with np.nanmax, which already returns NaN (with a RuntimeWarning)
+    rather than raising for an all-NaN column, so rho0 and its companion
+    rho0_index stay a matched, non-crashing pair even for a mirror with no
+    valid readings at all (e.g. a heliostat added but never measured).
+    """
+    a = np.asarray(a)
+    has_any_valid = ~np.all(np.isnan(a), axis=axis)
+    out = np.zeros(a.shape[1], dtype=int)
+    if has_any_valid.any():
+        out[has_any_valid] = np.nanargmax(a[:, has_any_valid], axis=axis)
+    return out
+
+
+def _nominal_reflectance_series(reflectance_data, f, fallback):
+    """Per-mirror, per-measurement-time nominal (as-if-freshly-cleaned)
+    reflectance for file `f`: reflectance_data.nominal_reflectance[f] (shape
+    (n_time, n_mirrors), aligned with reflectance_data.average[f]) when
+    reflectance_data carries a reference-derived value for this file; else
+    the scalar `fallback` (typically helios.nominal_reflectance), which
+    broadcasts unchanged against any (n_time, n_mirrors) array and so
+    reproduces today's fixed-constant behavior exactly for files with no
+    reference-mirror column.
+    """
+    if reflectance_data is not None and getattr(reflectance_data, "nominal_reflectance", None) and f in reflectance_data.nominal_reflectance:
+        return reflectance_data.nominal_reflectance[f]
+    return fallback
+
+
+def _nominal_reflectance_anchor(reflectance_data, f, fallback):
+    """Per-mirror nominal reflectance at the moment each mirror's rho0 (the
+    anchor compute_soiling_factor uses) was actually recorded: a diagonal
+    gather of _nominal_reflectance_series at reflectance_data.rho0_index.
+    Falls back to the scalar `fallback` (broadcasting against rho0[f]
+    unchanged) whenever reflectance_data lacks a reference-derived value for
+    file f -- the same gating condition as _nominal_reflectance_series, since
+    rho0_index is always present once nominal_reflectance is.
+    """
+    if reflectance_data is not None and getattr(reflectance_data, "nominal_reflectance", None) and f in reflectance_data.nominal_reflectance:
+        series = reflectance_data.nominal_reflectance[f]
+        idx = reflectance_data.rho0_index[f]
+        return series[idx, np.arange(series.shape[1])]
+    return fallback
 
 
 def simple_annual_cleaning_schedule(n_sectors, n_trucks, n_cleans, dt=1, n_sectors_per_truck=1):
@@ -386,6 +470,12 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
         sim_dat.wind_speed_mov_avg[f] = sim_dat.wind_speed_mov_avg[f][mask]
         sim_dat.dust_conc_mov_avg[f] = sim_dat.dust_conc_mov_avg[f][mask]
 
+        # dust_concentration_channels is a dict-of-dicts, so the weather_variables loop
+        # above (which slices dict-of-arrays) cannot trim it.
+        channels = getattr(sim_dat, "dust_concentration_channels", None)
+        if channels is not None and channels.get(f):
+            channels[f] = {name: values[mask] for name, values in channels[f].items()}
+
         # Calculate hourly and daily averages of dust_concentration
         dust_conc_temp = pd.Series(sim_dat.dust_concentration[f], index=pd.to_datetime(sim_dat.time[f]))
         hourly_avg = dust_conc_temp.resample("h").mean()
@@ -405,6 +495,14 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
             ref_dat.average[f] = ref_dat.average[f][mask, :]
             ref_dat.sigma[f] = ref_dat.sigma[f][mask, :]
             ref_dat.sigma_of_the_mean[f] = ref_dat.sigma_of_the_mean[f][mask, :]
+            # nominal_reflectance/drift_factor are anchored to the ORIGINAL, untrimmed
+            # campaign (see import_reflectance_data): index-slice them here, do NOT
+            # recompute from this sub-window, or a cross-validation window starting
+            # mid-campaign would wrongly look like it started fully clean.
+            if hasattr(ref_dat, "nominal_reflectance") and f in ref_dat.nominal_reflectance:
+                ref_dat.nominal_reflectance[f] = ref_dat.nominal_reflectance[f][mask, :]
+            if hasattr(ref_dat, "drift_factor") and f in ref_dat.drift_factor:
+                ref_dat.drift_factor[f] = ref_dat.drift_factor[f][mask]
 
             ref_dat.prediction_indices[f] = []
             ref_dat.prediction_times[f] = []
@@ -419,6 +517,8 @@ def trim_experiment_data(simulation_inputs, reflectance_data, trim_ranges):
             ref_dat.rho0[f] = np.nanmax(
                 ref_dat.average[f], axis=0
             )  # this now avoid issues in case the first value is a NaN (it may happen if a mirror or heliostat is added later)
+            if hasattr(ref_dat, "rho0_index") and f in ref_dat.rho0_index:
+                ref_dat.rho0_index[f] = _safe_nanargmax(ref_dat.average[f], axis=0)
             elapsed_time = (ref_dat.times[f][-1] - ref_dat.times[f][0]) / np.timedelta64(1, "D")  # compute total time in days as a np.float64
             ref_dat.soiling_rate[f] = (
                 (ref_dat.average[f][0] - ref_dat.average[f][-1]) / elapsed_time * 100
@@ -451,10 +551,21 @@ def daily_average(ref_dat, time_grids, dt=None):
         ref_dat_new.sigma_of_the_mean[f] = np.zeros((num_times, num_mirrors))
         ref_dat_new.delta_ref[f] = np.zeros((num_times, num_mirrors))
         ref_dat_new.soiling_rate[f] = np.zeros(ref_dat.rho0[f].shape)
+
+        # nominal_reflectance/drift_factor: aggregate to daily resolution the same way
+        # average/sigma are, when the source data carries a reference-derived value.
+        has_nominal = hasattr(ref_dat, "nominal_reflectance") and f in ref_dat.nominal_reflectance
+        if has_nominal:
+            ref_dat_new.nominal_reflectance[f] = np.zeros((num_times, num_mirrors))
+        if hasattr(ref_dat, "drift_factor") and f in ref_dat.drift_factor:
+            df_drift = pd.DataFrame({"drift_factor": ref_dat.drift_factor[f], "day": ref_dat.times[f].astype("datetime64[D]")})
+            ref_dat_new.drift_factor[f] = df_drift.groupby("day")["drift_factor"].mean().values
+
         for ii in range(num_mirrors):
-            df = pd.DataFrame(
-                {"average": ref_dat.average[f][:, ii], "sigma": ref_dat.sigma[f][:, ii], "day": ref_dat.times[f].astype("datetime64[D]")}
-            )
+            cols = {"average": ref_dat.average[f][:, ii], "sigma": ref_dat.sigma[f][:, ii], "day": ref_dat.times[f].astype("datetime64[D]")}
+            if has_nominal:
+                cols["nominal_reflectance"] = ref_dat.nominal_reflectance[f][:, ii]
+            df = pd.DataFrame(cols)
 
             daily = df.groupby("day")
             N = daily.count()["sigma"].values
@@ -466,6 +577,8 @@ def daily_average(ref_dat, time_grids, dt=None):
             # ref_dat_new.sigma_of_the_mean[f] = np.insert(ref_dat_new.sigma_of_the_mean[f],0,ref_dat.sigma_of_the_mean[f][0])
 
             ref_dat_new.average[f][:, ii] = daily.mean().average.values
+            if has_nominal:
+                ref_dat_new.nominal_reflectance[f][:, ii] = daily.mean().nominal_reflectance.values
             ref_dat_new.prediction_indices[f] = []
             ref_dat_new.prediction_times[f] = []
 
@@ -486,6 +599,12 @@ def daily_average(ref_dat, time_grids, dt=None):
         ref_dat_new.soiling_rate[f] = (
             (ref_dat_new.average[f][0] - ref_dat_new.average[f][-1]) / elapsed_time * 100
         )  # compute soiling rates in p.p./day for each mirror
+
+        # rho0/rho0_index must be refreshed from the day-aggregated average -- a
+        # rho0_index pointing into the pre-aggregation array would be meaningless here.
+        if hasattr(ref_dat, "rho0_index") and f in ref_dat.rho0_index:
+            ref_dat_new.rho0[f] = np.nanmax(ref_dat_new.average[f], axis=0)
+            ref_dat_new.rho0_index[f] = _safe_nanargmax(ref_dat_new.average[f], axis=0)
 
     return ref_dat_new
 
@@ -715,14 +834,17 @@ def get_training_data(
 
     training_intervals = np.stack(training_intervals).astype("datetime64[m]")
 
-    # get mirror names in each file
+    # get mirror names in each file, excluding reference-mirror columns (re-cleaned
+    # daily to track instrument drift -- never a soiling-subject training target)
     mirror_names = [[] for f in files]
     if not helios:
         for ii, f in enumerate(files):
-            mirror_names[ii] = list(pd.read_excel(os.path.join(d, f), sheet_name="Reflectance_Average").columns[1::])
+            cols = list(pd.read_excel(os.path.join(d, f), sheet_name="Reflectance_Average").columns[1::])
+            mirror_names[ii] = [c for c in cols if not _is_reference_mirror_column(c)]
     else:
         for ii, f in enumerate(files):
-            mirror_names[ii] = list(pd.read_excel(os.path.join(d, f), sheet_name="Heliostats_Ref").columns[1::])
+            cols = list(pd.read_excel(os.path.join(d, f), sheet_name="Heliostats_Ref").columns[1::])
+            mirror_names[ii] = [c for c in cols if not _is_reference_mirror_column(c)]
 
     # get mirror names that show up in all files
     common = []
@@ -778,7 +900,119 @@ def default_training_mirrors(all_mirrors: list[str], uses_wind_variance: bool) -
     return [best_name]
 
 
+# ------------------------------ dust types and specs ------------------------------
+# A "dust spec" names the airborne-mass channel a model (or one term of a model) is
+# driven by. It is either a single measure -- "TSP", "PM17", "PM10", "PM2.5", ... -- or
+# the difference of two, "PM17-PM10", which isolates the mass carried by particles
+# between the two cutoffs (here: coarser than 10 µm). Weather-sheet column spellings
+# differ across sites (PM2.5 / PM2p5 / PM2_5, PM17 / PM_17 / PM17), so specs and
+# columns alike are canonicalized through normalize_dust_name before use.
+
+
+def normalize_dust_name(name):
+    """Canonical name of a single dust measure -- "TSP", "PM17", "PM10", "PM2.5", ... --
+    from a Weather-sheet column name or spec fragment, or None if `name` is not a
+    particulate-matter measure."""
+    c = str(name).strip().lower().replace(" ", "")
+    if c == "tsp":
+        return "TSP"
+    if c in ("pmt", "pm_tot", "pmtot"):  # PMT is actually PM17
+        return "PM17"
+    m = re.fullmatch(r"pm([0-9]+(?:[._p][0-9]+)?)", c)  # pm10, pm2p5, pm2_5, pm2.5, pm20
+    if not m:
+        return None
+    num = m.group(1).replace("p", ".").replace("_", ".")
+    return f"PM{num}" if "." in num else f"PM{int(num)}"
+
+
+def dust_cutoff(dust_type):
+    """Upper particle-diameter cutoff [µm] of a single dust measure; np.inf for the
+    whole-distribution measures (TSP)."""
+    name = normalize_dust_name(dust_type)
+    if name is None:
+        raise ValueError(f"{dust_type!r} is not a particulate-matter measure (expected TSP or PM<number>).")
+    return np.inf if name in ("TSP") else float(name[2:])
+
+
+def parse_dust_spec(spec):
+    """Split a dust spec into canonical (major, minor) names, minor=None for a single
+    measure: "pm2p5" -> ("PM2.5", None), "PM17-PM10" -> ("PM17", "PM10").
+
+    Raises ValueError if a part is not a particulate-matter measure or if the
+    subtracted measure is not the strictly smaller cutoff (a difference must describe
+    a non-empty size band)."""
+    parts = [p.strip() for p in str(spec).split("-")]
+    if len(parts) > 2 or any(p == "" for p in parts):
+        raise ValueError(f"Unrecognized dust spec {spec!r}: expected a measure ('PM10') or a difference of two ('PM17-PM10').")
+
+    names = []
+    for part in parts:
+        name = normalize_dust_name(part)
+        if name is None:
+            raise ValueError(f"Unrecognized dust measure {part!r} in dust spec {spec!r} (expected TSP or PM<number>).")
+        names.append(name)
+
+    if len(names) == 1:
+        return names[0], None
+    major, minor = names
+    if dust_cutoff(minor) >= dust_cutoff(major):
+        raise ValueError(f"Dust spec {spec!r} encloses no size band: a difference must subtract the smaller cutoff from the larger one.")
+    return major, minor
+
+
+def canonical_dust_spec(spec):
+    """Canonical string form of a dust spec ("pm2p5" -> "PM2.5", "pm17 - pm10" ->
+    "PM17-PM10"), used as both a channel key and a report label."""
+    major, minor = parse_dust_spec(spec)
+    return major if minor is None else f"{major}-{minor}"
+
+
+def resolve_dust_concentration(channels, spec):
+    """Airborne concentration [µg/m³] for a dust spec, from a canonical-name-keyed dict
+    of concentration channels (see SimulationInputs.dust_concentration_channels).
+
+    Returns (concentration, canonical_spec), or (None, None) if the spec is not a
+    recognizable dust spec or names a channel this dataset does not have -- callers
+    decide whether that is an error or a cue to fall back."""
+    try:
+        major, minor = parse_dust_spec(spec)
+    except ValueError:
+        return None, None
+    if channels is None or major not in channels or (minor is not None and minor not in channels):
+        return None, None
+
+    if minor is None:
+        return channels[major], major
+
+    concentration = channels[major] - channels[minor]
+    negative = int(np.count_nonzero(concentration < 0))
+    if negative:
+        # Measurement noise can make the coarse-band mass come out negative, which
+        # would make that timestep's deposition negative. Reported, not silently
+        # clipped: it is a property of the data, not of the model. This resolver is
+        # called once per fit iteration, so warn only once per distinct data
+        # condition to avoid flooding the log.
+        # Keyed on the spec only (not the counts): a cross-validation sweep resolves
+        # this spec once per fold, each fold a different subset with a different
+        # negative count, but the negative band is one property of the dataset -- so
+        # report it once rather than once per fold.
+        if (major, minor) not in _negative_band_warned:
+            _negative_band_warned.add((major, minor))
+            logger.warning(
+                f"Dust spec {major}-{minor}: {negative} of {concentration.size} samples are negative (measurement noise in the two channels)."
+            )
+    return concentration, f"{major}-{minor}"
+
+
 def _parse_dust_str(dust_type):
+    """Attribute name carrying a dust spec's reference mass on the Dust class:
+    "PM2.5" -> "PM2_5", "PM17-PM10" -> "PM17_minus_PM10"."""
+    parts = str(dust_type).split("-")
+    if len(parts) == 2:
+        return f"{_parse_dust_str(parts[0].strip())}_minus_{_parse_dust_str(parts[1].strip())}"
+    if len(parts) > 2:
+        raise ValueError(f"Unrecognized dust spec {dust_type!r}: expected a measure ('PM10') or a difference of two ('PM17-PM10').")
+
     assert dust_type.startswith(("TSP", "PM")), "dust_type must be PMX, PMX.X or TSP"
     if dust_type.startswith("TSP"):
         attr = "TSP"

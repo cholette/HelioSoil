@@ -12,6 +12,16 @@ split, and writes to results/model_select/{site}/{run_name}/{dust_type}/{label}/
     count (n_failed);
   - cross_validation_summary.pdf : out-of-sample RMSE/R2 vs number of training campaigns.
 
+The dust axis has two levels. DUST_TYPES sweeps one PM channel per model (the whole
+model driven by PM10, then PM2.5, ...), and may include differences ("PM17-PM10") to
+isolate a size band. COMPONENT_DUST_TYPES goes finer, giving each mechanism of a
+constant_mean_wind model its own channel -- e.g. PM17 settling gravitationally while the
+2.5-10 µm fraction scours tangentially -- either as one fixed assignment or, with
+"sweep", every combination of DUST_SPECS over the run's mechanisms. Such a model does
+not depend on the outer dust type, so it is fitted once under
+{run_name}/per-component-dust/ with its channels in the folder name and in the reported
+model_expression ("PM17*gravitational + (PM10-PM2.5)*tangential_wind").
+
 After every run, all summaries for the site are compiled into all_models_kfold_summary.csv
 (tagged with dust_type + model, sorted within each n_train by out-of-sample RMSE, best
 first), flagging any run that failed one or more folds so a strong-looking mean on the
@@ -44,21 +54,17 @@ import model_pipeline as mp
 # ============================== Configuration ===============================
 CONFIG = mp.PipelineConfig(
     location="carwarp",  # "mountisa" | "carwarp" | "yadnarie" | "qut" | "ablrf" | "wodonga"
-    train_experiments=[0],  # unused by the CV sweep, but kept for a consistent config
-    train_mirrors=None,  # None -> model-aware default per run; explicit list overrides every run
-    dust_type="pm2.5",  # fallback only; the dust type is swept per DUST_TYPES below
-    k_factor="import",  # None sets equal to 1.0, "import" imports from the file
-    second_surf=True,  # True: second-surface AOI model, False: first-surface
     daily_average=True,  # True: daily-average reflectance targets, False: raw reflectance
     verbose=False,
 )
 
-RUN_NAME = "turbulent_wind"  # None -> "run-yy-mm-dd_hh-mm" timestamp; else a label for this run's results folder
+RUN_NAME = "multi-pm_evaluation"  # None -> "run-yy-mm-dd_hh-mm" timestamp; else a label for this run's results folder
 
-DUST_TYPES = None  # None -> auto-detect usable PM/TSP types for the site; else e.g. ["PM2.5", "PM10", "PMT"]
+DUST_TYPES = None  # None -> auto-detect usable PM/TSP types for the site; else e.g. ["PM2.5", "PM10", "PM17", "PM17-PM10"]
 
 MODEL_TYPE = None  # "constant_mean" | "constant_mean_wind" | "semi_physical" | None (run all three)
 WIND_COMPONENTS = None  # only used when MODEL_TYPE == "constant_mean_wind"; None -> sweep WIND_COMPONENT_COMBOS
+
 WIND_COMPONENT_COMBOS = [
     ["gravitational"],
     ["gravitational", "turbulent_wind"],
@@ -77,18 +83,31 @@ WIND_COMPONENT_COMBOS = [
     ["impaction_retention"],
 ]  # used when MODEL_TYPE == "constant_mean_wind" and WIND_COMPONENTS is None
 
+# Dust channel driving each wind mechanism. None -> every mechanism uses the dust type
+# from the DUST_TYPES sweep (one PM type per model, as before). A dict fixes an
+# assignment, e.g. {"gravitational": "PM17", "tangential_wind": "PM10-PM2.5"}. "sweep"
+# cross-validates every assignment of DUST_SPECS to each wind-component combination --
+# len(DUST_SPECS) ** n_components models per combination, so keep DUST_SPECS short.
+COMPONENT_DUST_TYPES = "sweep"
+DUST_SPECS = None  # only used when COMPONENT_DUST_TYPES == "sweep"; None -> auto-detect the site's measures + their differences
+
 CV_TRAIN_CAMPAIGN_COUNTS = None  # None -> sweep every n_train in 1..(C-1)
 CV_MAX_FOLDS_PER_SIZE = None  # None -> use every combination; else randomly sample this many (seeded)
 # ==============================================================================
 
 
-def cross_validate_run(cfg: mp.PipelineConfig, data: mp.LoadedData, model_type: str, wind_components: list, run_name: str, dust_type: str) -> None:
-    """Leave-n-campaigns-out cross-validation for one (dust_type, model_type,
-    wind_components) configuration, sweeping the number of training campaigns."""
-    print(f"\n{'=' * 80}\ndust_type={dust_type!r}  model_type={model_type!r}  wind_components={wind_components}\n{'=' * 80}")
+def cross_validate_run(
+    cfg: mp.PipelineConfig, data: mp.LoadedData, model_type: str, wind_components: list, component_dust_types, run_name: str, subdir: str
+) -> None:
+    """Leave-n-campaigns-out cross-validation for one (model_type, wind_components,
+    component_dust_types) configuration, sweeping the number of training campaigns.
+    Results go under `subdir`: the swept dust type, or mp.PER_COMPONENT_SUBDIR when each
+    mechanism names its own dust channel."""
+    expression = mp.run_expression(model_type, wind_components, component_dust_types)
+    print(f"\n{'=' * 80}\ndust={subdir!r}  model_type={model_type!r}  {expression}\n{'=' * 80}")
 
     train_mirrors_run = mp.resolve_training_mirrors(cfg, data.all_mirrors, model_type, wind_components)
-    results_dir, label = mp.results_dir_and_label(cfg, model_type, wind_components, "model_select", run_name, subdir=dust_type)
+    results_dir, label = mp.results_dir_and_label(cfg, model_type, wind_components, component_dust_types, "model_select", run_name, subdir=subdir)
 
     C = len(data.files)
     train_counts = CV_TRAIN_CAMPAIGN_COUNTS if CV_TRAIN_CAMPAIGN_COUNTS is not None else range(1, C)
@@ -107,7 +126,7 @@ def cross_validate_run(cfg: mp.PipelineConfig, data: mp.LoadedData, model_type: 
 
             row = {"n_train_campaigns": n_train, "fold": fold_idx, "train_experiments": str(train_combo), "test_experiments": str(test_combo)}
             try:
-                result = mp.fit_and_evaluate(cfg, data, model_type, wind_components, train_mirrors_run, train_combo, test_combo)
+                result = mp.fit_and_evaluate(cfg, data, model_type, wind_components, component_dust_types, train_mirrors_run, train_combo, test_combo)
             except Exception as err:
                 print(f"FAILED: n_train={n_train} fold={fold_idx} train={train_combo} test={test_combo} ({err})")
                 row.update({"N": np.nan, "MBE": np.nan, "MAE": np.nan, "RMSE": np.nan, "R2": np.nan, "R2_in_sample": np.nan})
@@ -160,6 +179,9 @@ def cross_validate_run(cfg: mp.PipelineConfig, data: mp.LoadedData, model_type: 
         .sort_values("n_train_campaigns")
         .reset_index(drop=True)
     )
+    # Carried into the compiled all-models table: which mechanisms were fitted and,
+    # when they differ, the dust channel driving each.
+    summary_df.insert(1, "model_expression", expression)
     summary_df.to_csv(f"{results_dir}/cross_validation_summary.csv", index=False, float_format="%.3g")
 
     fig_cv, (ax_rmse, ax_r2) = plt.subplots(1, 2, figsize=(11, 4.5))
@@ -192,17 +214,30 @@ def main():
     if len(dust_types) == 1:
         print(f"[dust] {CONFIG.location!r} has a single usable dust type ({dust_types[0]!r}); no PM-type comparison.")
 
+    dust_specs = DUST_SPECS or (mp.available_dust_specs(CONFIG, files=files) if COMPONENT_DUST_TYPES == "sweep" else None)
+    if dust_specs is not None:
+        print(f"[dust] {CONFIG.location!r} sweeping per-component dust channels: {dust_specs}")
+
     run_name = mp.resolve_run_dir(CONFIG, "model_select", RUN_NAME)
-    runs = mp.build_runs(MODEL_TYPE, WIND_COMPONENTS, WIND_COMPONENT_COMBOS)
+    runs = mp.build_runs(MODEL_TYPE, WIND_COMPONENTS, WIND_COMPONENT_COMBOS, COMPONENT_DUST_TYPES, dust_specs)
 
     # Outer loop over dust/PM types; each gets a per-type config copy so load_data and
     # fit_and_evaluate (which read cfg.dust_type) use it. Data is (re)loaded per dust
     # type because the SimulationInputs depend on it (the reflectance targets do not).
-    for dust_type in dust_types:
+    # A run whose every mechanism names its own dust channel does not depend on
+    # cfg.dust_type, so it is fitted once (on the first pass) into its own subtree
+    # rather than refitted identically under every swept dust type.
+    for pass_idx, dust_type in enumerate(dust_types):
         run_cfg = dataclasses.replace(CONFIG, dust_type=dust_type)
         data = mp.load_data(run_cfg)
-        for model_type, wind_components in runs:
-            cross_validate_run(run_cfg, data, model_type, wind_components, run_name, dust_type)
+        for model_type, wind_components, component_dust_types in runs:
+            if mp.is_dust_type_independent(model_type, wind_components, component_dust_types):
+                if pass_idx > 0:
+                    continue
+                subdir = mp.PER_COMPONENT_SUBDIR
+            else:
+                subdir = dust_type
+            cross_validate_run(run_cfg, data, model_type, wind_components, component_dust_types, run_name, subdir)
 
     # Run right after the sweep: stack every (dust_type, model) summary for the site,
     # ranked by out-of-sample RMSE, flagging any run with failed folds.

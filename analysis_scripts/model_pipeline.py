@@ -17,10 +17,20 @@ Model types
   - "constant_mean"      : ConstantMeanDeposition (mu_tilde, sigma_dep).
   - "constant_mean_wind" : ConstantMeanWindDeposition; its parameter names/count
     depend on the active wind `components` (any subset of "gravitational" /
-    "normal_wind" / "tangential_wind" / "impaction_retention"; see
+    "turbulent_wind" / "normal_wind" / "tangential_wind" / "impaction_retention"; see
     heliosoil.horizontal_impaction), so they are read from the fitted model's
     `parameter_names` property rather than hardcoded.
   - "semi_physical"      : SemiPhysical (hrz0, sigma_dep).
+
+Dust channels
+-------------
+A run is defined by (model_type, wind_components, component_dust_types). The last of
+these drives each wind mechanism with its own dust spec -- a single measure ("PM17",
+"PM10") or the difference of two ("PM17-PM10", the mass coarser than 10 µm) -- so a
+model can settle whole-distribution mass gravitationally while scouring only a narrow
+size band tangentially. It defaults to None, meaning every mechanism uses cfg.dust_type
+and the dust axis is the workflow's outer dust-type sweep. See build_runs,
+available_dust_specs and component_dust_assignments.
 
 Training-mirror selection is model-aware (see smu.default_training_mirrors): a
 purely gravitational/constant-mean model shares one deposition-noise process across
@@ -33,9 +43,9 @@ model types.
 """
 
 import os
-import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import combinations, product
 from typing import Any
 
 import numpy as np
@@ -43,7 +53,7 @@ import pandas as pd
 import heliosoil.base_models as smb
 import heliosoil.fitting as smf
 import heliosoil.utilities as smu
-from heliosoil.horizontal_impaction import ConstantMeanWindDeposition
+from heliosoil.horizontal_impaction import ConstantMeanWindDeposition, describe_components, resolve_component_keys
 from heliosoil.paper_specific_utilities import regression_performance_stats
 
 MODEL_CLASSES = {"constant_mean": smf.ConstantMeanDeposition, "constant_mean_wind": ConstantMeanWindDeposition, "semi_physical": smf.SemiPhysical}
@@ -51,6 +61,10 @@ MODEL_CLASSES = {"constant_mean": smf.ConstantMeanDeposition, "constant_mean_win
 # from the fitted model's `parameter_names` property instead of hardcoded here.
 PARAM_NAMES = {"constant_mean": ["mu_tilde", "sigma_dep"], "semi_physical": ["hrz0", "sigma_dep"]}
 MODEL_TYPES = list(MODEL_CLASSES)
+# Results subdir for runs whose every mechanism names its own dust channel: they do not
+# depend on cfg.dust_type, so they sit outside the per-dust-type subtrees (see
+# is_dust_type_independent).
+PER_COMPONENT_SUBDIR = "per-component-dust"
 
 
 @dataclass
@@ -126,11 +140,11 @@ def uses_wind_variance(model_type, wind_components):
 
 
 def build_model(
-    parameter_file: str, model_type: str, wind_components: list, verbose: bool = False
+    parameter_file: str, model_type: str, wind_components: list, component_dust_types: Any = None, verbose: bool = False
 ) -> tuple[ConstantMeanWindDeposition | smf.ConstantMeanDeposition | smf.SemiPhysical, str]:
     """Construct a fresh (unfitted) model and its results-folder label."""
     if model_type == "constant_mean_wind":
-        model = ConstantMeanWindDeposition(parameter_file, components=wind_components, verbose=verbose)
+        model = ConstantMeanWindDeposition(parameter_file, components=wind_components, component_dust_types=component_dust_types, verbose=verbose)
         model_label = model.model_name
     else:
         model = MODEL_CLASSES[model_type](parameter_file, verbose=verbose)
@@ -138,20 +152,58 @@ def build_model(
     return model, model_label
 
 
-def build_runs(model_type, wind_components, wind_component_combos):
-    """List the (model_type, wind_components) runs to execute. model_type=None sweeps
-    all three model types; for "constant_mean_wind", wind_components=None sweeps
-    wind_component_combos, otherwise a single configuration is used."""
+def build_runs(model_type, wind_components, wind_component_combos, component_dust_types=None, dust_specs=None):
+    """List the (model_type, wind_components, component_dust_types) runs to execute.
+
+    model_type=None sweeps all three model types; for "constant_mean_wind",
+    wind_components=None sweeps wind_component_combos, otherwise a single wind
+    configuration is used.
+
+    component_dust_types selects the dust channel driving each wind mechanism:
+      - None: every mechanism uses the run's cfg.dust_type, so the dust axis is the
+        workflow's outer dust-type sweep (the behaviour before per-component channels);
+      - a dict {component: spec} (or one spec for all): that fixed assignment;
+      - "sweep": every assignment of `dust_specs` to that run's components
+        (see component_dust_assignments), which is the combinatorial exploration.
+    Only "constant_mean_wind" has components; the other model types always run with
+    component_dust_types=None.
+    """
     model_types_to_run = MODEL_TYPES if model_type is None else [model_type]
+    if component_dust_types == "sweep" and not dust_specs:
+        raise ValueError('component_dust_types="sweep" needs dust_specs to sweep over (e.g. available_dust_specs(cfg)).')
+
     runs = []
     for mt in model_types_to_run:
-        if mt == "constant_mean_wind":
-            combos = wind_component_combos if wind_components is None else [wind_components]
-            for combo in combos:
-                runs.append((mt, combo))
-        else:
-            runs.append((mt, None))
+        if mt != "constant_mean_wind":
+            runs.append((mt, None, None))
+            continue
+        combos = wind_component_combos if wind_components is None else [wind_components]
+        for combo in combos:
+            if component_dust_types == "sweep":
+                runs.extend((mt, combo, assignment) for assignment in component_dust_assignments(combo, dust_specs))
+            else:
+                runs.append((mt, combo, component_dust_types))
     return runs
+
+
+def is_dust_type_independent(model_type: str, wind_components: list, component_dust_types: Any) -> bool:
+    """True if a run's result does not depend on cfg.dust_type, i.e. every mechanism it
+    fits names its own dust channel. Such a run is executed once instead of once per
+    swept dust type, and its results live under PER_COMPONENT_SUBDIR."""
+    if model_type != "constant_mean_wind" or component_dust_types is None:
+        return False
+    if isinstance(component_dust_types, str):
+        return True
+    return all(component_dust_types.get(key) is not None for key in resolve_component_keys(wind_components))
+
+
+def run_expression(model_type: str, wind_components: list, component_dust_types: Any = None) -> str:
+    """One-line description of what a run fits: for constant_mean_wind, the mechanisms
+    it sums and the dust channel driving each ("PM17*gravitational +
+    (PM10-PM2.5)*tangential_wind"); otherwise just the model type."""
+    if model_type != "constant_mean_wind":
+        return model_type
+    return describe_components(wind_components, component_dust_types)
 
 
 def resolve_training_mirrors(cfg: PipelineConfig, all_mirrors: list, model_type: str, wind_components: list) -> list[str]:
@@ -177,13 +229,17 @@ def resolve_run_dir(cfg: PipelineConfig, workflow: str, run_name: str | None = N
     return run_name
 
 
-def results_dir_and_label(cfg: PipelineConfig, model_type: str, wind_components: list, workflow: str, run_name: str, subdir: str | None = None):
+def results_dir_and_label(
+    cfg: PipelineConfig, model_type: str, wind_components: list, component_dust_types: Any, workflow: str, run_name: str, subdir: str | None = None
+):
     """Build (and create) the model results folder, returning (results_dir, label).
 
     Path is results/{workflow}/{site}/{run_name}/{label}, with an optional `subdir`
     level inserted before {label} (model_select passes subdir=dust_type to give each
-    PM type its own subtree)."""
-    _, label = build_model(cfg.parameter_file, model_type, wind_components, verbose=cfg.verbose)
+    PM type its own subtree). The label is the model's own name, so a run with
+    per-component dust channels is already distinguished by them
+    ("constant-mean_PM17*gravitational_PM10-PM2.5*tangential-wind")."""
+    _, label = build_model(cfg.parameter_file, model_type, wind_components, component_dust_types, verbose=cfg.verbose)
     parts = [smu.get_project_root(), "results", workflow, cfg.site_name, run_name]
     if subdir is not None:
         parts.append(subdir)
@@ -192,29 +248,14 @@ def results_dir_and_label(cfg: PipelineConfig, model_type: str, wind_components:
     return results_dir, label
 
 
-# ------------------------------- dust / PM types -------------------------------
-# `dust_type` is a Weather-sheet column name (base_models.import_weather reads
-# `weather[dust_type]`) AND the string parsed to select the PM mass-cutoff density
-# (`_parse_dust_str` -> `getattr(sim.dust, attr)`). Column naming is inconsistent
-# across sites (PM2.5 / PM2p5 / PM2_5; PMT / PM_TOT), and `import_dust` only handles
-# TSP / PMT / PM10 / PM<number>. We therefore work in *normalized* dust-type names
-# and, for sites whose columns are spelled awkwardly, build SimulationInputs via a
-# safe base and re-point the concentration + cutoff density (build_sim_inputs).
-
-
-def _normalize_dust_name(col: str) -> str | None:
-    """Map a Weather-sheet column name to a canonical dust_type ("TSP", "PMT",
-    "PM10", "PM2.5", ...), or None if it is not a particulate-matter column."""
-    c = str(col).strip().lower().replace(" ", "")
-    if c == "tsp":
-        return "TSP"
-    if c in ("pmt", "pm_tot", "pmtot"):
-        return "PMT"
-    m = re.fullmatch(r"pm([0-9]+(?:[._p][0-9]+)?)", c)  # pm10, pm2p5, pm2_5, pm2.5, pm20
-    if not m:
-        return None
-    num = m.group(1).replace("p", ".").replace("_", ".")
-    return f"PM{num}" if "." in num else f"PM{int(num)}"
+# ------------------------------ dust / PM channels ------------------------------
+# A "dust spec" names the airborne-mass channel a model -- or one mechanism of a wind
+# model -- is driven by: a single measure ("TSP", "PM17", "PM10", "PM2.5") or the
+# difference of two ("PM17-PM10"), which isolates the mass carried by particles between
+# the two cutoffs. Weather-column spellings differ across sites (PM2.5 / PM2p5 / PM2_5;
+# PM17 / PM_TOT), but SimulationInputs canonicalizes both the columns it loads (into
+# dust_concentration_channels) and the dust_type it is given, so the helpers here only
+# decide *which* specs a location can support.
 
 
 def _weather_columns(files: list) -> list[str]:
@@ -232,60 +273,33 @@ def available_dust_types(cfg: PipelineConfig, files: list | None = None) -> list
         files, *_ = smu.get_training_data(cfg.data_dir, cfg.file_prefix)
     seen, out = set(), []
     for col in _weather_columns(files):
-        dt = _normalize_dust_name(col)
+        dt = smu.normalize_dust_name(col)
         if dt is not None and dt not in seen:
             seen.add(dt)
             out.append(dt)
     return out
 
 
-def _dust_cutoff(dust_type: str) -> float:
-    """Upper diameter cutoff [µm] for a dust_type; np.inf for whole-distribution
-    measures (TSP / PMT)."""
-    if dust_type.startswith("TSP") or dust_type == "PMT":
-        return np.inf
-    return float(dust_type[2:])
+def available_dust_specs(cfg: PipelineConfig, files: list | None = None, include_differences: bool = True) -> list[str]:
+    """Every dust channel a model at this location can be driven by: the measures from
+    available_dust_types, followed (by default) by the difference of every pair whose
+    cutoffs differ -- "PM17-PM10" is the coarse mass PM10 does not see, "PM10-PM2.5" the
+    2.5-10 µm fraction. Differences are what let the wind mechanisms be driven by
+    disjoint size bands rather than by nested, strongly correlated ones."""
+    dust_types = available_dust_types(cfg, files)
+    specs = list(dust_types)
+    if include_differences:
+        ascending = sorted(dust_types, key=smu.dust_cutoff)
+        specs += [f"{major}-{minor}" for minor, major in combinations(ascending, 2) if smu.dust_cutoff(major) > smu.dust_cutoff(minor)]
+    return specs
 
 
-def _resolve_weather_column(columns: list, dust_type: str) -> str:
-    """The actual Weather column whose normalized name matches dust_type."""
-    for col in columns:
-        if _normalize_dust_name(col) == dust_type:
-            return col
-    raise KeyError(f"No Weather column maps to dust_type {dust_type!r}; have {list(columns)}")
-
-
-def _repoint_dust_type(sim: smb.SimulationInputs, files: list, dust_type: str) -> smb.SimulationInputs:
-    """Re-point an already-built SimulationInputs to `dust_type` when the raw column
-    name is not directly usable by base_models (e.g. carwarp "PM2p5" for "PM2.5").
-
-    Reads the actual concentration column and recomputes the PM mass-cutoff density
-    from the (dust-type-independent) size distribution already on `sim.dust`. Mirrors
-    base_models.import_weather:709/727 and import_dust:829-859; uses only public
-    attributes so src/heliosoil is untouched (the sole coupling documented here)."""
-    attr = smu._parse_dust_str(dust_type)  # e.g. "PM2_5"
-    cutoff = _dust_cutoff(dust_type)
-    if not hasattr(sim.dust, attr):
-        setattr(sim.dust, attr, {})
-    for ii, f in enumerate(files):
-        weather = pd.read_excel(f, sheet_name="Weather")
-        col = _resolve_weather_column(weather.columns, dust_type)
-        sim.dust_type[ii] = dust_type
-        sim.dust_concentration[ii] = sim.k_factors_dict[ii] * weather[col].to_numpy()
-        window = max(1, int(60.0 / (sim.dt[ii] / 60)))
-        sim.dust_conc_mov_avg[ii] = pd.Series(sim.dust_concentration[ii]).rolling(window=window, min_periods=1).mean().to_numpy()
-        D = sim.dust.D[ii]
-        mask = D <= cutoff
-        getattr(sim.dust, attr)[ii] = np.trapezoid(sim.dust.pdfM[ii][mask], np.log10(D[mask]))
-    return sim
-
-
-def _dust_type_is_direct(files: list, dust_type: str) -> bool:
-    """True if `dust_type` can be handed straight to SimulationInputs: an exact
-    Weather column of that name exists in every file, and import_dust can parse it."""
-    if _normalize_dust_name(dust_type) is None:  # not TSP/PMT/PM<number>
-        return False
-    return all(dust_type in pd.read_excel(f, sheet_name="Weather", nrows=0).columns for f in files)
+def component_dust_assignments(wind_components: list, dust_specs: list) -> list[dict]:
+    """Every way of driving each of a wind model's components with one of `dust_specs`
+    -- len(dust_specs) ** n_components assignments, e.g. {"gravitational": "PM17",
+    "tangential_wind": "PM10-PM2.5"}."""
+    keys = resolve_component_keys(wind_components)
+    return [dict(zip(keys, combo)) for combo in product(dust_specs, repeat=len(keys))]
 
 
 def build_training_inputs(
@@ -322,15 +336,12 @@ def build_training_inputs(
 
 
 def build_sim_inputs(cfg: PipelineConfig, files: list) -> smb.SimulationInputs:
-    """Construct SimulationInputs for `cfg.dust_type` -- the single place dust_type
-    becomes simulation inputs. Clean, directly-usable dust types (TSP, PM10, PMT,
-    PM1/PM4/PM20, and cleanly-named PM2.5) construct normally; awkwardly-named columns
-    are built via a safe base and re-pointed (see _repoint_dust_type)."""
-    if _dust_type_is_direct(files, cfg.dust_type):
-        return smb.SimulationInputs(files, k_factors=cfg.k_factor, dust_type=cfg.dust_type, verbose=cfg.verbose)
-    base = available_dust_types(cfg, files)[0]  # always present + parseable
-    sim = smb.SimulationInputs(files, k_factors=cfg.k_factor, dust_type=base, verbose=cfg.verbose)
-    return _repoint_dust_type(sim, files, cfg.dust_type)
+    """Construct SimulationInputs for `cfg.dust_type` -- the single place a dust spec
+    becomes simulation inputs. SimulationInputs resolves the spec against the weather
+    files' particulate-matter columns, so any spelling ("PM2p5") and any difference
+    ("PM17-PM10") works provided the underlying columns are present; it also loads every
+    other PM column as a channel, which is what per-component dust types draw on."""
+    return smb.SimulationInputs(files, k_factors=cfg.k_factor, dust_type=cfg.dust_type, verbose=cfg.verbose)
 
 
 def load_data(cfg: PipelineConfig):
@@ -366,7 +377,14 @@ def load_data(cfg: PipelineConfig):
 
 
 def fit_and_evaluate(
-    cfg: PipelineConfig, data: LoadedData, model_type: str, wind_components: list, train_mirrors_run: list, train_exps: list, test_exps: list
+    cfg: PipelineConfig,
+    data: LoadedData,
+    model_type: str,
+    wind_components: list,
+    component_dust_types: Any,
+    train_mirrors_run: list,
+    train_exps: list,
+    test_exps: list,
 ) -> dict:
     """
     Build a fresh model, fit it on `train_exps` (using `train_mirrors_run`), and score
@@ -378,7 +396,7 @@ def fit_and_evaluate(
     heliosoil.paper_specific_utilities.regression_performance_stats).
     """
     verbose = cfg.verbose
-    model, _ = build_model(data.parameter_file, model_type, wind_components, verbose=verbose)
+    model, _ = build_model(data.parameter_file, model_type, wind_components, component_dust_types, verbose=verbose)
     sim_train, reflect_train = build_training_inputs(cfg, data, train_mirrors_run, train_exps)
 
     model.helios_angles(sim_train, reflect_train, second_surface=cfg.second_surf, verbose=verbose)
@@ -414,7 +432,7 @@ def fit_and_evaluate(
     model.helios_angles(data.sim_data_total, data.reflect_data_total, second_surface=cfg.second_surf, verbose=verbose)
     if model_type == "semi_physical":
         model = smu.set_extinction_coefficients(model, ext_weights, np.arange(len(data.files)))
-    model.predict_soiling_factor(data.sim_data_total, rho0=data.reflect_data_total.rho0, verbose=verbose)
+    model.predict_soiling_factor(data.sim_data_total, reflectance_data=data.reflect_data_total, verbose=verbose)
 
     stats_in = regression_performance_stats(model, data.reflect_data_total, train_exps)
     stats_out = regression_performance_stats(model, data.reflect_data_total, test_exps)
@@ -441,7 +459,9 @@ def compile_results(cfg: PipelineConfig, run_name: str, workflow: str = "model_s
 
     The run tree is {run_dir}/{dust_type}/{model}/, so every row is tagged with both
     `dust_type` and `model`, letting the compiled table answer "which PM type + model
-    generalizes best?". RMSE (and the other out-of-sample stats) is scored on the
+    generalizes best?". Runs whose mechanisms each name their own dust channel sit under
+    dust_type=PER_COMPONENT_SUBDIR instead, with the channels shown in `model` and
+    `model_expression`. RMSE (and the other out-of-sample stats) is scored on the
     common evaluation set (all common mirrors, same reflectance targets across dust
     types) for every model, so it is directly comparable across both axes -- unlike a
     training-fit AIC, whose magnitude would track training-mirror/observation count.

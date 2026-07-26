@@ -49,6 +49,26 @@ A model is configured with an (ordered) subset of {"gravitational", "normal_wind
 "tangential_wind", "impaction_retention"} via the `components` argument; the default
 ["gravitational", "normal_wind"] is named "constant-mean_gravitational_normal-wind" and
 reproduces the original two-mechanism model exactly.
+
+Per-component dust channels
+---------------------------
+alpha_j above is the dimensionless dust loading -- the measured airborne mass divided
+by the same measure's mass in the reference size distribution. By default every
+mechanism shares one channel, the simulation's own `dust_type`. Because the mechanisms
+are driven by different physics, they need not be driven by the same particle sizes:
+`component_dust_types` gives each component its own dust spec, either a single measure
+("PM17", "PM10", "PM2.5") or the difference of two ("PM17-PM10"), which isolates the mass
+carried by particles between the two cutoffs. For example
+
+    components=["gravitational", "tangential_wind"],
+    component_dust_types={"gravitational": "PM17", "tangential_wind": "PM10-PM2.5"}
+
+settles the whole airborne mass gravitationally while scouring only the 2.5-10 µm
+fraction tangentially. Such a model is named
+"constant-mean_PMM17xgravitational_PM10-PM2.5xtangential-wind" and reports itself as
+"PM17*gravitational + (PM10-PM2.5)*tangential_wind" (see `component_expression`).
+Concentrations come from `SimulationInputs.dust_concentration_channels` and reference
+masses from `Dust.pm_mass`, so the weather file must carry the PM columns involved.
 """
 
 import pickle
@@ -59,7 +79,19 @@ from scipy.optimize import minimize_scalar
 
 import heliosoil.base_models as smb
 from heliosoil.fitting import ConstantMeanDeposition, CommonFittingMethods
-from heliosoil.utilities import _print_if, _check_keys, _parse_dust_str, _std_errors_from_cov, cosd, sind, cardinal_to_azimuth
+from heliosoil.utilities import (
+    _print_if,
+    _check_keys,
+    _parse_dust_str,
+    _std_errors_from_cov,
+    _nominal_reflectance_series,
+    _nominal_reflectance_anchor,
+    canonical_dust_spec,
+    resolve_dust_concentration,
+    cosd,
+    sind,
+    cardinal_to_azimuth,
+)
 
 
 def wind_projection_factors(tilt_deg, azimuth_deg, wind_dir_deg):
@@ -322,6 +354,81 @@ def _resolve_components(components):
     return [_COMPONENTS[key] for key in _CANONICAL_ORDER if key in components]
 
 
+def resolve_component_keys(components):
+    """The component keys of a `components` list, validated and in canonical order --
+    the layout a model built from it will use."""
+    return [c.key for c in _resolve_components(components)]
+
+
+def resolve_component_dust_types(components, component_dust_types=None):
+    """Validate a per-component dust assignment into {component key: dust spec or None}
+    covering exactly the active components, in canonical order.
+
+    `component_dust_types` may be None (every component uses the simulation's own
+    dust_type -- the behaviour of every model built before per-component dust channels
+    existed), a single spec applied to every component, or a dict naming a spec for some
+    or all of them. Specs are canonicalized (see heliosoil.utilities.parse_dust_spec), so
+    an unusable one is rejected here rather than at fit time."""
+    keys = resolve_component_keys(components)
+    if component_dust_types is None:
+        return dict.fromkeys(keys)
+    if isinstance(component_dust_types, str):
+        component_dust_types = dict.fromkeys(keys, component_dust_types)
+
+    unknown = sorted(set(component_dust_types) - set(keys))
+    if unknown:
+        raise ValueError(f"Dust types given for component(s) {unknown}, which this model does not have; its components are {keys}.")
+    return {key: (canonical_dust_spec(component_dust_types[key]) if component_dust_types.get(key) is not None else None) for key in keys}
+
+
+def describe_components(components, component_dust_types=None):
+    """Human-readable summary of the mechanisms a model sums and the dust channel each
+    is driven by, e.g. "PM17*gravitational + (PM10-PM2.5)*tangential_wind". Components
+    without an explicit dust type are driven by the simulation's own dust_type and are
+    left unqualified ("gravitational")."""
+    dust_types = resolve_component_dust_types(components, component_dust_types)
+    terms = []
+    for key, spec in dust_types.items():
+        if spec is None:
+            terms.append(key)
+        else:
+            terms.append(f"({spec})*{key}" if "-" in spec else f"{spec}*{key}")
+    return " + ".join(terms)
+
+
+def _dust_alpha(simulation_inputs, f, dust_spec=None):
+    """Dimensionless dust loading alpha_j for file `f`: the measured airborne mass in a
+    channel divided by that channel's mass in the reference size distribution.
+
+    dust_spec=None uses the simulation's own dust_type/dust_concentration, exactly as
+    every other model in the package does. A spec ("PM10", "PM17-PM10", ...) instead
+    reads that channel from simulation_inputs.dust_concentration_channels and divides by
+    the matching Dust.pm_mass."""
+    sim_in = simulation_inputs
+    if dust_spec is None:
+        try:
+            attr = _parse_dust_str(sim_in.dust_type[f])
+            den = getattr(sim_in.dust, attr)
+        except Exception:
+            raise ValueError(
+                "Dust measurement = "
+                + sim_in.dust_type[f]
+                + " not present in dust class. Use dust_type="
+                + sim_in.dust_type[f]
+                + " option when initializing the model"
+            )
+        return sim_in.dust_concentration[f] / den[f]
+
+    channels = getattr(sim_in, "dust_concentration_channels", {}).get(f)
+    concentration, _ = resolve_dust_concentration(channels, dust_spec)
+    if concentration is None:
+        raise ValueError(
+            f"Dust channel {dust_spec!r} is not available for file {f}: the weather file must contain the particulate-matter "
+            f"column(s) it is built from (this file has {sorted(channels or {})})."
+        )
+    return concentration / sim_in.dust.pm_mass(f, dust_spec)
+
+
 class ConstantMeanWindBase(smb.ConstantMeanBase):
     """
     Constant-mean deposition model with a modular set of additive wind-driven
@@ -332,9 +439,14 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
             "tangential_wind", "impaction_retention"} to include (any order
             accepted; canonicalized internally). Defaults to ["gravitational",
             "normal_wind"], reproducing the original two-mechanism model.
+        component_dust_types: optional dust channel per component, either a dict
+            {component key: dust spec} or one spec for all of them. A spec is a single
+            measure ("PM17", "PM10", "PM2.5") or a difference ("PM17-PM10"). Components
+            left out use the simulation's own dust_type; the default (None) means every
+            component does, reproducing the single-channel model exactly.
     """
 
-    def __init__(self, components=None):
+    def __init__(self, components=None, component_dust_types=None):
         # Explicit (non-cooperative) call: a bare super().__init__() would resolve
         # via the instance's MRO and land on ConstantMeanDeposition.__init__ (which
         # requires file_params) when this runs as part of ConstantMeanWindDeposition.
@@ -342,6 +454,7 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
         self.components = _resolve_components(components)
         self._component_keys = [c.key for c in self.components]
         self._needs_wind = any(c.requires_wind for c in self.components)
+        self.component_dust_types = resolve_component_dust_types(self._component_keys, component_dust_types)
 
         # Every possible parameter attribute exists (None if inactive) so that
         # introspection/pickling never hits AttributeError regardless of which
@@ -360,11 +473,35 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
 
     @property
     def model_name(self):
-        return "constant-mean_" + "_".join(c.name_fragment for c in self.components)
+        # A component driven by its own dust channel is tagged with it, e.g.
+        # "constant-mean_PMM17xgravitational_PM10-PM2.5xtangential-wind". "x" rather than
+        # "*" keeps the name usable as a results-folder name on every platform.
+        fragments = []
+        for c in self.components:
+            spec = self.component_dust_types[c.key]
+            fragments.append(c.name_fragment if spec is None else f"{spec}x{c.name_fragment}")
+        return "constant-mean_" + "_".join(fragments)
+
+    @property
+    def component_expression(self):
+        """The mechanisms this model sums and the dust channel driving each, e.g.
+        "PM17*gravitational + (PM10-PM2.5)*tangential_wind" (see describe_components)."""
+        return describe_components(self._component_keys, self.component_dust_types)
 
     @property
     def parameter_names(self):
         return list(self._param_names)
+
+    def _component_alphas(self, simulation_inputs, f):
+        """{component key: alpha_j} for file `f`. Components sharing a dust channel --
+        by default all of them, on the simulation's own dust_type -- share one array."""
+        alphas, by_spec = {}, {}
+        for key in self._component_keys:
+            spec = self.component_dust_types[key]
+            if spec not in by_spec:
+                by_spec[spec] = _dust_alpha(simulation_inputs, f, spec)
+            alphas[key] = by_spec[spec]
+        return alphas
 
     def import_site_data_and_constants(self, file_params, verbose=True):
         super().import_site_data_and_constants(file_params, verbose=verbose)
@@ -396,7 +533,6 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
 
         sim_in = simulation_inputs
         helios = self.helios
-        dust = sim_in.dust
 
         files = list(sim_in.time.keys())
         for f in files:
@@ -423,23 +559,11 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
                         + "columns (e.g. 'WindSpeed'/'WD') for the wind-impaction model."
                     )
 
-            try:
-                attr = _parse_dust_str(sim_in.dust_type[f])
-                den = getattr(dust, attr)
-            except Exception:
-                raise ValueError(
-                    "Dust measurement = "
-                    + sim_in.dust_type[f]
-                    + " not present in dust class. Use dust_type="
-                    + sim_in.dust_type[f]
-                    + " option when initializing the model"
-                )
-
-            alpha = sim_in.dust_concentration[f] / den[f]
+            alphas = self._component_alphas(sim_in, f)
 
             total_mean = np.zeros_like(tilt, dtype=float)
             for component in self.components:
-                bases = component.mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed)
+                bases = component.mean_bases(alphas[component.key], tilt, azimuth, wind_dir, wind_speed)
                 for base, name in zip(bases, component.mean_param_names):
                     total_mean = total_mean + base * resolved[name]
             helios.delta_soiled_area[f] = total_mean
@@ -451,7 +575,7 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
                     sigma = sigmas[component.sigma_param_name]
                     if sigma is None:
                         continue
-                    total_var = total_var + sigma**2 * component.variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed)
+                    total_var = total_var + sigma**2 * component.variance_basis(alphas[component.key], tilt, azimuth, wind_dir, wind_speed)
                 helios.delta_soiled_area_variance[f] = total_var
 
         self.helios = helios
@@ -485,8 +609,8 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
     vector sized/ordered by the active `components` (see ConstantMeanWindBase).
     """
 
-    def __init__(self, file_params, components=None, verbose=True):
-        ConstantMeanWindBase.__init__(self, components=components)
+    def __init__(self, file_params, components=None, component_dust_types=None, verbose=True):
+        ConstantMeanWindBase.__init__(self, components=components, component_dust_types=component_dust_types)
         self.verbose = verbose
         self.import_site_data_and_constants(file_params, verbose=self.verbose)
         table = pd.read_excel(file_params, index_col="Parameter")
@@ -530,10 +654,10 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
 
         self.helios = helios
 
-    def predict_soiling_factor(self, simulation_inputs, rho0=None, verbose=True, **param_overrides):
+    def predict_soiling_factor(self, simulation_inputs, reflectance_data=None, verbose=True, **param_overrides):
         sim_in = simulation_inputs
         self.calculate_delta_soiled_area(sim_in, verbose=verbose, **param_overrides)
-        self.compute_soiling_factor(rho0=rho0)
+        self.compute_soiling_factor(reflectance_data=reflectance_data)
 
         if any(getattr(self, name) is not None for name in self._sigma_param_names):
             for f in self.helios.soiling_factor.keys():
@@ -564,18 +688,18 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
         files = list(reflectance_data.times.keys())
         pi = reflectance_data.prediction_indices
         meas = reflectance_data.average
-        r0 = self.helios.nominal_reflectance
         NL = [reflectance_data.average[f].shape[0] for f in files]
 
         loglike = -0.5 * np.sum(NL) * np.log(2 * np.pi)
         self.update_model_parameters(params)
-        self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0, verbose=False)
+        self.predict_soiling_factor(simulation_inputs, reflectance_data=reflectance_data, verbose=False)
         sf = self.helios.soiling_factor
 
         s2total = self._compute_variance_of_measurements(None, sim_in, reflectance_data=reflectance_data)
 
         for f in files:
             delta_r = np.diff(meas[f], axis=0)
+            r0 = _nominal_reflectance_series(reflectance_data, f, self.helios.nominal_reflectance)
             rho_prediction = r0 * sf[f][:, pi[f]].transpose()
             mu_delta_r = np.diff(rho_prediction, axis=0)
             loglike += np.sum(-0.5 * np.log(s2total[f]) - (delta_r - mu_delta_r) ** 2 / (2 * s2total[f]))
@@ -600,21 +724,10 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
             else:
                 pif = reflectance_data.prediction_indices[f]
 
-            b = self.helios.nominal_reflectance * self.helios.inc_ref_factor[f]
+            nom_ref_anchor = _nominal_reflectance_anchor(reflectance_data, f, self.helios.nominal_reflectance)
+            b = nom_ref_anchor * self.helios.inc_ref_factor[f]
 
-            try:
-                attr = _parse_dust_str(sim_in.dust_type[f])
-                den = getattr(sim_in.dust, attr)
-            except Exception:
-                raise ValueError(
-                    "Dust measurement "
-                    + sim_in.dust_type[f]
-                    + " not present in dust class. Use dust_type="
-                    + sim_in.dust_type[f]
-                    + " option when initializing the model"
-                )
-
-            alpha = sim_in.dust_concentration[f] / den[f]
+            alphas = self._component_alphas(sim_in, f)
 
             if reflectance_data is None:
                 meas_sig = np.zeros(self.helios.tilt[f].shape).transpose()
@@ -637,7 +750,7 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
                 sigma = sigmas[component.sigma_param_name]
                 if sigma is None:
                     continue
-                basis = component.variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed)
+                basis = component.variance_basis(alphas[component.key], tilt, azimuth, wind_dir, wind_speed)
                 c2t = np.cumsum(basis, axis=1).transpose()
                 total_delta = total_delta + sigma**2 * (c2t[ind2, :] - c2t[ind1, :])
 

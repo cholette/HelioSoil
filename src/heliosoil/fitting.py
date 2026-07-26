@@ -1,5 +1,13 @@
 import heliosoil.base_models as smb
-from heliosoil.utilities import logger, _print_if, _check_keys, _parse_dust_str, _std_errors_from_cov
+from heliosoil.utilities import (
+    logger,
+    _print_if,
+    _check_keys,
+    _parse_dust_str,
+    _std_errors_from_cov,
+    _nominal_reflectance_series,
+    _nominal_reflectance_anchor,
+)
 import numpy as np
 from numpy import radians as rad
 from numpy.linalg import inv
@@ -12,7 +20,7 @@ import pickle
 
 
 class CommonFittingMethods:
-    def compute_soiling_factor(self, rho0=None):
+    def compute_soiling_factor(self, reflectance_data=None):
         # Converts helios.delta_soiled_area into an accumulated area loss and
         # populates helios.soiling_factor.
 
@@ -21,16 +29,23 @@ class CommonFittingMethods:
         helios.soiling_factor = {f: None for f in files}  # clear the soiling factor
 
         for f in files:
-            if rho0 is None:
+            if reflectance_data is None:
                 N_helios = helios.tilt[f].shape[0]
                 cumulative_soil0 = np.zeros(N_helios)  # start from clean
             else:
                 inc_factor = self.helios.inc_ref_factor[f].squeeze()
-                cumulative_soil0 = (1 - rho0[f] / self.helios.nominal_reflectance) / inc_factor  # back-calculated soiled area from measurement
+                # nom_ref_anchor is the nominal (as-if-freshly-cleaned) reflectance at
+                # the moment rho0 was recorded: the fixed constant by default, or a
+                # reference-mirror-derived, per-mirror value when reflectance_data
+                # carries one (see heliosoil.utilities._nominal_reflectance_anchor).
+                nom_ref_anchor = _nominal_reflectance_anchor(reflectance_data, f, self.helios.nominal_reflectance)
+                cumulative_soil0 = (1 - reflectance_data.rho0[f] / nom_ref_anchor) / inc_factor  # back-calculated soiled area from measurement
 
             cumulative_soil = np.c_[cumulative_soil0, helios.delta_soiled_area[f]]
             cumulative_soil = np.cumsum(cumulative_soil, axis=1)  # accumulate soiling
-            helios.soiling_factor[f] = 1 - cumulative_soil[:, 1::] * helios.inc_ref_factor[f]  # soiling factor, still to be multiplied by rho0
+            helios.soiling_factor[f] = (
+                1 - cumulative_soil[:, 1::] * helios.inc_ref_factor[f]
+            )  # soiling factor, still to be multiplied by nominal reflectance
 
         self.helios = helios
 
@@ -58,7 +73,8 @@ class CommonFittingMethods:
             else:
                 pif = reflectance_data.prediction_indices[f]
 
-            b = self.helios.nominal_reflectance * self.helios.inc_ref_factor[f]  # fixed for fitting experiments at reflectometer incidence angle
+            nom_ref_anchor = _nominal_reflectance_anchor(reflectance_data, f, self.helios.nominal_reflectance)
+            b = nom_ref_anchor * self.helios.inc_ref_factor[f]  # fixed for fitting experiments at reflectometer incidence angle
             try:
                 attr = _parse_dust_str(sim_in.dust_type[f])
                 den = getattr(sim_in.dust, attr)  # dust.(sim_in.dust_type[f])
@@ -91,18 +107,21 @@ class CommonFittingMethods:
 
         pi = reflectance_data.prediction_indices
         meas = reflectance_data.average
-        # r0 = self.helios.nominal_reflectance # nominal clean reflectance # Commented since r0 is not always 0.95
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs, reflectance_data)
 
         sse = 0
         self.update_model_parameters(params)
-        self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0, verbose=False)
+        self.predict_soiling_factor(simulation_inputs, reflectance_data=reflectance_data, verbose=False)
         sf = self.helios.soiling_factor
         files = list(sf.keys())
         for f in files:
-            r0 = reflectance_data.rho0[f]  # Added here since initial cleanliness can change for each mirror
+            # nominal reflectance, not rho0: soiling_factor's own initial condition is
+            # already anchored to rho0 via compute_soiling_factor's cumulative_soil0,
+            # so multiplying by rho0 here again would double-count it (see the
+            # identity documented on _nominal_reflectance_series).
+            r0 = _nominal_reflectance_series(reflectance_data, f, self.helios.nominal_reflectance)
             rho_prediction = r0 * sf[f][:, pi[f]].transpose()
             sse += np.sum((rho_prediction - meas[f]) ** 2)
         return sse
@@ -115,14 +134,13 @@ class CommonFittingMethods:
         files = list(reflectance_data.times.keys())
         pi = reflectance_data.prediction_indices
         meas = reflectance_data.average
-        r0 = self.helios.nominal_reflectance  # nominal clean reflectance
         NL = [reflectance_data.average[f].shape[0] for f in files]
 
         # define optimization objective function (negative log likelihood)
         sigma_dep = params[1]
         loglike = -0.5 * np.sum(NL) * np.log(2 * np.pi)
         self.update_model_parameters(params)
-        self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0, verbose=False)
+        self.predict_soiling_factor(simulation_inputs, reflectance_data=reflectance_data, verbose=False)
         sf = self.helios.soiling_factor  # soiling factor to be multiplied by clean reflectance
 
         # Compute variance in reflectance, not soiling factor
@@ -130,6 +148,7 @@ class CommonFittingMethods:
 
         for f in files:
             delta_r = np.diff(meas[f], axis=0)
+            r0 = _nominal_reflectance_series(reflectance_data, f, self.helios.nominal_reflectance)  # nominal clean reflectance
             rho_prediction = r0 * sf[f][:, pi[f]].transpose()
             mu_delta_r = np.diff(rho_prediction, axis=0)
             loglike += np.sum(-0.5 * np.log(s2total[f]) - (delta_r - mu_delta_r) ** 2 / (2 * s2total[f]))
@@ -316,7 +335,7 @@ class CommonFittingMethods:
         """
 
         if reflectance_data is not None:
-            self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0)
+            self.predict_soiling_factor(simulation_inputs, reflectance_data=reflectance_data)
         else:
             self.predict_soiling_factor(simulation_inputs)
 
@@ -354,6 +373,13 @@ class CommonFittingMethods:
             ts = sim_in.time[f]
             if reflectance_data is not None:
                 tr = reflectance_data.times[f]
+                # Per-mirror nominal reflectance anchor (reference-mirror-derived when
+                # reflectance_data carries one, else the model's fixed constant
+                # broadcast to every mirror) -- indexed like reflectance_data.average/
+                # self.helios.soiling_factor (jj below).
+                r0_by_mirror = np.broadcast_to(
+                    _nominal_reflectance_anchor(reflectance_data, f, self.helios.nominal_reflectance), reflectance_data.rho0[f].shape
+                )
 
             for jj in range(0, N_mirrors):
                 if jj == 0:
@@ -378,7 +404,7 @@ class CommonFittingMethods:
 
                 if reflectance_data is not None:  # plot predictions and reflectance data
                     m = reflectance_data.average[f][:, jj]
-                    r0 = self.helios.nominal_reflectance
+                    r0 = r0_by_mirror[jj]
 
                     if reflectance_std == "measurements":
                         s = reflectance_data.sigma[f][:, jj]
@@ -584,7 +610,7 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
 
         self.helios = helios
 
-    def predict_soiling_factor(self, simulation_inputs, rho0=None, hrz0=None, sigma_dep=None, verbose=True) -> None:
+    def predict_soiling_factor(self, simulation_inputs, reflectance_data=None, hrz0=None, sigma_dep=None, verbose=True) -> None:
         # Uses simulation inputs and model parameters to predict the soiling
         # factor and the prediction variance (stored in
         # helios.soiling_factor and helios.soiling_factor_prediction_variance,
@@ -593,7 +619,7 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
         self.deposition_flux(simulation_inputs, hrz0=hrz0, verbose=verbose)
         self.adhesion_removal(simulation_inputs, verbose=verbose)
         self.calculate_delta_soiled_area(simulation_inputs, sigma_dep=sigma_dep, verbose=verbose)
-        self.compute_soiling_factor(rho0=rho0)
+        self.compute_soiling_factor(reflectance_data=reflectance_data)
 
         # prediction variance
         if self.sigma_dep is not None:
@@ -758,10 +784,10 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
 
         self.helios = helios
 
-    def predict_soiling_factor(self, simulation_inputs: smb.SimulationInputs, rho0=None, mu_tilde=None, sigma_dep=None, verbose=True):
+    def predict_soiling_factor(self, simulation_inputs: smb.SimulationInputs, reflectance_data=None, mu_tilde=None, sigma_dep=None, verbose=True):
         sim_in = simulation_inputs
         self.calculate_delta_soiled_area(sim_in, mu_tilde=mu_tilde, sigma_dep=sigma_dep, verbose=verbose)
-        self.compute_soiling_factor(rho0=rho0)
+        self.compute_soiling_factor(reflectance_data=reflectance_data)
 
         # prediction variance
         if self.sigma_dep is not None:

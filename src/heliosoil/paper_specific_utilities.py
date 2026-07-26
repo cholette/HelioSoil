@@ -7,6 +7,7 @@ import pickle
 from typing import Union
 import heliosoil.base_models as smb
 import heliosoil.fitting as smf
+from heliosoil.utilities import _nominal_reflectance_anchor, _nominal_reflectance_series
 
 # %% Plot for the paper
 plt.rc("xtick", labelsize=16)
@@ -81,11 +82,16 @@ def plot_for_paper(
     if any("augusta".lower() in value.lower() for value in sdat.files):
         plot_rh = False  # the RH sensor is broken since the beginning of Port Augusta experiments
 
-    mod.predict_soiling_factor(sdat, rho0=rdat.rho0)  # ensure predictions are fresh
-    r0 = mod.helios.nominal_reflectance
+    mod.predict_soiling_factor(sdat, reflectance_data=rdat)  # ensure predictions are fresh
 
     exps = list(mod.helios.tilt.keys())
     tilts = np.unique(mod.helios.tilt[0])
+    # Per-mirror nominal reflectance anchor (reference-mirror-derived when rdat
+    # carries one, else the model's fixed constant broadcast to every mirror) --
+    # indexed the same way as rdat.average/rdat.mirror_names (kk below), not the
+    # model heliostat index (hh). np.broadcast_to makes the fallback-scalar case
+    # indexable identically to the per-mirror-array case.
+    r0_by_exp = {e: np.broadcast_to(_nominal_reflectance_anchor(rdat, e, mod.helios.nominal_reflectance), rdat.rho0[e].shape) for e in exps}
 
     if plot_rh:
         fig, ax = plt.subplots(nrows=len(tilts) + 2, ncols=len(exps), figsize=figsize, sharex="col")
@@ -158,7 +164,7 @@ def plot_for_paper(
                 # wind_direction) they genuinely differ by orientation. Unlabeled here (the
                 # per-orientation legend entry comes from the solid measured line above);
                 # the "Predicted" line-style key is added once, separately, below.
-                yh = r0 * mod.helios.soiling_factor[e][hh, 0 : rdat.prediction_indices[e][-1] + 1]
+                yh = r0_by_exp[e][kk] * mod.helios.soiling_factor[e][hh, 0 : rdat.prediction_indices[e][-1] + 1]
                 yh = yh + (1.0 - yh[0])
                 ax[jj, ii].plot(ts, yh, color=color, linestyle="--")
 
@@ -166,11 +172,12 @@ def plot_for_paper(
             # mirror (not one band per orientation), to avoid clutter from overlapping
             # shaded regions.
             idx0 = idxs[0]
-            ym = r0 * mod.helios.soiling_factor[e][idx0, 0 : rdat.prediction_indices[e][-1] + 1]
+            r0_rep = r0_by_exp[e][idx[0]]
+            ym = r0_rep * mod.helios.soiling_factor[e][idx0, 0 : rdat.prediction_indices[e][-1] + 1]
             ref_output[(e, int(t))] = ym.copy()
             ym = ym + (1.0 - ym[0])
             var_predict = mod.helios.soiling_factor_prediction_variance[e][idx0, 0 : rdat.prediction_indices[e][-1] + 1]
-            sigma_predict = r0 * np.sqrt(var_predict)
+            sigma_predict = r0_rep * np.sqrt(var_predict)
             Lp = ym - 1.96 * sigma_predict
             Up = ym + 1.96 * sigma_predict
             ax[jj, ii].fill_between(ts, Lp, Up, color="black", alpha=ci_alpha, label=r"Prediction Interval")
@@ -346,9 +353,11 @@ def plot_reflectance_by_tilt(mod, rdat, sdat, experiment_index, tilt, orientatio
         RMSE/R2/N) for this campaign restricted to mirrors at `tilt`. (None, None,
         None) if this campaign has no mirror at `tilt`.
     """
-    mod.predict_soiling_factor(sdat, rho0=rdat.rho0)  # ensure predictions are fresh
-    r0 = mod.helios.nominal_reflectance
+    mod.predict_soiling_factor(sdat, reflectance_data=rdat)  # ensure predictions are fresh
     e = experiment_index
+    # Per-mirror nominal reflectance anchor, indexed like rdat.average/rdat.mirror_names
+    # (kk below) -- see plot_for_paper for the same pattern.
+    r0 = np.broadcast_to(_nominal_reflectance_anchor(rdat, e, mod.helios.nominal_reflectance), rdat.rho0[e].shape)
 
     (idx,) = np.where(rdat.tilts[e][:, 0] == tilt)
     (idxs,) = np.where(mod.helios.tilt[e][:, 0] == tilt)
@@ -378,16 +387,17 @@ def plot_reflectance_by_tilt(mod, rdat, sdat, experiment_index, tilt, orientatio
         color = colors.get(code, "black")
         ax.errorbar(tr, m, yerr=1.96 * s, label=f"{orientation_name} (measured)", color=color, linestyle="-", marker="o", markersize=3, capsize=3)
 
-        yh = r0 * mod.helios.soiling_factor[e][hh, 0 : last_pred_idx + 1]
+        yh = r0[kk] * mod.helios.soiling_factor[e][hh, 0 : last_pred_idx + 1]
         yh = yh + (1.0 - yh[0])
         ax.plot(ts, yh, color=color, linestyle="--", label=f"{orientation_name} (predicted)")
 
     # Prediction interval from one representative mirror at this tilt (as in plot_for_paper)
     idx0 = idxs[0]
-    ym = r0 * mod.helios.soiling_factor[e][idx0, 0 : last_pred_idx + 1]
+    r0_rep = r0[idx[0]]
+    ym = r0_rep * mod.helios.soiling_factor[e][idx0, 0 : last_pred_idx + 1]
     ym = ym + (1.0 - ym[0])
     var_predict = mod.helios.soiling_factor_prediction_variance[e][idx0, 0 : last_pred_idx + 1]
-    sigma_predict = r0 * np.sqrt(var_predict)
+    sigma_predict = r0_rep * np.sqrt(var_predict)
     ax.fill_between(ts, ym - 1.96 * sigma_predict, ym + 1.96 * sigma_predict, color="black", alpha=ci_alpha, label="Prediction interval")
 
     stats = regression_performance_stats(mod, rdat, [e], mirrors=idx)
@@ -418,8 +428,7 @@ def plot_for_heliostats(
     figsize=None,
     lgd_size=10,
 ):
-    mod.predict_soiling_factor(sdat, rho0=rdat.rho0)  # ensure predictions are fresh
-    r0 = mod.helios.nominal_reflectance
+    mod.predict_soiling_factor(sdat, reflectance_data=rdat)  # ensure predictions are fresh
 
     exps = list(mod.helios.soiling_factor.keys())
     # tilts = np.unique(mod.helios.tilt[0]) # this is for the mirror rig with fixed tilt
@@ -439,6 +448,9 @@ def plot_for_heliostats(
     ref_output = []
     for ii, e in enumerate(exps):
         exp_output = {}
+        # Per-mirror nominal reflectance anchor, indexed like rdat.average (jj below,
+        # shared here with the model heliostat index) -- see plot_for_paper.
+        r0 = np.broadcast_to(_nominal_reflectance_anchor(rdat, e, mod.helios.nominal_reflectance), rdat.rho0[e].shape)
         for jj, t in enumerate(hels):
             tr = rdat.times[e]
             tr_day = (tr - tr[0]).astype("timedelta64[s]").astype(np.float64) / 3600 / 24
@@ -466,7 +478,7 @@ def plot_for_heliostats(
             ax[jj, ii].errorbar(tr_day, m, yerr=error_two_sigma)
 
             ym = (
-                r0 * mod.helios.soiling_factor[e][jj, rdat.prediction_indices[e][valid_idx[0]] : rdat.prediction_indices[e][-1] + 1]
+                r0[jj] * mod.helios.soiling_factor[e][jj, rdat.prediction_indices[e][valid_idx[0]] : rdat.prediction_indices[e][-1] + 1]
             )  # simulate reflectance losses between valid prediction indices
             # THE BELOW SIMPLY RESETS TO 0 THE CONFIDENCE INTERVAL IF A MEASUREMENT IS PERFORMED LATER - CHECK IF IT WORKS AS INTENDED BY MIKE
             var_predict = (
@@ -481,7 +493,7 @@ def plot_for_heliostats(
             else:
                 ym += 1.0 - ym[:, 0]
 
-            sigma_predict = r0 * np.sqrt(var_predict)
+            sigma_predict = r0[jj] * np.sqrt(var_predict)
             Lp = ym - 1.96 * sigma_predict
             Up = ym + 1.96 * sigma_predict
             ax[jj, ii].plot(ts_day, ym, label="Prediction Mean", color="black")
@@ -845,11 +857,14 @@ def regression_performance_stats(model, reflectance_data, experiments, mirrors=N
     (e.g. by calling model.predict_soiling_factor(...) or model.plot_soiling_factor(...)
     beforehand) with tilt/azimuth set consistently with `reflectance_data`.
 
-    Predicted reflectance is model.helios.nominal_reflectance * soiling_factor, not
+    Predicted reflectance is nominal_reflectance * soiling_factor, not
     reflectance_data.rho0 * soiling_factor: soiling_factor's own initial condition is
     already anchored to each mirror's rho0 via compute_soiling_factor (cumulative_soil0
     = (1 - rho0/nominal_reflectance)/inc_factor), so nominal_reflectance * soiling_factor
     exactly recovers rho0 at t=0 for every mirror; multiplying by rho0 again would not.
+    `nominal_reflectance` here is reflectance_data's reference-mirror-derived,
+    per-mirror/time value when available (heliosoil.utilities._nominal_reflectance_series),
+    else model.helios.nominal_reflectance.
 
     Args:
         model: a fitted soiling model exposing helios.soiling_factor and
@@ -865,13 +880,15 @@ def regression_performance_stats(model, reflectance_data, experiments, mirrors=N
     """
     pi = reflectance_data.prediction_indices
     meas = reflectance_data.average
-    r0 = model.helios.nominal_reflectance
     sf = model.helios.soiling_factor
 
     pred_list, meas_list = [], []
     for f in experiments:
         m = meas[f] if mirrors is None else meas[f][:, mirrors]
         sfm = sf[f] if mirrors is None else sf[f][mirrors, :]
+        r0 = _nominal_reflectance_series(reflectance_data, f, model.helios.nominal_reflectance)
+        if mirrors is not None and not np.isscalar(r0):
+            r0 = r0[:, mirrors]
         pred = r0 * sfm[:, pi[f]].transpose()
         pred_list.append(pred.flatten())
         meas_list.append(m.flatten())

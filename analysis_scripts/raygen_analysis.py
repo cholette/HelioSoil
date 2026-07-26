@@ -34,7 +34,7 @@ time_to_remove_at_end = [0, 0]  # time to be removed for each experiment, in hou
 train_experiments = [0]  # indices for training experiments from 0 to len(files)-1
 train_mirrors = ["ON_M1_T00"]  # ,"ONW_M5_T00"] # which mirrors within the experiments are used for training
 k_factor = "import"  # None sets equal to 1.0, "import" imports from the file
-dust_type = "PM10"  # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
+dust_type = "PM10"  # choose PM fraction to use for analysis --> PM17, PM10, PM2.5
 
 # %% Get file list and time intervals. Import training data.
 parameter_file = d + "parameters_mildura_experiments.xlsx"

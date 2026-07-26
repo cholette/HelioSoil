@@ -23,6 +23,12 @@ from heliosoil.utilities import (
     _import_option_helper,
     _parse_dust_str,
     _to_dict_of_lists,
+    _is_reference_mirror_column,
+    _safe_nanargmax,
+    dust_cutoff,
+    normalize_dust_name,
+    parse_dust_spec,
+    resolve_dust_concentration,
     get_project_root,
     cosd,
     sind,
@@ -577,6 +583,14 @@ class SimulationInputs:
     dust_concentration: Dict[int, np.ndarray] = field(
         init=False, default_factory=dict, metadata={"description": "PM10 or TSP concentration in air", "units": "µg/m³"}
     )
+    dust_concentration_channels: Dict[int, Dict[str, np.ndarray]] = field(
+        init=False,
+        default_factory=dict,
+        metadata={
+            "description": "every particulate-matter column in the weather file, keyed by canonical measure name (PM2p5 -> PM2.5, PM_TOT -> PM17) and k-factor scaled",
+            "units": "µg/m³",
+        },
+    )
     dust_conc_mov_avg: Dict[int, np.ndarray] = field(
         init=False, default_factory=dict, metadata={"description": "hourly moving average of dust concentration", "units": "µg/m³"}
     )
@@ -648,7 +662,7 @@ class SimulationInputs:
             "wind_direction": ["wd", "winddirection"],
         }
         dust_names = {
-            "pm_tot": ["pm_tot", "pmtot", "pmt", "pm20"],
+            "pm17": ["pm_tot", "pmtot", "pmt", "pm20", "pm17", "pm18"],
             "tsp": ["tsp"],
             "pm10": ["pm10"],
             "pm2p5": ["pm2_5", "pm2p5", "pm2.5"],
@@ -705,8 +719,28 @@ class SimulationInputs:
                 pd.Series(self.wind_speed[ii]).rolling(window=int(60.0 / (self.dt[ii] / 60)), min_periods=1).mean().to_numpy()
             )
 
-            # Dust concentration
-            self.dust_concentration[ii] = self.k_factors_dict[ii] * weather[self.dust_type[ii]].to_numpy()
+            # Dust concentration channels: every particulate-matter column in the file,
+            # canonically named (PM2p5 -> PM2.5, PM_TOT -> PM17) and k-factor scaled, so a
+            # model can also be driven by a measure other than dust_type, or by the
+            # difference of two (see heliosoil.utilities.parse_dust_spec).
+            channels = {}
+            for column in weather.columns:
+                name = normalize_dust_name(column)
+                if name is not None and name not in channels:
+                    channels[name] = self.k_factors_dict[ii] * weather[column].to_numpy(dtype=float)
+            self.dust_concentration_channels[ii] = channels
+
+            # Dust concentration. dust_type is resolved through the channels, so it may
+            # be written in any spelling and may be a difference ("PM17-PM10"); it is
+            # rewritten in canonical form here so everything downstream (the Dust
+            # attributes, model labels) agrees on one name. A dust_type that is not a
+            # particulate-matter measure falls back to a raw column lookup as before.
+            concentration, canonical = resolve_dust_concentration(channels, self.dust_type[ii])
+            if concentration is None:
+                concentration = self.k_factors_dict[ii] * weather[self.dust_type[ii]].to_numpy()
+            else:
+                self.dust_type[ii] = canonical
+            self.dust_concentration[ii] = concentration
             if "dust_concentration" not in self.weather_variables:
                 self.weather_variables.append("dust_concentration")
 
@@ -772,8 +806,8 @@ class Dust:
     poisson: Dict[int, float] = field(init=False, default_factory=dict, metadata={"units": "-", "description": "Poisson's ratio of dust"})
     youngs_modulus: Dict[int, float] = field(init=False, default_factory=dict, metadata={"units": "Pa", "description": "Young's modulus of dust"})
     PM10: Dict[int, float] = field(init=False, default_factory=dict, metadata={"units": "µg/m³", "description": "PM10 concentration"})
+    PM17: Dict[int, float] = field(init=False, default_factory=dict, metadata={"units": "µg/m³", "description": "PM17 concentration"})
     TSP: Dict[int, float] = field(init=False, default_factory=dict, metadata={"units": "µg/m³", "description": "TSP concentration"})
-    PMT: Dict[int, float] = field(init=False, default_factory=dict, metadata={"units": "µg/m³", "description": "PMT concentration"})
     Nd: Dict[int, np.ndarray] = field(init=False, default_factory=dict, metadata={"units": "1/cm³", "description": "Number concentration components"})
     log10_mu: Dict[int, np.ndarray] = field(
         init=False, default_factory=dict, metadata={"units": "log10(µm)", "description": "Log10 of mean diameters"}
@@ -827,7 +861,7 @@ class Dust:
                 pdfNii * (rhoii * np.pi / 6 * Dii**3) * 1e-9
             )  # pdfm (mass) dm[µg/m^3]/dLog10(D[µm]), 1e-9 factor from { D^3(µm^3->m^3) 1e-18 , m(kg->µg) 1e9}
             self.TSP[ii] = np.trapezoid(self.pdfM[ii], np.log10(Dii))
-            self.PMT[ii] = self.TSP[ii]
+            self.PM17[ii] = self.TSP[ii]
             self.PM10[ii] = np.trapezoid(
                 self.pdfM[ii][Dii <= 10], np.log10(Dii[Dii <= 10])
             )  # PM10 = np.trapezoid(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
@@ -836,29 +870,60 @@ class Dust:
             self.poisson[ii] = float(table.loc["poisson_dust"].Value)
             self.youngs_modulus[ii] = float(table.loc["youngs_modulus_dust"].Value)
 
-        # add dust measurements if they are PMX (e.g. PM2.5, PM17, PM18). PM10, TSP
-        # and PMT are already computed above, so they are skipped here.
-        for dt in dust_measurement_type:
-            if dt in [None, "TSP", "PMT", "PM10"]:
+        # add dust measurements for any other requested spec: a PMX cutoff (e.g. PM2.5,
+        # PM17, PM18) or a difference of two (e.g. "PM17-PM10", the mass coarser than
+        # 10 µm). PM10, TSP and PM17 are already computed above, so they are skipped here.
+        for dt in dict.fromkeys(dust_measurement_type):  # de-duplicated, first-seen order
+            if dt in [None, "TSP", "PM17", "PM10"]:
                 continue
 
-            if not str(dt).startswith("PM"):
-                continue  # not a particulate-matter cutoff, nothing to add
+            try:
+                att = _parse_dust_str(dt)
+                for ii, _ in enumerate(experiment_files):
+                    self.pm_mass(ii, dt)
+            except (AssertionError, ValueError):
+                continue  # not a particulate-matter measure, nothing to add
 
-            cutoff = dt[2::]  # diameter cutoff in µm, e.g. "18" or "2.5"
-            if "." in cutoff:  # decimal, e.g. PM2.5 -> attribute PM2_5
-                att = "PM" + "_".join(cutoff.split("."))
-            else:  # integer, e.g. PM18 -> attribute PM18
-                att = "PM{0:d}".format(int(cutoff))
-            cutoff = float(cutoff)
-
-            new_meas = {}
-            for ii, _ in enumerate(experiment_files):
-                Dii = self.D[ii]
-                new_meas[ii] = np.trapezoid(self.pdfM[ii][Dii <= cutoff], np.log10(Dii[Dii <= cutoff]))
-
-            setattr(self, att, new_meas)
             _print_if("Added " + att + " attribute to dust class for all experiment dust classes", verbose)
+
+    def pm_mass(self, ii, dust_type):
+        """Reference mass concentration [µg/m³] of a dust spec in experiment `ii`'s
+        modelled size distribution: the mass below the cutoff for a single measure
+        ("PM10"), or the mass in the band between the two cutoffs for a difference
+        ("PM17-PM10"). This is the denominator that turns a measured concentration into
+        the dimensionless dust loading alpha used by the soiling models.
+
+        The value is cached in the correspondingly named attribute (PM10, PM2_5,
+        PM17_minus_PM10, ...), so repeated calls -- and lookups by the models via
+        ``getattr(dust, _parse_dust_str(spec))`` -- are free.
+        """
+        attr = _parse_dust_str(dust_type)
+        store = getattr(self, attr, None)
+        if isinstance(store, dict) and ii in store:
+            return store[ii]
+
+        major, minor = parse_dust_spec(dust_type)
+        mass = self._mass_below_cutoff(ii, dust_cutoff(major))
+        if minor is not None:
+            mass -= self._mass_below_cutoff(ii, dust_cutoff(minor))
+            if mass <= 0:
+                raise ValueError(
+                    f"Dust spec {dust_type!r} encloses no mass in experiment {ii}'s size distribution: "
+                    f"the modelled particle diameters do not reach beyond the {minor} cutoff."
+                )
+
+        if not isinstance(store, dict):
+            store = {}
+            setattr(self, attr, store)
+        store[ii] = mass
+        return mass
+
+    def _mass_below_cutoff(self, ii, cutoff):
+        """Mass concentration [µg/m³] of experiment `ii`'s size distribution below a
+        particle-diameter cutoff [µm]; the whole distribution for cutoff=np.inf."""
+        D = self.D[ii]
+        mask = D <= cutoff
+        return np.trapezoid(self.pdfM[ii][mask], np.log10(D[mask]))
 
     def plot_distributions(self, figsize: Tuple[float, float] = (5, 5)) -> Tuple[plt.Figure, Any, List[Any]]:
         """
@@ -2098,6 +2163,10 @@ class ReflectanceMeasurements:
     prediction_indices: Dict[int, Any] = field(init=False, default_factory=dict)
     prediction_times: Dict[int, Any] = field(init=False, default_factory=dict)
     rho0: Dict[int, Any] = field(init=False, default_factory=dict)
+    rho0_index: Dict[int, np.ndarray] = field(init=False, default_factory=dict)
+    nominal_reflectance: Dict[int, np.ndarray] = field(init=False, default_factory=dict)
+    drift_factor: Dict[int, np.ndarray] = field(init=False, default_factory=dict)
+    reference_mirror_columns: Dict[int, List[str]] = field(init=False, default_factory=dict)
     mirror_names: Dict[int, List[str]] = field(init=False, default_factory=dict)
     tilts: Dict[int, np.ndarray] = field(init=False, default_factory=dict)
 
@@ -2158,6 +2227,26 @@ class ReflectanceMeasurements:
             else:
                 raise ValueError(f"No 'Time' or 'Timestamp' column found in file {fpath}")
 
+            # Reference mirror(s): re-cleaned before each day's measurement round, so
+            # their reading tracks day-to-day instrument/environmental drift rather
+            # than soiling. Detect and pull them out before either column-selection
+            # branch below, so neither can ever treat one as a soiling-subject mirror.
+            candidate_cols = [c for c in reflectance_data["Average"].columns if c != time_column]
+            ref_cols = [c for c in candidate_cols if _is_reference_mirror_column(c)]
+            self.reference_mirror_columns[ii] = ref_cols
+            if not ref_cols:
+                ref_values = None
+            elif len(ref_cols) == 1:
+                ref_values = reflectance_data["Average"][ref_cols[0]].to_numpy(dtype=float) / 100.0
+            else:
+                logger.warning(
+                    f"File {fpath}: found {len(ref_cols)} reference-mirror columns {ref_cols}; averaging them into a single reference reading."
+                )
+                ref_values = reflectance_data["Average"][ref_cols].to_numpy(dtype=float).mean(axis=1) / 100.0
+            if ref_cols:
+                reflectance_data["Average"] = reflectance_data["Average"].drop(columns=ref_cols)
+                reflectance_data["Sigma"] = reflectance_data["Sigma"].drop(columns=ref_cols)
+
             # Import data and ensure proper dimensions, Reflectance assumed to be in % based hence / 100
             if column_names_to_import is not None:
                 # Extract selected columns
@@ -2178,6 +2267,35 @@ class ReflectanceMeasurements:
                 self.average[ii] = avg_data
                 self.sigma[ii] = sig_data
 
+            # Reference-derived nominal reflectance: each mirror's own first VALID
+            # (non-NaN) reading is its clean baseline (mirrors can be added
+            # mid-campaign with leading NaNs, so this can't assume row 0). drift_factor
+            # tracks how much the reference mirror's own reading has moved since ITS
+            # own first valid reading, forward-filled across gaps. nominal_reflectance
+            # is populated only when a genuine, usable reference column was found --
+            # its absence per file is what signals fitting code to fall back to the
+            # fixed nominal_reflectance constant instead.
+            n_time_ii, n_mirrors_ii = self.average[ii].shape
+            valid_avg = ~np.isnan(self.average[ii])
+            has_any_valid_mirror = valid_avg.any(axis=0)
+            first_valid_row = np.argmax(valid_avg, axis=0)  # first True; meaningless (0) where no valid reading exists
+            campaign_clean_baseline = np.where(has_any_valid_mirror, self.average[ii][first_valid_row, np.arange(n_mirrors_ii)], np.nan)
+
+            if ref_values is None:
+                self.drift_factor[ii] = np.ones(n_time_ii)
+            else:
+                valid_ref = ~np.isnan(ref_values)
+                if not valid_ref.any():
+                    logger.warning(f"File {fpath}: reference-mirror column(s) {ref_cols} are entirely NaN; ignoring.")
+                    self.drift_factor[ii] = np.ones(n_time_ii)
+                else:
+                    t0_idx = np.flatnonzero(valid_ref)[0]
+                    raw_ratio = ref_values / ref_values[t0_idx]
+                    drift = pd.Series(np.where(valid_ref, raw_ratio, np.nan)).ffill().to_numpy(copy=True)
+                    drift[:t0_idx] = 1.0
+                    self.drift_factor[ii] = drift
+                    self.nominal_reflectance[ii] = campaign_clean_baseline[None, :] * drift[:, None]
+
             # Calculate delta_ref with proper dimensions
             self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])), -np.diff(self.average[ii], axis=0)))
 
@@ -2190,6 +2308,7 @@ class ReflectanceMeasurements:
 
             # Calculate initial reflectance (rho0), handling NaN values
             self.rho0[ii] = np.nanmax(self.average[ii], axis=0)
+            self.rho0_index[ii] = _safe_nanargmax(self.average[ii], axis=0)
 
             # Set reflectometer parameters
             self.reflectometer_incidence_angle[ii] = incidence_angles[ii]
