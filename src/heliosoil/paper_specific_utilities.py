@@ -404,7 +404,7 @@ def plot_reflectance_by_tilt(mod, rdat, sdat, experiment_index, tilt, orientatio
 
     ax.set_xlabel("Days")
     ax.set_ylabel("Norm. reflectance")
-    ax.set_title(f"Campaign {e + 1}, Tilt: {tilt:.0f}" + r"$^{\circ}$" + f"  (MAE={stats['MAE']:.4f}, RMSE={stats['RMSE']:.4f})")
+    ax.set_title(f"Campaign {e + 1}, Tilt: {tilt:.0f}" + r"$^{\circ}$" + f"  (daily-rate MAE={stats['MAE']:.4f}, RMSE={stats['RMSE']:.4f})")
     ax.grid(True)
     ax.legend(loc="best", fontsize=9)
     if created_fig:
@@ -849,9 +849,20 @@ def summarize_fit_quality(
 
 def regression_performance_stats(model, reflectance_data, experiments, mirrors=None):
     """
-    Compare predicted vs. measured reflectance and summarize the fit with standard
-    regression metrics: mean bias error (MBE), mean absolute error (MAE), root mean
-    squared error (RMSE), and the coefficient of determination (R^2).
+    Summarize a model fit with regression metrics computed on two different quantities so the
+    error metrics judge soiling *dynamics* while R2 stays a familiar reflectance goodness-of-fit:
+
+    - MBE, MAE, RMSE are computed on the **daily soiling rate**: the drop in soiling factor
+      between consecutive measurements divided by the elapsed days,
+      ``rate = -diff(soiling_factor) / diff(time_days)``. The measured soiling factor is
+      ``measured_reflectance / nominal_reflectance``, so predicted and measured rates are in the
+      same dimensionless (soiling-factor per day) units. This measures how well each prediction
+      predicts the *change* in soiling loss over each interval rather than how well it fits the
+      overall reflectance shape/level. Differencing is done per experiment so it never crosses a
+      campaign boundary.
+    - R2 is the coefficient of determination on **reflectance** (predicted vs. measured), pooled
+      over `experiments`. Called with the training vs. test experiments it yields the in-sample /
+      out-of-sample reflectance R2 respectively.
 
     Requires model.helios.soiling_factor to already be populated for `experiments`
     (e.g. by calling model.predict_soiling_factor(...) or model.plot_soiling_factor(...)
@@ -864,43 +875,78 @@ def regression_performance_stats(model, reflectance_data, experiments, mirrors=N
     exactly recovers rho0 at t=0 for every mirror; multiplying by rho0 again would not.
     `nominal_reflectance` here is reflectance_data's reference-mirror-derived,
     per-mirror/time value when available (heliosoil.utilities._nominal_reflectance_series),
-    else model.helios.nominal_reflectance.
+    else model.helios.nominal_reflectance. Dividing the measurement by this same time-varying
+    nominal removes reference-mirror drift from the measured rate, matching the drift-agnostic
+    model soiling factor.
 
     Args:
         model: a fitted soiling model exposing helios.soiling_factor and
             helios.nominal_reflectance.
-        reflectance_data: ReflectanceMeasurements with matching prediction_indices and
-            average for each file in `experiments`.
+        reflectance_data: ReflectanceMeasurements with matching prediction_indices, average, and
+            times for each file in `experiments`.
         experiments (list): file indices (as used to key simulation_inputs/reflectance_data)
             to pool together when computing the statistics.
         mirrors (array-like of int, optional): column indices to include. Default: all mirrors.
 
     Returns:
-        dict with keys "MBE", "MAE", "RMSE", "R2", "N" (pooled across `experiments`).
+        dict with keys "MBE", "MAE", "RMSE" (daily soiling rate, soiling-factor per day),
+        "R2" (reflectance), and "N" (number of pooled reflectance observations).
     """
     pi = reflectance_data.prediction_indices
     meas = reflectance_data.average
     sf = model.helios.soiling_factor
+    times = reflectance_data.times
 
+    # Reflectance-level pairing (predicted vs. measured) -> R2 only.
     pred_list, meas_list = [], []
+    # Daily soiling-rate residual, in dimensionless soiling-factor units -> MBE/MAE/RMSE.
+    rate_resid_list = []
     for f in experiments:
         m = meas[f] if mirrors is None else meas[f][:, mirrors]
         sfm = sf[f] if mirrors is None else sf[f][mirrors, :]
         r0 = _nominal_reflectance_series(reflectance_data, f, model.helios.nominal_reflectance)
         if mirrors is not None and not np.isscalar(r0):
             r0 = r0[:, mirrors]
-        pred = r0 * sfm[:, pi[f]].transpose()
-        pred_list.append(pred.flatten())
-        meas_list.append(m.flatten())
 
+        sf_pred = sfm[:, pi[f]].transpose()  # predicted soiling factor, (n_time, n_mirror)
+        pred_list.append((r0 * sf_pred).flatten())  # predicted reflectance, for R2
+        meas_list.append(m.flatten())  # measured reflectance, for R2
+
+        # Measured soiling factor = measured reflectance / nominal (clean) reflectance, so both
+        # sides of the rate residual are in the same dimensionless soiling-factor units.
+        sf_meas = m / r0
+
+        # Elapsed days between consecutive measurements (same convention as loss_table_from_sim).
+        t = np.asarray(times[f])
+        if np.issubdtype(t.dtype, np.datetime64):
+            dt_days = np.diff(t) / np.timedelta64(1, "D")
+        else:
+            dt_days = np.diff(t.astype(float))
+        dt_days = dt_days[:, None]
+
+        # Daily soiling rate = drop in soiling factor per day (a drop is positive soiling).
+        rate_pred = -np.diff(sf_pred, axis=0) / dt_days
+        rate_meas = -np.diff(sf_meas, axis=0) / dt_days
+        rate_resid_list.append((rate_pred - rate_meas).flatten())
+
+    # Daily soiling-rate error metrics. Mask non-finite entries (NaN measurements, zero-length
+    # intervals) so a few gaps don't void the whole set's MBE/MAE/RMSE; if nothing survives
+    # (e.g. a campaign with a single measurement), report NaN rather than warn on an empty mean.
+    rate_resid = np.concatenate(rate_resid_list)
+    rate_resid = rate_resid[np.isfinite(rate_resid)]
+    if rate_resid.size:
+        mbe, mae, rmse = np.mean(rate_resid), np.mean(np.abs(rate_resid)), np.sqrt(np.mean(rate_resid**2))
+    else:
+        mbe = mae = rmse = np.nan
+
+    # Reflectance coefficient of determination (in-sample or out-of-sample per `experiments`).
     pred_flat = np.concatenate(pred_list)
     meas_flat = np.concatenate(meas_list)
     resid = pred_flat - meas_flat
-
     ss_res = np.sum(resid**2)
     ss_tot = np.sum((meas_flat - np.mean(meas_flat)) ** 2)
 
-    return {"MBE": np.mean(resid), "MAE": np.mean(np.abs(resid)), "RMSE": np.sqrt(np.mean(resid**2)), "R2": 1 - ss_res / ss_tot, "N": meas_flat.size}
+    return {"MBE": mbe, "MAE": mae, "RMSE": rmse, "R2": 1 - ss_res / ss_tot, "N": meas_flat.size}
 
 
 def daily_soiling_tilt_all_data(

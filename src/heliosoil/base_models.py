@@ -861,7 +861,6 @@ class Dust:
                 pdfNii * (rhoii * np.pi / 6 * Dii**3) * 1e-9
             )  # pdfm (mass) dm[µg/m^3]/dLog10(D[µm]), 1e-9 factor from { D^3(µm^3->m^3) 1e-18 , m(kg->µg) 1e9}
             self.TSP[ii] = np.trapezoid(self.pdfM[ii], np.log10(Dii))
-            self.PM17[ii] = self.TSP[ii]
             self.PM10[ii] = np.trapezoid(
                 self.pdfM[ii][Dii <= 10], np.log10(Dii[Dii <= 10])
             )  # PM10 = np.trapezoid(self.pdfM[self.D<=10],dx=np.log10(self.D[self.D<=10]))
@@ -871,10 +870,10 @@ class Dust:
             self.youngs_modulus[ii] = float(table.loc["youngs_modulus_dust"].Value)
 
         # add dust measurements for any other requested spec: a PMX cutoff (e.g. PM2.5,
-        # PM17, PM18) or a difference of two (e.g. "PM17-PM10", the mass coarser than
-        # 10 µm). PM10, TSP and PM17 are already computed above, so they are skipped here.
+        # PM17, PM18) or a difference of two (e.g. "PM17-PM10", the mass between the 10
+        # and 17 µm cutoffs). PM10 and TSP are already computed above, so they are skipped here.
         for dt in dict.fromkeys(dust_measurement_type):  # de-duplicated, first-seen order
-            if dt in [None, "TSP", "PM17", "PM10"]:
+            if dt in [None, "TSP", "PM10"]:
                 continue
 
             try:
@@ -1790,6 +1789,17 @@ class Heliostats:
         # --- Start validation checks ---
         current_m_real = [s.real for s in sim_dat.dust.m.values()]
         current_m_imag = [s.imag for s in sim_dat.dust.m.values()]
+        # Checked before the value comparison: np.allclose broadcasts, so a table
+        # built for one file would silently "match" an N-file run with identical
+        # dust, and the per-file lookup would then KeyError on files 1..N-1.
+        if len(metadata.get("refractive_index_real", [])) != len(current_m_real):
+            _print_if(
+                f"Validation failed: lookup table covers {len(metadata.get('refractive_index_real', []))} file(s), "
+                f"but {len(current_m_real)} are being simulated.",
+                verbose,
+            )
+            return False
+
         if not np.allclose(metadata.get("refractive_index_real", []), current_m_real) or not np.allclose(
             metadata.get("refractive_index_imag", []), current_m_imag
         ):

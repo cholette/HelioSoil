@@ -63,9 +63,9 @@ carried by particles between the two cutoffs. For example
     components=["gravitational", "tangential_wind"],
     component_dust_types={"gravitational": "PM17", "tangential_wind": "PM10-PM2.5"}
 
-settles the whole airborne mass gravitationally while scouring only the 2.5-10 µm
+settles the sub-17 µm mass gravitationally while scouring only the 2.5-10 µm
 fraction tangentially. Such a model is named
-"constant-mean_PMM17xgravitational_PM10-PM2.5xtangential-wind" and reports itself as
+"constant-mean_PM17xgravitational_PM10-PM2.5xtangential-wind" and reports itself as
 "PM17*gravitational + (PM10-PM2.5)*tangential_wind" (see `component_expression`).
 Concentrations come from `SimulationInputs.dust_concentration_channels` and reference
 masses from `Dust.pm_mass`, so the weather file must carry the PM columns involved.
@@ -312,6 +312,9 @@ _IMPACTION_RETENTION = _WindComponent(
 # Order here is the canonical order: it fixes the parameter-vector layout and the
 # model_name string regardless of the order `components` is passed in.
 _CANONICAL_ORDER = ["gravitational", "turbulent_wind", "normal_wind", "tangential_wind", "impaction_retention"]
+# Public view of the same list, so callers (the analysis CLI's component pool, progress-bar
+# abbreviations) read the vocabulary from here instead of re-declaring it.
+COMPONENT_KEYS = tuple(_CANONICAL_ORDER)
 _COMPONENTS = {
     "gravitational": _GRAVITATIONAL,
     "turbulent_wind": _TURBULENT,
@@ -396,6 +399,46 @@ def describe_components(components, component_dust_types=None):
     return " + ".join(terms)
 
 
+def parse_model_expression(expression):
+    """Inverse of describe_components: read a model expression into the
+    (components, component_dust_types) pair a model is built from.
+
+    An expression is a "+"-separated sum of terms, each either a bare component
+    ("gravitational" -- driven by the simulation's own dust_type) or SPEC*component
+    ("PM17*gravitational", "(PM10-PM2.5)*tangential_wind"). Splitting on "+" is
+    unambiguous because a difference spec uses "-". Parentheses around a spec are
+    optional and component keys may be spelled with either separator, so
+    "PM10-PM2.5*tangential-wind" parses the same as describe_components' own output.
+
+    Specs are canonicalized (parse_dust_spec) and keys validated (_resolve_components),
+    so an unusable expression is rejected here rather than at fit time. Returns the keys
+    in canonical order alongside a {key: spec or None} dict covering exactly them, i.e.
+    parse_model_expression(describe_components(c, d)) round-trips."""
+    if expression is None or not str(expression).strip():
+        raise ValueError("Empty model expression; expected e.g. 'PM17*gravitational + (PM10-PM2.5)*tangential_wind'.")
+
+    dust_types = {}
+    for term in str(expression).split("+"):
+        term = term.strip()
+        if not term:
+            raise ValueError(f"Empty term in model expression {expression!r}.")
+        if "*" in term:
+            spec_part, key_part = term.split("*", 1)
+            spec = canonical_dust_spec(spec_part.strip().strip("()").strip())
+        else:
+            spec_part, key_part, spec = None, term, None
+
+        key = key_part.strip().lower().replace("-", "_").replace(" ", "_")
+        if key not in _COMPONENTS:
+            raise ValueError(f"Unknown wind component {key_part.strip()!r} in model expression {expression!r}; choose from {_CANONICAL_ORDER}.")
+        if key in dust_types:
+            raise ValueError(f"Component {key!r} appears more than once in model expression {expression!r}; each mechanism is fitted at most once.")
+        dust_types[key] = spec
+
+    keys = resolve_component_keys(dust_types)
+    return keys, {key: dust_types[key] for key in keys}
+
+
 def _dust_alpha(simulation_inputs, f, dust_spec=None):
     """Dimensionless dust loading alpha_j for file `f`: the measured airborne mass in a
     channel divided by that channel's mass in the reference size distribution.
@@ -474,7 +517,7 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
     @property
     def model_name(self):
         # A component driven by its own dust channel is tagged with it, e.g.
-        # "constant-mean_PMM17xgravitational_PM10-PM2.5xtangential-wind". "x" rather than
+        # "constant-mean_PM17xgravitational_PM10-PM2.5xtangential-wind". "x" rather than
         # "*" keeps the name usable as a results-folder name on every platform.
         fragments = []
         for c in self.components:

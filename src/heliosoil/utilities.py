@@ -904,7 +904,7 @@ def default_training_mirrors(all_mirrors: list[str], uses_wind_variance: bool) -
 # A "dust spec" names the airborne-mass channel a model (or one term of a model) is
 # driven by. It is either a single measure -- "TSP", "PM17", "PM10", "PM2.5", ... -- or
 # the difference of two, "PM17-PM10", which isolates the mass carried by particles
-# between the two cutoffs (here: coarser than 10 µm). Weather-sheet column spellings
+# between the two cutoffs (here: 10-17 µm). Weather-sheet column spellings
 # differ across sites (PM2.5 / PM2p5 / PM2_5, PM17 / PM_17 / PM17), so specs and
 # columns alike are canonicalized through normalize_dust_name before use.
 
