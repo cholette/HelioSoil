@@ -43,6 +43,11 @@ model types.
 """
 
 import os
+import sys
+import json
+import logging
+import platform
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import combinations, product
@@ -50,11 +55,17 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import heliosoil
 import heliosoil.base_models as smb
 import heliosoil.fitting as smf
 import heliosoil.utilities as smu
-from heliosoil.horizontal_impaction import ConstantMeanWindDeposition, describe_components, resolve_component_keys
+from heliosoil.horizontal_impaction import COMPONENT_KEYS, ConstantMeanWindDeposition, describe_components, resolve_component_keys
 from heliosoil.paper_specific_utilities import regression_performance_stats
+
+# Serializes the semi_physical extinction-lookup-table step across worker threads:
+# compute_extinction_weights writes into one shared "extinction_lookup_tables" folder on a
+# cache miss (see heliosoil.base_models), so concurrent folds must not generate it at once.
+_EXTINCTION_LOCK = threading.Lock()
 
 MODEL_CLASSES = {"constant_mean": smf.ConstantMeanDeposition, "constant_mean_wind": ConstantMeanWindDeposition, "semi_physical": smf.SemiPhysical}
 # constant_mean_wind's parameter names/count depend on wind_components and are read
@@ -152,12 +163,12 @@ def build_model(
     return model, model_label
 
 
-def build_runs(model_type, wind_components, wind_component_combos, component_dust_types=None, dust_specs=None):
+def build_runs(model_type, combos, component_dust_types=None, dust_specs=None):
     """List the (model_type, wind_components, component_dust_types) runs to execute.
 
-    model_type=None sweeps all three model types; for "constant_mean_wind",
-    wind_components=None sweeps wind_component_combos, otherwise a single wind
-    configuration is used.
+    model_type=None sweeps all three model types. `combos` is the list of component
+    combinations to fit as "constant_mean_wind" models -- ALL_COMPONENT_COMBOS for the
+    exploratory sweep, or a single-element list for one named model.
 
     component_dust_types selects the dust channel driving each wind mechanism:
       - None: every mechanism uses the run's cfg.dust_type, so the dust axis is the
@@ -177,7 +188,6 @@ def build_runs(model_type, wind_components, wind_component_combos, component_dus
         if mt != "constant_mean_wind":
             runs.append((mt, None, None))
             continue
-        combos = wind_component_combos if wind_components is None else [wind_components]
         for combo in combos:
             if component_dust_types == "sweep":
                 runs.extend((mt, combo, assignment) for assignment in component_dust_assignments(combo, dust_specs))
@@ -214,19 +224,140 @@ def resolve_training_mirrors(cfg: PipelineConfig, all_mirrors: list, model_type:
     return smu.default_training_mirrors(all_mirrors, uses_wind_variance(model_type, wind_components))
 
 
-def resolve_run_dir(cfg: PipelineConfig, workflow: str, run_name: str | None = None) -> str:
+def prompt_yes_no(question: str) -> bool | None:
+    """Ask `question` on the terminal: True/False for an answer, None when there is nobody to
+    ask -- no TTY (scripted/CI), or a stdin that claims to be one but is already at EOF (a
+    detached/redirected stdin on Windows does exactly this). Callers decide what "nobody to
+    ask" means for them; what neither may do is block a scripted run on stdin or, worse, die
+    on EOFError partway through a long run."""
+    if sys.stdin is None or not sys.stdin.isatty():
+        return None
+    try:
+        return input(f"{question} ").strip().lower() == "y"
+    except EOFError:
+        return None
+
+
+def resolve_run_dir(cfg: PipelineConfig, workflow: str, run_name: str | None = None, force: bool = False) -> str:
     """Resolve (and create) the results/{workflow}/{site}/{run_name} folder. run_name
-    =None -> a "run-yy-mm-dd_hh-mm" timestamp. If the folder already exists, prompt
-    before overwriting and abort (SystemExit) on anything but "y". Returns the
-    run_name."""
+    =None -> a "run-yy-mm-dd_hh-mm" timestamp. Returns the run_name.
+
+    If the folder already exists: `force` overwrites it silently; otherwise, on an
+    interactive terminal, prompt before overwriting and abort (SystemExit) on anything
+    but "y"; with no TTY (scripted/CI), abort with a message pointing at --force so the
+    run never blocks on stdin."""
     run_name = run_name or datetime.now().strftime("run-%y-%m-%d_%H-%M")
     run_dir = f"{smu.get_project_root()}/results/{workflow}/{cfg.site_name}/{run_name}"
-    if os.path.isdir(run_dir):
-        answer = input(f"{run_dir} already exists. Overwrite? [y/N] ").strip().lower()
-        if answer != "y":
+    if os.path.isdir(run_dir) and not force:
+        answer = prompt_yes_no(f"{run_dir} already exists. Overwrite? [y/N]")
+        if answer is None:
+            raise SystemExit(f"Aborted: {run_dir} already exists. Re-run with --force to overwrite or choose a different --run-name.")
+        if not answer:
             raise SystemExit("Aborted: run folder already exists.")
     os.makedirs(run_dir, exist_ok=True)
     return run_name
+
+
+def run_dir_path(cfg: PipelineConfig, workflow: str, run_name: str) -> str:
+    """Absolute path of the top-level run folder resolve_run_dir created/returned."""
+    return f"{smu.get_project_root()}/results/{workflow}/{cfg.site_name}/{run_name}"
+
+
+def wind_component_combos(pool: list, min_size: int = 1, max_size: int | None = None) -> list[list]:
+    """Every unique, canonically-ordered, non-empty subset of the component `pool`.
+
+    resolve_component_keys validates the pool and returns its keys in canonical order with
+    duplicates removed, so itertools.combinations yields exactly the unique canonically-ordered
+    subsets -- e.g. a 5-component pool gives 2**5 - 1 = 31 combos. min_size/max_size bound the
+    subset size (defaults: every non-empty subset). This replaces the hand-maintained
+    WIND_COMPONENT_COMBOS list; feed the result to build_runs as wind_component_combos."""
+    keys = resolve_component_keys(pool)
+    max_size = max_size or len(keys)
+    if min_size < 1:
+        raise ValueError(f"min_size must be >= 1, got {min_size}.")
+    return [list(combo) for r in range(min_size, max_size + 1) for combo in combinations(keys, r)]
+
+
+# The component exploration both workflows sweep: every unique non-empty subset of the full
+# component vocabulary (2**5 - 1 = 31). Fixed rather than configurable -- narrowing the pool
+# only ever removed models from the comparison, and the CV cost is dominated by the dust axis.
+ALL_COMPONENT_COMBOS = wind_component_combos(COMPONENT_KEYS)
+
+# Short component labels for the progress bar (see abbreviate_run).
+COMPONENT_ABBREV = {"gravitational": "Grav", "turbulent_wind": "Turb", "normal_wind": "Norm", "tangential_wind": "Tan", "impaction_retention": "Imp"}
+assert set(COMPONENT_ABBREV) == set(COMPONENT_KEYS), "COMPONENT_ABBREV must cover exactly heliosoil.horizontal_impaction.COMPONENT_KEYS."
+
+
+def abbreviate_run(model_type: str, wind_components: Any, component_dust_types: Any = None, subdir: str | None = None) -> str:
+    """Compact one-line label for tqdm progress, e.g. "PM10|Grav+Norm",
+    "Grav(PM17)+Tan(PM10-PM2.5)", "ConstMean", "SemiPhys"."""
+    if model_type == "constant_mean":
+        label = "ConstMean"
+    elif model_type == "semi_physical":
+        label = "SemiPhys"
+    elif model_type == "constant_mean_wind":
+        keys = resolve_component_keys(wind_components)
+        if isinstance(component_dust_types, dict):
+            # A key mapped to None names no channel of its own (it uses cfg.dust_type), so it
+            # is left unqualified -- same as one absent from the dict.
+            parts = [
+                f"{COMPONENT_ABBREV.get(k, k)}({component_dust_types[k]})" if component_dust_types.get(k) is not None else COMPONENT_ABBREV.get(k, k)
+                for k in keys
+            ]
+        elif isinstance(component_dust_types, str) and component_dust_types != "sweep":
+            parts = [f"{COMPONENT_ABBREV.get(k, k)}({component_dust_types})" for k in keys]
+        else:
+            parts = [COMPONENT_ABBREV.get(k, k) for k in keys]
+        label = "+".join(parts)
+    else:
+        label = str(model_type)
+    if subdir and subdir not in (None, PER_COMPONENT_SUBDIR):
+        return f"{subdir}|{label}"
+    return label
+
+
+def write_run_metadata(run_dir: str, metadata: dict) -> None:
+    """Write run_config.json into the run folder: the invocation plus the environment it ran
+    in (heliosoil version, python/platform, timestamp), so results can be traced back to the
+    exact settings and code version. `default=str` keeps any non-JSON value (a k_factor
+    sentinel, stray callables) from crashing the dump."""
+    payload = dict(metadata)
+    payload.setdefault("heliosoil_version", heliosoil.__version__)
+    payload.setdefault("python_version", platform.python_version())
+    payload.setdefault("platform", platform.platform())
+    payload.setdefault("timestamp", datetime.now().isoformat(timespec="seconds"))
+    with open(os.path.join(run_dir, "run_config.json"), "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, default=str)
+
+
+def open_run_log(run_dir: str) -> tuple[logging.Logger, Any]:
+    """Route workflow progress (INFO) and otherwise-suppressed warnings (WARNING) to
+    {run_dir}/run.log. Returns (analysis_logger, close):
+      - analysis_logger: a dedicated, non-propagating "heliosoil.analysis" logger the
+        workflow writes its header/per-fold lines to -- they land in run.log only, never
+        the console (so they can't corrupt a tqdm bar);
+      - close(): detaches and closes the file handler; call it in a finally.
+    The same handler is also attached to the "heliosoil" and captured-warnings ("py.warnings")
+    loggers so their WARNING+ records are persisted alongside the fold detail."""
+    handler = logging.FileHandler(os.path.join(run_dir, "run.log"), mode="w", encoding="utf-8")
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+
+    analysis_logger = logging.getLogger("heliosoil.analysis")
+    analysis_logger.setLevel(logging.INFO)
+    analysis_logger.propagate = False  # keep INFO fold detail off the console handler
+
+    logging.captureWarnings(True)
+    attached = [logging.getLogger(name) for name in ("heliosoil.analysis", "heliosoil", "py.warnings")]
+    for lg in attached:
+        lg.addHandler(handler)
+
+    def close():
+        for lg in attached:
+            lg.removeHandler(handler)
+        handler.close()
+
+    return analysis_logger, close
 
 
 def results_dir_and_label(
@@ -292,6 +423,31 @@ def available_dust_specs(cfg: PipelineConfig, files: list | None = None, include
         ascending = sorted(dust_types, key=smu.dust_cutoff)
         specs += [f"{major}-{minor}" for minor, major in combinations(ascending, 2) if smu.dust_cutoff(major) > smu.dust_cutoff(minor)]
     return specs
+
+
+DUST_MODES = ("all", "sweep")
+
+
+def resolve_dust_selection(cfg: PipelineConfig, dust: str, files: list | None = None) -> tuple[list[str], str]:
+    """Turn the workflow's single --dust argument into (dust_types, mode).
+
+    "all" and "sweep" both expand to every measure the site has (mode carries which one was
+    asked for -- "sweep" additionally explores per-component channels downstream); anything
+    else names one measure, which is canonicalized ("PMT" -> "PM17", "pm2p5" -> "PM2.5") so
+    the results-folder name always matches the spelling the model reports, and checked
+    against the site's measures so a typo fails before any fitting rather than producing an
+    empty subtree."""
+    dust_types = available_dust_types(cfg, files)
+    mode = str(dust).strip().lower()
+    if mode in DUST_MODES:
+        return dust_types, mode
+
+    name = smu.normalize_dust_name(dust)
+    if name is None:
+        raise ValueError(f"--dust {dust!r} is neither a mode {DUST_MODES} nor a particulate-matter measure (expected TSP or PM<number>).")
+    if name not in dust_types:
+        raise ValueError(f"{cfg.location!r} has no {name} data; its measures are {dust_types}. Use one of those, 'all', or 'sweep'.")
+    return [name], "single"
 
 
 def component_dust_assignments(wind_components: list, dust_specs: list) -> list[dict]:
@@ -405,14 +561,16 @@ def fit_and_evaluate(
     if model_type == "semi_physical":
         # The physical model additionally needs Mie extinction weights, computed from
         # this fold's training dust distribution and re-applied (not recomputed) on the
-        # full evaluation set below.
-        model.helios.compute_extinction_weights(
-            sim_train,
-            model.loss_model,
-            lookup_table_file_folder="extinction_lookup_tables",
-            acceptance_bin_width=1.0,  # [mrad] bin width for the extinction lookup table
-            verbose=verbose,
-        )
+        # full evaluation set below. The lock serializes the shared-folder lookup-table
+        # generation so parallel folds never race on writing it (see _EXTINCTION_LOCK).
+        with _EXTINCTION_LOCK:
+            model.helios.compute_extinction_weights(
+                sim_train,
+                model.loss_model,
+                lookup_table_file_folder="extinction_lookup_tables",
+                acceptance_bin_width=1.0,  # [mrad] bin width for the extinction lookup table
+                verbose=verbose,
+            )
         ext_weights = model.helios.extinction_weighting[0].copy()
 
     log_param_hat, log_param_cov = model.fit_mle(sim_train, reflect_train, verbose=verbose, transform_to_original_scale=False)
@@ -455,16 +613,16 @@ def fit_and_evaluate(
 def compile_results(cfg: PipelineConfig, run_name: str, workflow: str = "model_select") -> None:
     """After a model_selection run, stack every (dust_type, model)
     cross_validation_summary.csv for this site into all_models_kfold_summary.csv,
-    sorted within each training-set size by out-of-sample RMSE (best first).
+    sorted globally by out-of-sample MAE (lowest first).
 
     The run tree is {run_dir}/{dust_type}/{model}/, so every row is tagged with both
     `dust_type` and `model`, letting the compiled table answer "which PM type + model
     generalizes best?". Runs whose mechanisms each name their own dust channel sit under
     dust_type=PER_COMPONENT_SUBDIR instead, with the channels shown in `model` and
-    `model_expression`. RMSE (and the other out-of-sample stats) is scored on the
-    common evaluation set (all common mirrors, same reflectance targets across dust
-    types) for every model, so it is directly comparable across both axes -- unlike a
-    training-fit AIC, whose magnitude would track training-mirror/observation count.
+    `model_expression`. MAE (a daily-soiling-rate error; and the other out-of-sample stats)
+    is scored on the common evaluation set (all common mirrors, same reflectance targets
+    across dust types) for every model, so it is directly comparable across both axes --
+    unlike a training-fit AIC, whose magnitude would track training-mirror/observation count.
 
     Surfaces per-run fold failures: because a failed fold is a NaN row that the
     NaN-skipping summary means silently drop, a (dust_type, model) that only *looks*
@@ -496,9 +654,17 @@ def compile_results(cfg: PipelineConfig, run_name: str, workflow: str = "model_s
         return
 
     kfold_df = pd.concat(kfold_frames, ignore_index=True)
-    if "RMSE_mean" in kfold_df.columns:
-        # Best (lowest out-of-sample RMSE) (dust_type, model) first within each size.
-        kfold_df = kfold_df.sort_values(["n_train_campaigns", "RMSE_mean"]).reset_index(drop=True)
+    if "MAE_mean" in kfold_df.columns:
+        # Global ranking: best (lowest out-of-sample MAE) first across every (dust_type,
+        # model, n_train) row, with any row that had a failed fold pushed to the very bottom
+        # regardless of its MAE (a strong-looking mean on surviving folds is not trustworthy).
+        has_failed = kfold_df["n_failed"] > 0 if "n_failed" in kfold_df.columns else False
+        kfold_df = (
+            kfold_df.assign(_has_failed=has_failed)
+            .sort_values(["_has_failed", "MAE_mean"], na_position="last")
+            .drop(columns="_has_failed")
+            .reset_index(drop=True)
+        )
 
     if "n_failed" in kfold_df.columns:
         failed = kfold_df.groupby(["dust_type", "model"])["n_failed"].sum()

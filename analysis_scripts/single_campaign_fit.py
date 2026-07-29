@@ -5,78 +5,36 @@ Fits each selected model on the training campaign(s) and reports, per model:
   - fitted parameters (+ 95% CI) and in-sample/out-of-sample performance stats to CSV,
     plus a plot_for_paper figure (grouped by tilt, one curve per orientation) across
     all campaigns;
-  - per-campaign, per-tilt measured-vs-predicted reflectance plots (TILT_ANGLES_TO_PLOT),
-    each annotated with that tilt's MAE/RMSE, plus a per-campaign stats CSV.
+  - per-campaign, per-tilt measured-vs-predicted reflectance plots (one per tilt actually
+    present in the data), each annotated with that tilt's MAE/RMSE, plus a per-campaign
+    stats CSV.
+
+The wind model to fit is given as an expression in the notation the workflows report --
+"PM2.5*tangential_wind + (PM10-PM2.5)*turbulent_wind + PMT*gravitational" -- so a model picked
+out of a model_selection ranking can be re-fit and reported by pasting its model_expression
+back in. A bare mechanism ("gravitational") is driven by the config's own dust_type.
 
 Each (model_type, wind_components, component_dust_types) combination is a separate "run"
 written to its own results/simulate/{site}/{run_name}/{label}/ folder, where label is the
-model type or the wind model's derived name (e.g.
-"constant-mean_gravitational_normal-wind", or "constant-mean_PM17xgravitational_PM10-PM2.5
-xtangential-wind" when the mechanisms are driven by different dust channels). See
-model_pipeline.py for the shared fitting kernel and the model-type/dust-channel notes,
-and model_selection.py for the cross-validation model-comparison workflow.
+model type or the wind model's derived name (e.g. "constant-mean_gravitational_normal-wind",
+or a name carrying the per-component dust channels when the mechanisms are driven by different
+dust channels).
 
-Configure the run from the constants below, then run this script directly.
+This module exposes ``run()`` -- it is driven by the unified CLI
+(``python -m analysis_scripts.cli fit ...``); see cli.py for the configuration surface,
+model_pipeline.py for the shared fitting kernel, and model_selection.py for the cross-
+validation model-comparison workflow.
 """
 
 import os
-import logging
 
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from heliosoil.utilities import configure_logging
+from heliosoil.horizontal_impaction import parse_model_expression
 from heliosoil.paper_specific_utilities import plot_for_paper, plot_reflectance_by_tilt, regression_performance_stats
 
-import model_pipeline as mp
-
-# ============================== Configuration ===============================
-CONFIG = mp.PipelineConfig(
-    location="yadnarie",  # "mountisa" | "carwarp" | "yadnarie" | "qut" | "ablrf" | "wodonga"
-    train_experiments=[0],  # indices (into the sorted file list) used for training
-    train_mirrors=None,  # None -> model-aware default per run; explicit list overrides every run
-    dust_type="PM2.5",  # "PM10" or "PM2.5"
-    k_factor="import",  # None sets equal to 1.0, "import" imports from the file
-    second_surf=True,  # True: second-surface AOI model, False: first-surface
-    daily_average=True,  # True: daily-average reflectance, False: all measurements
-    verbose=False,
-)
-
-RUN_NAME = None  # None -> "run-yy-mm-dd_hh-mm" timestamp; else a label for this run's results folder
-
-MODEL_TYPE = "constant_mean_wind"  # "constant_mean" | "constant_mean_wind" | "semi_physical" | None (run all three)
-WIND_COMPONENTS = [
-    "turbulent_wind",
-    "normal_wind",
-    "tangential_wind",
-]  # only used when MODEL_TYPE == "constant_mean_wind"; WIND_COMPONENTS=None -> sweep WIND_COMPONENT_COMBOS
-
-# Dust channel driving each wind mechanism. None -> every mechanism uses CONFIG.dust_type
-# (one PM type for the whole model). A dict assigns a dust spec per component -- a single
-# measure or a difference isolating one size band, e.g.
-#   {"gravitational": "PM17", "tangential_wind": "PM10-PM2.5"}
-# "sweep" instead fits every assignment of DUST_SPECS to the run's components.
-COMPONENT_DUST_TYPES = {"turbulent_wind": "PM2.5", "normal_wind": "PM17-PM2.5", "tangential_wind": "PM2.5"}  #
-DUST_SPECS = None  # only used when COMPONENT_DUST_TYPES == "sweep"; None -> auto-detect the site's measures + their differences
-WIND_COMPONENT_COMBOS = [
-    ["gravitational"],
-    ["gravitational", "turbulent_wind"],
-    ["gravitational", "normal_wind"],
-    ["gravitational", "normal_wind", "tangential_wind"],
-    ["gravitational", "tangential_wind"],
-    ["gravitational", "impaction_retention"],
-    ["gravitational", "tangential_wind", "impaction_retention"],
-    ["turbulent_wind", "normal_wind"],
-    ["turbulent_wind", "normal_wind", "tangential_wind"],
-    ["turbulent_wind", "tangential_wind", "impaction_retention"],
-    ["turbulent_wind", "impaction_retention"],
-    ["turbulent_wind"],
-    ["normal_wind"],
-    ["tangential_wind"],
-    ["impaction_retention"],
-]  # used when MODEL_TYPE == "constant_mean_wind" and WIND_COMPONENTS is None
-
-TILT_ANGLES_TO_PLOT = (0, 30, 60, 90, 180)  # [deg] per-campaign measured-vs-predicted plots
-# ==============================================================================
+from . import model_pipeline as mp
 
 
 def report_run(cfg: mp.PipelineConfig, data: mp.LoadedData, model_type: str, wind_components: list, component_dust_types, run_name: str) -> None:
@@ -118,13 +76,13 @@ def report_run(cfg: mp.PipelineConfig, data: mp.LoadedData, model_type: str, win
     stats_out_of_sample = primary["stats_out"]
 
     print(f"\nIn-sample  (experiment(s) {cfg.train_experiments}, N={stats_in_sample['N']}):")
-    print(f"  R2   = {stats_in_sample['R2']:.3f}")
+    print(f"  R2   = {stats_in_sample['R2']:.3f}  (reflectance)")
 
     print(f"\nOut-of-sample (experiment(s) {test_experiments}, N={stats_out_of_sample['N']}):")
-    print(f"  MBE  = {stats_out_of_sample['MBE']:.4f}")
-    print(f"  MAE  = {stats_out_of_sample['MAE']:.4f}")
-    print(f"  RMSE = {stats_out_of_sample['RMSE']:.4f}")
-    print(f"  R2   = {stats_out_of_sample['R2']:.3f}")
+    print(f"  MBE  = {stats_out_of_sample['MBE']:.4f}  (daily soiling rate)")
+    print(f"  MAE  = {stats_out_of_sample['MAE']:.4f}  (daily soiling rate)")
+    print(f"  RMSE = {stats_out_of_sample['RMSE']:.4f}  (daily soiling rate)")
+    print(f"  R2   = {stats_out_of_sample['R2']:.3f}  (reflectance)")
 
     # model_expression records which mechanisms were fitted and, when they differ, the
     # dust channel driving each ("PM17*gravitational + (PM10-PM2.5)*tangential_wind").
@@ -147,13 +105,16 @@ def report_run(cfg: mp.PipelineConfig, data: mp.LoadedData, model_type: str, win
     fig.savefig(f"{results_dir}/all_campaigns.pdf", bbox_inches="tight")
     plt.close(fig)
 
-    # Per-campaign, per-tilt measured-vs-predicted reflectance plots (TILT_ANGLES_TO_PLOT),
-    # each annotated with that tilt's MAE/RMSE; a CSV with those plus the whole-campaign
-    # (all common mirrors) stats is written alongside them.
+    # Per-campaign, per-tilt measured-vs-predicted reflectance plots, each annotated with that
+    # tilt's MAE/RMSE; a CSV with those plus the whole-campaign (all common mirrors) stats is
+    # written alongside them. The tilts are the ones actually present in the data
+    # (reflect_data_total.tilts, the exact values plot_reflectance_by_tilt matches on), so
+    # there is nothing for a user to mis-specify.
     for e in range(len(data.files)):
         campaign_dir = f"{results_dir}/campaign_{e + 1}"
         stat_rows = []
-        for t in TILT_ANGLES_TO_PLOT:
+        tilts_present = np.unique(data.reflect_data_total.tilts[e][:, 0])
+        for t in tilts_present:
             fig_t, _, tilt_stats = plot_reflectance_by_tilt(imodel, data.reflect_data_total, data.sim_data_total, e, t, orientation[e])
             if tilt_stats is None:
                 continue
@@ -167,22 +128,32 @@ def report_run(cfg: mp.PipelineConfig, data: mp.LoadedData, model_type: str, win
             pd.DataFrame(stat_rows).to_csv(f"{campaign_dir}/performance_stats.csv", index=False, float_format="%.3g")
 
 
-def main():
-    # Route all HelioSoil output through the "heliosoil" logger: verbose -> INFO
-    # (progress messages), else WARNING (only genuine warnings/failures).
-    configure_logging(logging.INFO if CONFIG.verbose else logging.WARNING)
+def run(
+    cfg: mp.PipelineConfig, *, model_type: str | None, model_expression: str | None, run_name: str | None, force: bool, run_metadata: dict
+) -> None:
+    """Fit + report the model(s) named by `model_type` and `model_expression` for `cfg`'s site.
 
-    data = mp.load_data(CONFIG)
-    dust_specs = DUST_SPECS or (mp.available_dust_specs(CONFIG, files=data.files) if COMPONENT_DUST_TYPES == "sweep" else None)
-    if dust_specs is not None:
-        print(f"[dust] {CONFIG.location!r} sweeping per-component dust channels: {dust_specs}")
+    `model_expression` describes the constant_mean_wind model to fit, in the notation
+    run_expression reports -- "PM2.5*tangential_wind + (PM10-PM2.5)*turbulent_wind" -- with a
+    bare mechanism ("gravitational") driven by cfg.dust_type. None fits the library-default
+    components on cfg.dust_type. It is ignored by the component-less model types, which
+    model_type="all" still fits alongside it.
 
-    run_name = mp.resolve_run_dir(CONFIG, "simulate", RUN_NAME)
-    runs = mp.build_runs(MODEL_TYPE, WIND_COMPONENTS, WIND_COMPONENT_COMBOS, COMPONENT_DUST_TYPES, dust_specs)
-    for model_type, wind_components, component_dust_types in runs:
-        report_run(CONFIG, data, model_type, wind_components, component_dust_types, run_name)
-    print("\nAll runs complete.")
+    Writes each run's outputs under results/simulate/{site}/{run_name}/{label}/, the run
+    settings + version to run_config.json, and any suppressed warnings to run.log."""
+    components, component_dust_types = parse_model_expression(model_expression) if model_expression else (None, None)
+    if components is not None:
+        print(f"[model] {mp.run_expression('constant_mean_wind', components, component_dust_types)}")
 
-
-if __name__ == "__main__":
-    main()
+    data = mp.load_data(cfg)
+    run_name = mp.resolve_run_dir(cfg, "simulate", run_name, force=force)
+    run_dir = mp.run_dir_path(cfg, "simulate", run_name)
+    mp.write_run_metadata(run_dir, run_metadata)
+    _log, close_log = mp.open_run_log(run_dir)
+    try:
+        runs = mp.build_runs(model_type, [components], component_dust_types)
+        for model_type_i, wind_components_i, component_dust_types_i in runs:
+            report_run(cfg, data, model_type_i, wind_components_i, component_dust_types_i, run_name)
+        print("\nAll runs complete.")
+    finally:
+        close_log()

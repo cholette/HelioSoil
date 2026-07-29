@@ -2,164 +2,154 @@
 Leave-n-campaigns-out cross-validation model- and dust-type-comparison workflow.
 
 Sweeps two axes -- the soiling model and the dust/PM input channel -- via leave-n-
-campaigns-out cross-validation. For each usable dust type (DUST_TYPES, or auto-detected
-per site) and each selected model, it sweeps the number of training campaigns
-n_train = 1..(C-1) (C = total campaigns), refitting from scratch for every train/test
-split, and writes to results/model_select/{site}/{run_name}/{dust_type}/{label}/:
+campaigns-out cross-validation. For each usable dust type and each selected model, it sweeps
+the number of training campaigns n_train = 1..(C-1) (C = total campaigns), refitting from
+scratch for every train/test split, and writes to
+results/model_select/{site}/{run_name}/{dust_type}/{label}/:
   - cross_validation_folds.csv   : per-fold out-of-sample stats, in-sample R2, and
     fitted parameters (a NaN row for any fold whose fit failed);
   - cross_validation_summary.csv : per-n_train aggregated stats and a failed-fold
     count (n_failed);
-  - cross_validation_summary.pdf : out-of-sample RMSE/R2 vs number of training campaigns.
+  - cross_validation_summary.pdf : out-of-sample RMSE (daily soiling rate) and R2
+    (reflectance) vs number of training campaigns.
 
-The dust axis has two levels. DUST_TYPES sweeps one PM channel per model (the whole
-model driven by PM10, then PM2.5, ...), and may include differences ("PM17-PM10") to
-isolate a size band. COMPONENT_DUST_TYPES goes finer, giving each mechanism of a
-constant_mean_wind model its own channel -- e.g. PM17 settling gravitationally while the
-2.5-10 µm fraction scours tangentially -- either as one fixed assignment or, with
-"sweep", every combination of DUST_SPECS over the run's mechanisms. Such a model does
-not depend on the outer dust type, so it is fitted once under
-{run_name}/per-component-dust/ with its channels in the folder name and in the reported
-model_expression ("PM17*gravitational + (PM10-PM2.5)*tangential_wind").
+The fold schedule is fixed: every training-set size 1..C-1 and every split of each. What is
+compared is set by two arguments (see resolve_selection):
+
+  `model_expression`  one wind model in the notation the workflows report ("gravitational +
+                      normal_wind"); None compares every unique non-empty subset of the
+                      wind-component vocabulary (mp.ALL_COMPONENT_COMBOS, 31 of them).
+  `dust`              one measure ("PM10"), "all" (every measure the site has, no
+                      differences), or "sweep".
+
+"sweep" is what the dust axis is really for: it gives each mechanism of the named model its own
+channel -- e.g. PM17 settling gravitationally while the 2.5-10 um fraction scours tangentially
+-- over every assignment of the site's dust specs (the measures and their differences,
+"PM17-PM10") to that model's mechanisms. Such a model does not depend on the outer dust type,
+so it is fitted once under {run_name}/per-component-dust/ with its channels in the folder name
+and in the reported model_expression. It costs len(dust_specs)**n_mechanisms runs, so it is
+aimed at one model and gated behind a printed count and a confirmation (--force to run it
+unattended).
 
 After every run, all summaries for the site are compiled into all_models_kfold_summary.csv
-(tagged with dust_type + model, sorted within each n_train by out-of-sample RMSE, best
-first), flagging any run that failed one or more folds so a strong-looking mean on the
-surviving folds is not taken at face value.
+(tagged with dust_type + model, sorted globally by out-of-sample MAE with any failed-fold run
+pushed to the bottom). The error metrics (MBE/MAE/RMSE) score the daily soiling rate -- the
+drop in soiling factor per day -- so ranking (by out-of-sample MAE) rewards predicting the
+*change* in soiling loss rather than the reflectance shape; R2 stays a reflectance goodness-of-
+fit. All are scored on the common evaluation set (all common mirrors, identical reflectance
+targets across dust types) for every run, so it is directly comparable across BOTH model and
+dust type.
 
-Ranking uses out-of-sample RMSE/R2, scored on the common evaluation set (all common
-mirrors, identical reflectance targets across dust types) for every run, so it is
-directly comparable across BOTH model and dust type. A training-fit AIC is deliberately
-not used: model families train on different mirror sets (one representative mirror vs
-all mirrors), so their likelihood magnitudes -- and hence AIC -- are dominated by
-observation count rather than merit and are not comparable. Sites with a single usable
-dust type (e.g. TSP-only) simply run that one. See model_pipeline.py for the shared
-fitting kernel and model-type/dust-type notes, and single_campaign_fit.py for the
-single-campaign fit/report workflow. Configure the run from the constants below, then
-run directly.
+This module exposes ``run()`` -- it is driven by the unified CLI
+(``python -m analysis_scripts.cli select ...``); see cli.py for the configuration surface,
+model_pipeline.py for the shared fitting kernel, and single_campaign_fit.py for the single-
+campaign fit/report workflow.
 """
 
-import logging
 import dataclasses
+from concurrent.futures import ThreadPoolExecutor
 from itertools import combinations
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 import heliosoil.utilities as smu
-from heliosoil.utilities import configure_logging
+from heliosoil.horizontal_impaction import parse_model_expression
 
-import model_pipeline as mp
+from . import model_pipeline as mp
 
-# ============================== Configuration ===============================
-CONFIG = mp.PipelineConfig(
-    location="carwarp",  # "mountisa" | "carwarp" | "yadnarie" | "qut" | "ablrf" | "wodonga"
-    daily_average=True,  # True: daily-average reflectance targets, False: raw reflectance
-    verbose=False,
-)
 
-RUN_NAME = "multi-pm_evaluation"  # None -> "run-yy-mm-dd_hh-mm" timestamp; else a label for this run's results folder
+def _fold_task(cfg, data, model_type, wind_components, component_dust_types, train_mirrors_run, train_combo, test_combo):
+    """Fit + evaluate one fold and return only the lightweight fields the summary needs.
 
-DUST_TYPES = None  # None -> auto-detect usable PM/TSP types for the site; else e.g. ["PM2.5", "PM10", "PM17", "PM17-PM10"]
-
-MODEL_TYPE = None  # "constant_mean" | "constant_mean_wind" | "semi_physical" | None (run all three)
-WIND_COMPONENTS = None  # only used when MODEL_TYPE == "constant_mean_wind"; None -> sweep WIND_COMPONENT_COMBOS
-
-WIND_COMPONENT_COMBOS = [
-    ["gravitational"],
-    ["gravitational", "turbulent_wind"],
-    ["gravitational", "normal_wind"],
-    ["gravitational", "normal_wind", "tangential_wind"],
-    ["gravitational", "tangential_wind"],
-    ["gravitational", "impaction_retention"],
-    ["gravitational", "tangential_wind", "impaction_retention"],
-    ["turbulent_wind", "normal_wind"],
-    ["turbulent_wind", "normal_wind", "tangential_wind"],
-    ["turbulent_wind", "tangential_wind", "impaction_retention"],
-    ["turbulent_wind", "impaction_retention"],
-    ["turbulent_wind"],
-    ["normal_wind"],
-    ["tangential_wind"],
-    ["impaction_retention"],
-]  # used when MODEL_TYPE == "constant_mean_wind" and WIND_COMPONENTS is None
-
-# Dust channel driving each wind mechanism. None -> every mechanism uses the dust type
-# from the DUST_TYPES sweep (one PM type per model, as before). A dict fixes an
-# assignment, e.g. {"gravitational": "PM17", "tangential_wind": "PM10-PM2.5"}. "sweep"
-# cross-validates every assignment of DUST_SPECS to each wind-component combination --
-# len(DUST_SPECS) ** n_components models per combination, so keep DUST_SPECS short.
-COMPONENT_DUST_TYPES = "sweep"
-DUST_SPECS = None  # only used when COMPONENT_DUST_TYPES == "sweep"; None -> auto-detect the site's measures + their differences
-
-CV_TRAIN_CAMPAIGN_COUNTS = None  # None -> sweep every n_train in 1..(C-1)
-CV_MAX_FOLDS_PER_SIZE = None  # None -> use every combination; else randomly sample this many (seeded)
-# ==============================================================================
+    Runs on a worker thread; keeping the return value small lets the fitted model and its
+    training inputs be freed as each fold finishes instead of accumulating one big dict per
+    fold in flight (see model_pipeline.fit_and_evaluate and the Concurrency-safety notes)."""
+    result = mp.fit_and_evaluate(cfg, data, model_type, wind_components, component_dust_types, train_mirrors_run, train_combo, test_combo)
+    return {"stats_in": result["stats_in"], "stats_out": result["stats_out"], "param_names": result["param_names"], "param_hat": result["param_hat"]}
 
 
 def cross_validate_run(
-    cfg: mp.PipelineConfig, data: mp.LoadedData, model_type: str, wind_components: list, component_dust_types, run_name: str, subdir: str
-) -> None:
+    cfg: mp.PipelineConfig,
+    data: mp.LoadedData,
+    model_type: str,
+    wind_components: list,
+    component_dust_types,
+    run_name: str,
+    subdir: str,
+    executor: ThreadPoolExecutor,
+    log,
+) -> pd.DataFrame:
     """Leave-n-campaigns-out cross-validation for one (model_type, wind_components,
-    component_dust_types) configuration, sweeping the number of training campaigns.
-    Results go under `subdir`: the swept dust type, or mp.PER_COMPONENT_SUBDIR when each
-    mechanism names its own dust channel."""
+    component_dust_types) configuration, sweeping the number of training campaigns. Results
+    go under `subdir` (the swept dust type, or mp.PER_COMPONENT_SUBDIR when each mechanism
+    names its own dust channel). Folds are fit in parallel on `executor`; progress/PASS-FAILED
+    detail goes to `log` (run.log). Returns the per-n_train summary DataFrame.
+
+    The fold schedule is fixed: every training-set size n_train = 1..C-1 and, for each, every
+    one of the C-choose-n_train splits (2**C - 2 folds in total). Sub-sampling it was only
+    ever a way to trade away comparability for speed, and the campaign counts here (C <= 4)
+    make the full schedule cheap."""
     expression = mp.run_expression(model_type, wind_components, component_dust_types)
-    print(f"\n{'=' * 80}\ndust={subdir!r}  model_type={model_type!r}  {expression}\n{'=' * 80}")
+    log.info("=" * 80)
+    log.info(f"dust={subdir!r}  model_type={model_type!r}  {expression}")
 
     train_mirrors_run = mp.resolve_training_mirrors(cfg, data.all_mirrors, model_type, wind_components)
     results_dir, label = mp.results_dir_and_label(cfg, model_type, wind_components, component_dust_types, "model_select", run_name, subdir=subdir)
 
     C = len(data.files)
-    train_counts = CV_TRAIN_CAMPAIGN_COUNTS if CV_TRAIN_CAMPAIGN_COUNTS is not None else range(1, C)
 
-    fold_rows = []
-    for n_train in train_counts:
-        combos = list(combinations(range(C), n_train))
-        if CV_MAX_FOLDS_PER_SIZE is not None and len(combos) > CV_MAX_FOLDS_PER_SIZE:
-            rng = np.random.default_rng(0)
-            idx = rng.choice(len(combos), size=CV_MAX_FOLDS_PER_SIZE, replace=False)
-            combos = [combos[i] for i in idx]
-
-        for fold_idx, train_combo in enumerate(combos):
+    # Enumerate every fold and dispatch its fit to the pool; results are gathered below in
+    # submit order so the folds file is deterministic regardless of completion order.
+    tasks = []  # (row, n_train, fold_idx, train_combo, test_combo, future)
+    for n_train in range(1, C):
+        for fold_idx, train_combo in enumerate(combinations(range(C), n_train)):
             train_combo = list(train_combo)
             test_combo = [e for e in range(C) if e not in train_combo]
-
             row = {"n_train_campaigns": n_train, "fold": fold_idx, "train_experiments": str(train_combo), "test_experiments": str(test_combo)}
-            try:
-                result = mp.fit_and_evaluate(cfg, data, model_type, wind_components, component_dust_types, train_mirrors_run, train_combo, test_combo)
-            except Exception as err:
-                print(f"FAILED: n_train={n_train} fold={fold_idx} train={train_combo} test={test_combo} ({err})")
-                row.update({"N": np.nan, "MBE": np.nan, "MAE": np.nan, "RMSE": np.nan, "R2": np.nan, "R2_in_sample": np.nan})
-                fold_rows.append(row)
-                continue
-
-            row.update(
-                {
-                    "N": result["stats_out"]["N"],
-                    "MBE": result["stats_out"]["MBE"],
-                    "MAE": result["stats_out"]["MAE"],
-                    "RMSE": result["stats_out"]["RMSE"],
-                    "R2": result["stats_out"]["R2"],
-                    "R2_in_sample": result["stats_in"]["R2"],
-                }
+            future = executor.submit(
+                _fold_task, cfg, data, model_type, wind_components, component_dust_types, train_mirrors_run, train_combo, test_combo
             )
-            for name, value in zip(result["param_names"], result["param_hat"]):
-                row[name] = value
+            tasks.append((row, n_train, fold_idx, train_combo, test_combo, future))
+
+    fold_rows = []
+    for row, n_train, fold_idx, train_combo, test_combo, future in tasks:
+        try:
+            result = future.result()
+        except Exception as err:
+            log.info(f"FAILED: n_train={n_train} fold={fold_idx} train={train_combo} test={test_combo} ({err})")
+            row.update({"N": np.nan, "MBE": np.nan, "MAE": np.nan, "RMSE": np.nan, "R2": np.nan, "R2_in_sample": np.nan})
             fold_rows.append(row)
-            # A fold that completes but yields a non-finite out-of-sample R2 is a
-            # failure too (and is counted in n_failed below), so label it FAILED
-            # rather than PASS for consistency with the summary.
-            r2_is = result["stats_in"]["R2"]
-            r2_oos = result["stats_out"]["R2"]
-            status = "PASS" if np.isfinite(r2_oos) else "FAILED"
-            print(f"{status}: n_train={n_train} fold={fold_idx} train={train_combo} test={test_combo} R2-IS={r2_is:.3f} R2-OOS={r2_oos:.3f}")
+            continue
+
+        row.update(
+            {
+                "N": result["stats_out"]["N"],
+                "MBE": result["stats_out"]["MBE"],
+                "MAE": result["stats_out"]["MAE"],
+                "RMSE": result["stats_out"]["RMSE"],
+                "R2": result["stats_out"]["R2"],
+                "R2_in_sample": result["stats_in"]["R2"],
+            }
+        )
+        for name, value in zip(result["param_names"], result["param_hat"]):
+            row[name] = value
+        fold_rows.append(row)
+        # A fold that completes but yields a non-finite out-of-sample R2 is a failure too
+        # (and is counted in n_failed below), so label it FAILED rather than PASS.
+        r2_is = result["stats_in"]["R2"]
+        r2_oos = result["stats_out"]["R2"]
+        status = "PASS" if np.isfinite(r2_oos) else "FAILED"
+        log.info(f"{status}: n_train={n_train} fold={fold_idx} train={train_combo} test={test_combo} R2-IS={r2_is:.3f} R2-OOS={r2_oos:.3f}")
 
     folds_df = pd.DataFrame(fold_rows)
     folds_df.to_csv(f"{results_dir}/cross_validation_folds.csv", index=False, float_format="%.3g")
 
-    # Aggregate per n_train. n_failed counts the NaN (failed) folds so they are not
-    # silently dropped by the NaN-skipping mean/std. Ordered by n_train; the meaningful
-    # cross-model ranking (by out-of-sample RMSE) happens in compile_results.
+    # Aggregate per n_train. n_failed counts the NaN (failed) folds so they are not silently
+    # dropped by the NaN-skipping mean/std. Ordered by n_train; the meaningful cross-model
+    # ranking (by out-of-sample MAE) happens in mp.compile_results.
     summary_df = (
         folds_df.groupby("n_train_campaigns")
         .agg(
@@ -179,21 +169,21 @@ def cross_validate_run(
         .sort_values("n_train_campaigns")
         .reset_index(drop=True)
     )
-    # Carried into the compiled all-models table: which mechanisms were fitted and,
-    # when they differ, the dust channel driving each.
+    # Carried into the compiled all-models table: which mechanisms were fitted and, when they
+    # differ, the dust channel driving each.
     summary_df.insert(1, "model_expression", expression)
     summary_df.to_csv(f"{results_dir}/cross_validation_summary.csv", index=False, float_format="%.3g")
 
     fig_cv, (ax_rmse, ax_r2) = plt.subplots(1, 2, figsize=(11, 4.5))
     ax_rmse.errorbar(summary_df["n_train_campaigns"], summary_df["RMSE_mean"], yerr=summary_df["RMSE_std"], marker="o", capsize=4)
     ax_rmse.set_xlabel("Number of training campaigns")
-    ax_rmse.set_ylabel("Out-of-sample RMSE")
+    ax_rmse.set_ylabel("Out-of-sample RMSE (daily soiling rate)")
     ax_rmse.set_xticks(summary_df["n_train_campaigns"])
     ax_rmse.grid(alpha=0.3)
 
     ax_r2.errorbar(summary_df["n_train_campaigns"], summary_df["R2_mean"], yerr=summary_df["R2_std"], marker="o", capsize=4, color="darkorange")
     ax_r2.set_xlabel("Number of training campaigns")
-    ax_r2.set_ylabel("Out-of-sample R2")
+    ax_r2.set_ylabel("Out-of-sample R2 (reflectance)")
     ax_r2.set_xticks(summary_df["n_train_campaigns"])
     ax_r2.grid(alpha=0.3)
 
@@ -202,48 +192,154 @@ def cross_validate_run(
     fig_cv.savefig(f"{results_dir}/cross_validation_summary.pdf", bbox_inches="tight")
     plt.close(fig_cv)
 
+    return summary_df
 
-def main():
-    # Route all HelioSoil output through the "heliosoil" logger: verbose -> INFO
-    # (progress messages), else WARNING (only genuine warnings/failures).
-    configure_logging(logging.INFO if CONFIG.verbose else logging.WARNING)
 
-    files = smu.get_training_data(CONFIG.data_dir, CONFIG.file_prefix)[0]
-    dust_types = DUST_TYPES or mp.available_dust_types(CONFIG, files=files)
-    print(f"[dust] {CONFIG.location!r} sweeping dust types: {dust_types}")
-    if len(dust_types) == 1:
-        print(f"[dust] {CONFIG.location!r} has a single usable dust type ({dust_types[0]!r}); no PM-type comparison.")
+def _best_mae(summary_df: pd.DataFrame) -> float:
+    """Lowest out-of-sample MAE_mean among this run's rows that had no failed fold, or inf if
+    none qualify -- so the best-so-far indicator never reflects a run/size with a failed fold."""
+    ok = summary_df[summary_df["n_failed"] == 0]
+    values = ok["MAE_mean"].dropna()
+    return float(values.min()) if not values.empty else np.inf
 
-    dust_specs = DUST_SPECS or (mp.available_dust_specs(CONFIG, files=files) if COMPONENT_DUST_TYPES == "sweep" else None)
-    if dust_specs is not None:
-        print(f"[dust] {CONFIG.location!r} sweeping per-component dust channels: {dust_specs}")
 
-    run_name = mp.resolve_run_dir(CONFIG, "model_select", RUN_NAME)
-    runs = mp.build_runs(MODEL_TYPE, WIND_COMPONENTS, WIND_COMPONENT_COMBOS, COMPONENT_DUST_TYPES, dust_specs)
+def _execute_runs(cfg: mp.PipelineConfig, runs: list, dust_types: list, run_name: str, executor: ThreadPoolExecutor, log, bar, best: dict) -> None:
+    """Cross-validate every (dust pass, run) work item, updating `bar` and `best` in place.
 
-    # Outer loop over dust/PM types; each gets a per-type config copy so load_data and
-    # fit_and_evaluate (which read cfg.dust_type) use it. Data is (re)loaded per dust
-    # type because the SimulationInputs depend on it (the reflectance targets do not).
-    # A run whose every mechanism names its own dust channel does not depend on
-    # cfg.dust_type, so it is fitted once (on the first pass) into its own subtree
-    # rather than refitted identically under every swept dust type.
+    A run whose every mechanism names its own dust channel does not depend on cfg.dust_type,
+    so it is fitted once (on the first pass) under PER_COMPONENT_SUBDIR; every other run is
+    fitted once per swept dust type -- which is what n_work_items counts."""
     for pass_idx, dust_type in enumerate(dust_types):
-        run_cfg = dataclasses.replace(CONFIG, dust_type=dust_type)
+        run_cfg = dataclasses.replace(cfg, dust_type=dust_type)
+        # Data is (re)loaded per dust type because SimulationInputs depend on it (the
+        # reflectance targets do not).
         data = mp.load_data(run_cfg)
-        for model_type, wind_components, component_dust_types in runs:
-            if mp.is_dust_type_independent(model_type, wind_components, component_dust_types):
+
+        for model_type_i, wind_components_i, component_dust_types_i in runs:
+            if mp.is_dust_type_independent(model_type_i, wind_components_i, component_dust_types_i):
                 if pass_idx > 0:
                     continue
                 subdir = mp.PER_COMPONENT_SUBDIR
             else:
                 subdir = dust_type
-            cross_validate_run(run_cfg, data, model_type, wind_components, component_dust_types, run_name, subdir)
 
-    # Run right after the sweep: stack every (dust_type, model) summary for the site,
-    # ranked by out-of-sample RMSE, flagging any run with failed folds.
-    mp.compile_results(CONFIG, run_name, workflow="model_select")
-    print("\nAll runs complete.")
+            cur_label = mp.abbreviate_run(model_type_i, wind_components_i, component_dust_types_i, subdir)
+            bar.set_postfix_str(f"cur={cur_label}  best={best['label']} ({best['mae']:.4g})")
+            summary_df = cross_validate_run(run_cfg, data, model_type_i, wind_components_i, component_dust_types_i, run_name, subdir, executor, log)
+
+            run_mae = _best_mae(summary_df)
+            if run_mae < best["mae"]:
+                best.update(mae=run_mae, label=cur_label)
+            bar.set_postfix_str(f"cur={cur_label}  best={best['label']} ({best['mae']:.4g})")
+            bar.update(1)
 
 
-if __name__ == "__main__":
-    main()
+def n_work_items(runs: list, dust_types: list) -> int:
+    """How many cross-validation runs _execute_runs will actually fit: a dust-type-independent
+    run once, every other run once per swept dust type."""
+    return sum(1 for pass_idx in range(len(dust_types)) for run in runs if not (mp.is_dust_type_independent(*run) and pass_idx > 0))
+
+
+def resolve_selection(cfg: mp.PipelineConfig, model_type: str | None, model_expression: str | None, dust: str, files: list) -> tuple[list, list, str]:
+    """Turn (--model-type, --model, --dust) into the (runs, dust_types, mode) to execute.
+
+    --model names one wind model; without it, every component combination is compared. --dust
+    sweep drives each of that model's mechanisms with its own channel, over every assignment of
+    the site's dust specs, so it needs a model to assign them to and refuses one that already
+    names its channels -- there would be nothing left to sweep."""
+    dust_types, dust_mode = mp.resolve_dust_selection(cfg, dust, files=files)
+    components, component_dust_types = parse_model_expression(model_expression) if model_expression else (None, None)
+
+    dust_specs = None
+    if dust_mode == "sweep":
+        if components is None:
+            raise ValueError(
+                '--dust sweep needs a --model to assign channels to, e.g. --model "gravitational + normal_wind". Use --dust all to compare every model on one channel each.'
+            )
+        named = [key for key, spec in component_dust_types.items() if spec is not None]
+        if named:
+            raise ValueError(
+                f'--dust sweep assigns a dust channel to every mechanism, but --model already fixes one for {named}. Name the mechanisms only, e.g. --model "{" + ".join(components)}".'
+            )
+        dust_specs = mp.available_dust_specs(cfg, files=files)
+        component_dust_types = "sweep"
+
+    combos = [components] if components is not None else mp.ALL_COMPONENT_COMBOS
+    return mp.build_runs(model_type, combos, component_dust_types, dust_specs), dust_types, dust_mode
+
+
+def _confirm_sweep(components: list, dust_specs: list, n_runs: int, n_folds: int, force: bool) -> bool:
+    """Report what a per-component dust sweep will cost and get permission to spend it.
+
+    The sweep is len(dust_specs)**n_mechanisms runs -- 36 for a two-mechanism model at a
+    three-measure site, 759,375 for a five-mechanism model at a five-measure one -- so the
+    count is worth seeing before the run starts rather than discovering hours in. `force` runs
+    it unattended; otherwise the user is asked, and a scripted run with nothing to ask is
+    aborted rather than left to churn."""
+    print("")
+    print("=" * 80)
+    print(f"Per-component dust sweep: {' + '.join(components)}")
+    print(f"  dust specs ({len(dust_specs)}): {', '.join(dust_specs)}")
+    print(f"  runs: {n_runs}  x  folds/run: {n_folds}  =  {n_runs * n_folds} fits")
+    print("=" * 80)
+
+    if force:
+        return True
+    answer = mp.prompt_yes_no("Run it? [y/N]")
+    if answer is None:
+        raise SystemExit("Aborted: no interactive terminal to confirm the sweep. Re-run with --force to run it unattended.")
+    return answer
+
+
+def run(
+    cfg: mp.PipelineConfig,
+    *,
+    model_type: str | None,
+    model_expression: str | None,
+    dust: str,
+    run_name: str | None,
+    force: bool,
+    jobs: int,
+    run_metadata: dict,
+) -> None:
+    """Cross-validate every (dust_type, model) configuration for `cfg`'s site, with the folds
+    of each run fit in parallel on `jobs` worker threads. A single tqdm bar tracks the runs,
+    showing the current run and the best (lowest-MAE, no-failed-fold) run so far. Per-fold
+    detail and suppressed warnings go to {run_dir}/run.log; the run's settings + version go to
+    run_config.json; results are compiled into all_models_kfold_summary.csv at the end.
+
+    What gets compared is set by `model_expression` (one wind model, or None to compare every
+    component combination) and `dust` (one measure, "all", or "sweep"); see resolve_selection.
+    A sweep is exponential in the number of mechanisms, so it is reported and confirmed before
+    anything is fitted or written."""
+    files = smu.get_training_data(cfg.data_dir, cfg.file_prefix)[0]
+    runs, dust_types, dust_mode = resolve_selection(cfg, model_type, model_expression, dust, files)
+    total = n_work_items(runs, dust_types)
+    n_folds = 2 ** len(files) - 2  # every train/test split of every training-set size 1..C-1
+
+    print(f"[dust] {cfg.location!r}: --dust {dust} -> {dust_types}")
+    if dust_mode != "single" and len(dust_types) == 1:
+        print(f"[dust] {cfg.location!r} has a single usable dust type ({dust_types[0]!r}); no PM-type comparison.")
+
+    # Ask before creating the run folder, so declining leaves nothing behind.
+    if dust_mode == "sweep":
+        components, _ = parse_model_expression(model_expression)
+        if not _confirm_sweep(components, mp.available_dust_specs(cfg, files=files), total, n_folds, force):
+            return
+
+    run_name = mp.resolve_run_dir(cfg, "model_select", run_name, force=force)
+    run_dir = mp.run_dir_path(cfg, "model_select", run_name)
+    mp.write_run_metadata(run_dir, run_metadata)
+    log, close_log = mp.open_run_log(run_dir)
+
+    best = {"mae": np.inf, "label": "--"}
+    try:
+        with ThreadPoolExecutor(max_workers=jobs) as executor, logging_redirect_tqdm(), tqdm(total=total, desc="model_select") as bar:
+            _execute_runs(cfg, runs, dust_types, run_name, executor, log, bar, best)
+
+        # Run right after the sweep: stack every (dust_type, model) summary for the site,
+        # ranked globally by out-of-sample MAE, flagging any run with failed folds.
+        mp.compile_results(cfg, run_name, workflow="model_select")
+        print("\nAll runs complete.")
+    finally:
+        close_log()
