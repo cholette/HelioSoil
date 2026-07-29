@@ -18,3 +18,4 @@ extinction_lookup_tables/
 heliosoil.egg-info/
 docs/_build/
 .pytest_cache/
+uv.lock

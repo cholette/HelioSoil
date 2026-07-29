@@ -30,14 +30,18 @@ under test, so they guard the formulas rather than restating them.
 
 import types
 import numpy as np
+import pandas as pd
 import pytest
 
+import heliosoil.base_models as smb
 from heliosoil.dust_distributions import GaussianMixtureModel, NumberDistribution, MassDistribution, AreaDistribution
-from heliosoil.base_models import ConstantMeanBase, PhysicalBase
+from heliosoil.base_models import ConstantMeanBase, Dust, PhysicalBase
+from heliosoil.utilities import get_project_root
 
 
-# numpy>=2 exposes trapezoid; fall back to trapz on older numpy.
-_trapezoid = getattr(np, "trapezoid", getattr(np, "trapz"))
+# numpy>=2 exposes trapezoid; fall back to trapz on older numpy. Selected lazily:
+# numpy>=2 raises on any np.trapz *access*, so it cannot be evaluated as a default.
+_trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 
 # Tight tolerance: these are exact analytic identities / re-derivations.
 RTOL = 1e-10
@@ -290,3 +294,109 @@ def test_physical_delta_soiled_area_scales_with_concentration():
         return model.helios.delta_soiled_area[f]
 
     np.testing.assert_allclose(run(3.0 * base_conc), 3.0 * run(base_conc), rtol=RTOL, atol=ATOL)
+
+
+# -----------------------------------------------------------------------------
+# 4. Dust class: arbitrary PMX cutoffs
+#    The Dust class always computes PM10 and TSP. Passing additional
+#    ``dust_measurement_type`` values (e.g. PM2.5, PM17, PM18) must create the
+#    matching attribute, integrating the mass distribution up to that diameter.
+#    Reads the committed woomera demo file (not gitignored data/).
+# -----------------------------------------------------------------------------
+_WOOMERA_DUST_FILE = str(get_project_root() / "examples" / "woomera_demo" / "woomera_data.xlsx")
+
+
+@pytest.mark.parametrize("dust_type,attr,cutoff", [("PM2.5", "PM2_5", 2.5), ("PM17", "PM17", 17.0), ("PM18", "PM18", 18.0)])
+def test_dust_pmx_attribute_created(dust_type, attr, cutoff):
+    dust = Dust([_WOOMERA_DUST_FILE])
+    dust.import_dust(verbose=False, dust_measurement_type=dust_type)
+
+    assert hasattr(dust, attr), f"{attr} attribute was not created for {dust_type}"
+
+    # Independent reference: integrate the mass pdf up to the requested cutoff.
+    D = dust.D[0]
+    expected = _trapezoid(dust.pdfM[0][D <= cutoff], np.log10(D[D <= cutoff]))
+    np.testing.assert_allclose(getattr(dust, attr)[0], expected, rtol=RTOL, atol=ATOL)
+
+
+def test_dust_pmx_cutoffs_are_monotonic():
+    # A smaller diameter cutoff must capture no more mass than a larger one.
+    # dust_measurement_type is one-per-file, so mirror the file for each cutoff.
+    files = [_WOOMERA_DUST_FILE] * 3
+    dust = Dust(files)
+    dust.import_dust(verbose=False, dust_measurement_type=["PM2.5", "PM17", "PM18"])
+    assert dust.PM2_5[0] <= dust.PM10[0] <= dust.PM17[0] <= dust.PM18[0] <= dust.TSP[0]
+
+
+# -----------------------------------------------------------------------------
+# 5. Dust.pm_mass: reference mass of a dust spec, including size bands
+#    A "difference" spec (e.g. "PM17-PM10") is the mass between two cutoffs -- the
+#    denominator that turns a measured coarse-fraction concentration into alpha.
+# -----------------------------------------------------------------------------
+
+
+def test_pm_mass_single_measure_matches_cutoff_integral():
+    dust = Dust([_WOOMERA_DUST_FILE])
+    dust.import_dust(verbose=False, dust_measurement_type="PM10")
+
+    D = dust.D[0]
+    expected = _trapezoid(dust.pdfM[0][D <= 2.5], np.log10(D[D <= 2.5]))
+    np.testing.assert_allclose(dust.pm_mass(0, "PM2.5"), expected, rtol=RTOL, atol=ATOL)
+    # Computed on demand and cached in the attribute the models look up.
+    np.testing.assert_allclose(dust.PM2_5[0], expected, rtol=RTOL, atol=ATOL)
+
+
+def test_pm_mass_difference_is_the_band_between_cutoffs():
+    dust = Dust([_WOOMERA_DUST_FILE])
+    dust.import_dust(verbose=False, dust_measurement_type="PM10")
+
+    D = dust.D[0]
+    band = (D > 10) & (D <= 18)
+    # Independent reference: the two cutoff integrals differ by the mass in the band.
+    expected = _trapezoid(dust.pdfM[0][D <= 18], np.log10(D[D <= 18])) - _trapezoid(dust.pdfM[0][D <= 10], np.log10(D[D <= 10]))
+    np.testing.assert_allclose(dust.pm_mass(0, "PM18-PM10"), expected, rtol=RTOL, atol=ATOL)
+    np.testing.assert_allclose(dust.PM18_minus_PM10[0], expected, rtol=RTOL, atol=ATOL)
+
+    assert band.any() and expected > 0
+    # A band is a strict subset of the whole distribution.
+    assert expected < dust.TSP[0]
+    # The coarse and fine parts of a split add back up to the larger cutoff's mass:
+    # (PM17 - PM10) + PM10 is the mass up to 17 µm, not the whole distribution.
+    pm17 = _trapezoid(dust.pdfM[0][D <= 17], np.log10(D[D <= 17]))
+    np.testing.assert_allclose(dust.pm_mass(0, "PM17-PM10") + dust.PM10[0], pm17, rtol=RTOL, atol=ATOL)
+
+
+def test_pm_mass_rejects_band_with_no_modelled_mass():
+    dust = Dust([_WOOMERA_DUST_FILE])
+    dust.import_dust(verbose=False, dust_measurement_type="PM10")
+
+    # Both cutoffs sit above the largest modelled diameter, so the band is empty --
+    # dividing a measured concentration by it would be a silent divide-by-zero.
+    largest = dust.D[0].max()
+    with pytest.raises(ValueError, match="encloses no mass"):
+        dust.pm_mass(0, f"PM{int(largest * 100)}-PM{int(largest * 10)}")
+
+
+# -----------------------------------------------------------------------------
+# 6. SimulationInputs: canonical dust concentration channels
+#    Every particulate-matter column is loaded under its canonical name and scaled
+#    by the k-factor, so a model can be driven by a measure other than dust_type;
+#    dust_type itself is resolved through those channels and canonicalized.
+# -----------------------------------------------------------------------------
+
+
+def test_simulation_inputs_loads_canonical_dust_channels():
+    k = 2.0
+    sim = smb.SimulationInputs(_WOOMERA_DUST_FILE, k_factors=k, dust_type="pm10", verbose=False)
+
+    weather = pd.read_excel(_WOOMERA_DUST_FILE, sheet_name="Weather")
+    expected = k * weather["PM10"].to_numpy(dtype=float)
+
+    assert set(sim.dust_concentration_channels[0]) == {"PM10"}
+    np.testing.assert_allclose(sim.dust_concentration_channels[0]["PM10"], expected, rtol=RTOL, atol=ATOL)
+
+    # A loosely spelled dust_type resolves through the channels and is rewritten in
+    # canonical form, so the Dust attribute lookup downstream finds its reference mass.
+    assert sim.dust_type[0] == "PM10"
+    np.testing.assert_allclose(sim.dust_concentration[0], expected, rtol=RTOL, atol=ATOL)
+    assert 0 in sim.dust.PM10
