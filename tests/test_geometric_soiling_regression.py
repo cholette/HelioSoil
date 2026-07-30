@@ -80,7 +80,7 @@ def _run_geometric_soiling_factor():
     file_params, file_SF, file_weather = _demo_paths()
 
     model = smf.FieldModel(file_params, file_SF, cleaning_rate=CLEANING_RATE)
-    sim = smb.SimulationInputs(file_weather, dust_type=DUST_TYPE)
+    sim = smb.SimulationInputs(files=[file_weather], dust_type=[DUST_TYPE])
     plant = smf.CentralTowerPlant()
     plant.import_plant(file_params)
 

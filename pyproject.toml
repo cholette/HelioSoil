@@ -49,6 +49,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "ipython",
+    "ipykernel",
     "pytest",
     "nbstripout",
     "nbconvert",
@@ -102,3 +103,8 @@ keep_count = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
+# analysis_scripts lives at the repo root and is not installed (only src/ is on
+# the editable-install path), so put the rootdir on sys.path. Without this, a
+# bare `pytest` (as `make test` runs) cannot import it, while `python -m pytest`
+# can -- the latter implicitly prepends the CWD.
+pythonpath = ["."]

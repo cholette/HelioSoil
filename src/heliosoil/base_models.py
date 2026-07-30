@@ -385,9 +385,12 @@ class PhysicalBase(SoilingBase):
         dummy_sim = SimulationInputs()
         dummy_sim.dust = Dust()
 
-        for att_name in sim_data.dust.__dict__.keys():
-            val = {0: getattr(sim_data.dust, att_name)[exp_idx]}
-            setattr(dummy_sim.dust, att_name, val)
+        # Dust attributes are keyed by experiment index, but `files` is a plain list and
+        # the optional PMx dicts stay empty unless that measurement type was requested,
+        # so copy across only the per-experiment entries that actually exist.
+        for att_name, att_val in sim_data.dust.__dict__.items():
+            if isinstance(att_val, dict) and exp_idx in att_val:
+                setattr(dummy_sim.dust, att_name, {0: att_val[exp_idx]})
 
         # dummy_sim.dust.import_dust(dust_file,verbose=False,dust_measurement_types="PM10")
         dummy_sim.air_temp = {0: np.array([air_temp])}
@@ -1727,7 +1730,7 @@ class Heliostats:
         for ii in range(1, len(np.unique(sid))):
             c_map = np.vstack((c_map, np.roll(base_map, 3 * ii)))
         c_map = c_map.flatten()
-        color_map = plt.cm.get_cmap(cmap_name)(c_map)
+        color_map = plt.get_cmap(cmap_name)(c_map)
 
         # Plot each sector
         for ii in range(Ns):

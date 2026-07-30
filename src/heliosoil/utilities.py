@@ -218,7 +218,7 @@ def _nominal_reflectance_anchor(reflectance_data, f, fallback):
     return fallback
 
 
-def simple_annual_cleaning_schedule(n_sectors, n_trucks, n_cleans, dt=1, n_sectors_per_truck=1):
+def simple_annual_cleaning_schedule(n_sectors: int, n_trucks: int, n_cleans: int, dt: float = 1, n_sectors_per_truck: int = 1):
     """
     Generate a simple annual cleaning schedule.
 

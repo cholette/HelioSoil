@@ -730,7 +730,9 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method: str = "g
                     temp_schedule = copy.copy(cleaning_schedule_horizon_day)
                     temp_schedule[cleaned_heliostat, future_day * 24] = 1
 
-                    # Calculate new revenue considering locked in cleaning schedule
+                    # Calculate new revenue considering locked in cleaning schedule.
+                    # _sector_revenue returns one value per sector row, so take the
+                    # single element back out for this one sector.
                     sector_revenue[cleaned_heliostat, future_day] = _sector_revenue(
                         soilrate[cleaned_heliostat, :].reshape(1, -1),
                         temp_schedule[cleaned_heliostat, :].reshape(1, -1),
@@ -739,7 +741,7 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method: str = "g
                         production_profit,
                         sector_cleaningcost,
                         existing_schedule=cleaning_schedule_horizon_day[cleaned_heliostat, :].reshape(1, -1),
-                    )
+                    )[0]
 
                 available_heliostats[cleaned_heliostat] != np.sum(cleaning_schedule_horizon[cleaned_heliostat, :]) == n_day_horizon
                 available_days[np.sum(cleaning_schedule_horizon, axis=0) >= n_trucks * n_sectors_per_truck] = False
@@ -895,10 +897,10 @@ def rollout_heuristic_tcc(opt, n_trucks, initial_arealoss=None, method: str = "g
 
         if hasattr(opt, "record_daily_costs") and opt.record_daily_costs == 1:
             day_costs = {
-                "total_cleaning_costs"[f]: day_total_cleaningcost,
-                "direct_cleaning_costs"[f]: day_cleaningcost,
-                "degradation_costs"[f]: day_degradationcost,
-                "arealoss"[f]: day_arealoss,
+                "total_cleaning_costs": day_total_cleaningcost,
+                "direct_cleaning_costs": day_cleaningcost,
+                "degradation_costs": day_degradationcost,
+                "arealoss": day_arealoss,
             }
             results["day_costs"][f] = day_costs
 
