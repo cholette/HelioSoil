@@ -3,25 +3,25 @@ Unified command-line interface for the HelioSoil analysis workflows.
 
 Three subcommands:
 
-  fit         single-campaign fit + report            -> single_campaign_fit.run
+  simulate    single-campaign fit + report            -> simulate.run
   select      leave-n-out cross-validation sweep      -> model_selection.run
   experiment  per-campaign weather + soiling summary  -> experiment.run
 
 Run from the repository root:
 
-    python -m analysis_scripts.cli fit        --help
+    python -m analysis_scripts.cli simulate   --help
     python -m analysis_scripts.cli select     --help
     python -m analysis_scripts.cli experiment --help
 
-`fit` and `select` share the site/physics and run-control options and differ only in how the model
-and its dust channels are chosen; `experiment` characterises the site rather than a model, so it
-takes only --location and the run-control options.
+`simulate` and `select` share the site/physics and run-control options and differ only in how the
+model and its dust channels are chosen; `experiment` characterises the site rather than a model, so
+it takes only --location and the run-control options.
 
 Both model workflows take a --model expression in the notation the workflows report, e.g.
 
     --model "PM2.5*tangential_wind + (PM10-PM2.5)*turbulent_wind + PMT*gravitational"
 
-`fit` fits that one model (defaulting to the library's gravitational + normal_wind). `select`
+`simulate` fits that one model (defaulting to the library's gravitational + normal_wind). `select`
 compares models, so --model is optional there: without it, every unique non-empty subset of the
 wind-component vocabulary is compared. The fold schedule is fixed either way, leaving --dust as
 the other choice -- one measure, "all", or "sweep", which drives each of --model's mechanisms
@@ -51,7 +51,7 @@ from heliosoil.utilities import configure_logging  # noqa: E402
 from . import experiment  # noqa: E402
 from . import model_pipeline as mp  # noqa: E402
 from . import model_selection  # noqa: E402
-from . import single_campaign_fit  # noqa: E402
+from . import simulate  # noqa: E402
 
 MODEL_TYPE_CHOICES = ["constant_mean", "constant_mean_wind", "semi_physical", "all"]
 
@@ -78,10 +78,10 @@ def _add_location(group, defaults) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     defaults = mp.PipelineConfig()
-    parser = argparse.ArgumentParser(prog="analysis_scripts.cli", description="HelioSoil analysis workflows (fit / select / experiment).")
+    parser = argparse.ArgumentParser(prog="analysis_scripts.cli", description="HelioSoil analysis workflows (simulate / select / experiment).")
 
     # --- shared options, in three parents so each subcommand takes only what applies to it:
-    # fit/select get all three, experiment only the site name and run control. ---
+    # simulate/select get all three, experiment only the site name and run control. ---
     common_location = argparse.ArgumentParser(add_help=False)
     _add_location(common_location.add_argument_group("data / site"), defaults)
 
@@ -135,14 +135,14 @@ def build_parser() -> argparse.ArgumentParser:
     # --- subcommands ---
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_fit = sub.add_parser(
-        "fit",
+    p_sim = sub.add_parser(
+        "simulate",
         parents=[common_site, common_model, common_run],
         help="fit each model on the training campaign(s) and report",
         description="Single-campaign fit + report workflow.",
     )
-    p_fit.add_argument("--dust-type", default=defaults.dust_type, help='dust channel driving the model, e.g. "PM10", "PM2.5" (default: %(default)s)')
-    p_fit.add_argument(
+    p_sim.add_argument("--dust-type", default=defaults.dust_type, help='dust channel driving the model, e.g. "PM10", "PM2.5" (default: %(default)s)')
+    p_sim.add_argument(
         "--train-experiments",
         nargs="+",
         type=int,
@@ -150,7 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="INDEX",
         help="campaign indices to train on (default: %(default)s)",
     )
-    p_fit.set_defaults(func=_run_fit)
+    p_sim.set_defaults(func=_run_simulate)
 
     p_sel = sub.add_parser(
         "select",
@@ -211,9 +211,9 @@ def _run_metadata(args, cfg: mp.PipelineConfig, **extra) -> dict:
     return {"argv": sys.argv, "command": args.command, "args": args_dict, "config": dataclasses.asdict(cfg), **extra}
 
 
-def _run_fit(args) -> None:
+def _run_simulate(args) -> None:
     cfg = _build_config(args)
-    single_campaign_fit.run(
+    simulate.run(
         cfg,
         model_type=None if args.model_type == "all" else args.model_type,
         model_expression=args.model,

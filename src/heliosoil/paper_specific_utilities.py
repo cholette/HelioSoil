@@ -51,6 +51,9 @@ def plot_for_paper(
     legend_shift=(0, 0),
     plot_rh=True,
     yticks=None,
+    auto_yticks=False,
+    ytick_spacing=0.05,
+    ylabel_row=None,
     figsize=(12, 15),
     lgd_size=10,
     ci_alpha=0.1,
@@ -69,11 +72,20 @@ def plot_for_paper(
         train_experiments (list): The names of the experiments used for training the model.
         train_mirrors (list): The names of the mirrors used for training the model.
         orientation (list): The orientation of each mirror in the experiments.
-        rows_with_legend (list, optional): The row indices where the legend should be placed.
+        rows_with_legend (list, optional): Unused -- the y-label row is now `ylabel_row` and the
+            legend is a single figure-level one. Kept so existing call sites keep working.
         num_legend_cols (int, optional): The number of columns in the legend.
         legend_shift (tuple, optional): A tuple specifying the x and y shift of the legend.
         plot_rh (bool, optional): Whether to plot the relative humidity.
-        yticks (list, optional): The y-axis tick values for the reflectance plots.
+        yticks (list, optional): Explicit y-axis tick values, applied to every tilt row. Takes
+            precedence over auto_yticks, so passing both keeps the explicit ticks.
+        auto_yticks (bool, optional): If True (and `yticks` is None), each tilt row gets its own
+            tick set, spaced `ytick_spacing` apart, spanning that row's measured/predicted data.
+            Ticks and limits are shared by every column of the row, so all campaigns in a row
+            stay directly comparable.
+        ytick_spacing (float, optional): Tick spacing used when auto_yticks is True.
+        ylabel_row (int, optional): Tilt-row index carrying the "Normalized reflectance" y-label
+            (leftmost column). Defaults to the middle tilt row.
 
     Returns:
         tuple: The figure and axis objects for the generated plot.
@@ -105,6 +117,19 @@ def plot_for_paper(
 
     # Define color for each orientation
     colors = _orientation_colors(sdat.files)
+
+    # Data extent of each tilt row, pooled over every column/mirror in the row, for auto_yticks.
+    # Measured (with its 2-sigma bars) and predicted means only: the prediction interval band is
+    # decoration and can be far wider than the curves it shades.
+    row_data_limits = {jj: [np.inf, -np.inf] for jj in range(len(tilts))}
+
+    def _update_row_limits(jj, *arrays):
+        for arr in arrays:
+            arr = np.asarray(arr, dtype=float)
+            finite = arr[np.isfinite(arr)]
+            if finite.size:
+                row_data_limits[jj][0] = min(row_data_limits[jj][0], float(finite.min()))
+                row_data_limits[jj][1] = max(row_data_limits[jj][1], float(finite.max()))
 
     ref_output = {}
     for ii, e in enumerate(exps):
@@ -150,6 +175,7 @@ def plot_for_paper(
                 if np.ndim(ax) == 1:
                     ax = np.vstack(ax)  # create a fictious 2D array with only one column
                 ax[jj, ii].errorbar(tr, m, yerr=error_two_sigma, label=orientation_name, color=color, linestyle="-")
+                _update_row_limits(jj, m - error_two_sigma, m + error_two_sigma)
 
                 if (e in train_experiments) and (rdat.mirror_names[e][kk] in train_mirrors):
                     a = ax[jj, e]
@@ -167,6 +193,7 @@ def plot_for_paper(
                 yh = r0_by_exp[e][kk] * mod.helios.soiling_factor[e][hh, 0 : rdat.prediction_indices[e][-1] + 1]
                 yh = yh + (1.0 - yh[0])
                 ax[jj, ii].plot(ts, yh, color=color, linestyle="--")
+                _update_row_limits(jj, yh)
 
             # Confidence interval: drawn once per tilt row from a single representative
             # mirror (not one band per orientation), to avoid clutter from overlapping
@@ -261,10 +288,45 @@ def plot_for_paper(
     handles_leg = []
     labels_leg = []
 
+    # One tick set per tilt row, shared by every column of that row, so the row's campaigns stay
+    # directly comparable while each row is free to span only the range its own data occupies.
+    # `yticks` wins when both are given: an explicit tick list is a deliberate choice, so passing
+    # one overrides auto_yticks rather than being silently ignored.
+    auto_row_ticks = {}
+    tick_decimals = max(2, int(np.ceil(-np.log10(ytick_spacing))))
+    if auto_yticks and yticks is None:
+        for jj in range(len(tilts)):
+            vmin, vmax = row_data_limits[jj]
+            if not np.isfinite(vmin) or not np.isfinite(vmax):
+                continue  # tilt absent from the data (see the "Tilt Not Found" skip above)
+            # Limits hug the data (plus a small margin); ticks are the exact multiples of
+            # ytick_spacing that fall inside. Snapping the *limits* out to multiples instead
+            # would donate a whole empty interval whenever the data just clears a tick.
+            pad = max(0.05 * (vmax - vmin), 0.05 * ytick_spacing)
+            lo, hi = vmin - pad, vmax + pad
+            ticks = np.arange(np.ceil(lo / ytick_spacing), np.floor(hi / ytick_spacing) + 1) * ytick_spacing
+            if ticks.size < 2:
+                # Row too narrow to contain two ticks at this spacing: stretch the limits just
+                # far enough to reach the two multiples nearest the data (rather than out to
+                # whole intervals on both sides, which would leave a large empty band).
+                k = np.floor(hi / ytick_spacing)
+                ticks = np.array([(k - 1) * ytick_spacing, k * ytick_spacing])
+                lo, hi = min(lo, ticks[0]), max(hi, ticks[-1])
+            auto_row_ticks[jj] = (np.round(ticks, tick_decimals), (lo, hi))
+
+    # Centre the y-label on the block of tilt rows instead of an arbitrary legend row -- with an
+    # odd number of tilts this is the exact middle row, which is where the label reads as centred.
+    label_row = (len(tilts) - 1) // 2 if ylabel_row is None else ylabel_row
+
     for ii, row in enumerate(ax):
         for jj, a in enumerate(row):
             if ii < len(tilts):
-                if yticks is None:
+                if ii in auto_row_ticks:
+                    ticks, ylim = auto_row_ticks[ii]
+                    a.set_ylim(ylim)
+                    a.set_yticks(ticks)
+                    a.yaxis.set_major_formatter(FormatStrFormatter(f"%.{tick_decimals}f"))
+                elif yticks is None:
                     a.set_ylim((0.85, 1.01))
                     a.set_yticks((0.85, 0.90, 0.95, 1.0))
                 else:
@@ -274,7 +336,7 @@ def plot_for_paper(
                 if jj > 0:
                     a.set_yticklabels([])
 
-                if ii in rows_with_legend and jj == 0:
+                if ii == label_row and jj == 0:
                     ang = rdat.reflectometer_incidence_angle[jj]
                     a.set_ylabel(r"Normalized reflectance $\rho(0)-\rho(t)$ at " + str(ang) + r"$^{\circ}$")
 
@@ -296,6 +358,11 @@ def plot_for_paper(
                 a.set_yticks((0, 150, 300))
             else:
                 a.set_yticks((0, 50, 100))
+
+            # Bottom row carries the shared (sharex="col") time axis, whichever panel it is:
+            # relative humidity when plot_rh, otherwise dust concentration / wind speed.
+            if ii == ax.shape[0] - 1:
+                a.set_xlabel("Days")
 
     # Remove duplicates by filtering unique labels and keeping corresponding handles
     unique_labels = []
@@ -847,6 +914,72 @@ def summarize_fit_quality(
     return fig, ax
 
 
+def daily_rate_residuals(model, reflectance_data, experiments, mirrors=None):
+    """
+    Predicted minus measured **daily soiling rate**, one value per (mirror, measurement interval),
+    pooled over `experiments`.
+
+    This is the quantity regression_performance_stats reduces to MBE/MAE/RMSE; it is exposed
+    separately so a caller can look at the error's *distribution* (e.g. grouped by tilt) rather
+    than only its first moments. See that function's docstring for why the rate, not the
+    reflectance, is the error quantity, and for the nominal-reflectance convention.
+
+    The rate is ``-diff(soiling_factor) / diff(time_days)``, with the measured soiling factor
+    taken as ``measured_reflectance / nominal_reflectance`` so both sides are in the same
+    dimensionless (soiling-factor per day) units. Differencing is done per experiment so it never
+    crosses a campaign boundary. Requires model.helios.soiling_factor to already be populated for
+    `experiments`.
+
+    Args:
+        model: a fitted soiling model exposing helios.soiling_factor and
+            helios.nominal_reflectance.
+        reflectance_data: ReflectanceMeasurements with matching prediction_indices, average, and
+            times for each file in `experiments`.
+        experiments (list): file indices to pool together.
+        mirrors (array-like of int, optional): column indices to include. Default: all mirrors.
+
+    Returns:
+        np.ndarray: the finite residuals, flattened. Empty when nothing survives (e.g. a campaign
+        with a single measurement, or an all-NaN mirror) -- callers must handle size 0 rather
+        than assume a mean is defined.
+    """
+    pi = reflectance_data.prediction_indices
+    meas = reflectance_data.average
+    sf = model.helios.soiling_factor
+    times = reflectance_data.times
+
+    resid_list = []
+    for f in experiments:
+        m = meas[f] if mirrors is None else meas[f][:, mirrors]
+        sfm = sf[f] if mirrors is None else sf[f][mirrors, :]
+        r0 = _nominal_reflectance_series(reflectance_data, f, model.helios.nominal_reflectance)
+        if mirrors is not None and not np.isscalar(r0):
+            r0 = r0[:, mirrors]
+
+        sf_pred = sfm[:, pi[f]].transpose()  # predicted soiling factor, (n_time, n_mirror)
+        # Measured soiling factor = measured reflectance / nominal (clean) reflectance, so both
+        # sides of the rate residual are in the same dimensionless soiling-factor units.
+        sf_meas = m / r0
+
+        # Elapsed days between consecutive measurements (same convention as loss_table_from_sim).
+        t = np.asarray(times[f])
+        if np.issubdtype(t.dtype, np.datetime64):
+            dt_days = np.diff(t) / np.timedelta64(1, "D")
+        else:
+            dt_days = np.diff(t.astype(float))
+        dt_days = dt_days[:, None]
+
+        # Daily soiling rate = drop in soiling factor per day (a drop is positive soiling).
+        rate_pred = -np.diff(sf_pred, axis=0) / dt_days
+        rate_meas = -np.diff(sf_meas, axis=0) / dt_days
+        resid_list.append((rate_pred - rate_meas).flatten())
+
+    # Mask non-finite entries (NaN measurements, zero-length intervals) so a few gaps don't void
+    # the whole set.
+    resid = np.concatenate(resid_list) if resid_list else np.array([])
+    return resid[np.isfinite(resid)]
+
+
 def regression_performance_stats(model, reflectance_data, experiments, mirrors=None):
     """
     Summarize a model fit with regression metrics computed on two different quantities so the
@@ -859,7 +992,8 @@ def regression_performance_stats(model, reflectance_data, experiments, mirrors=N
       same dimensionless (soiling-factor per day) units. This measures how well each prediction
       predicts the *change* in soiling loss over each interval rather than how well it fits the
       overall reflectance shape/level. Differencing is done per experiment so it never crosses a
-      campaign boundary.
+      campaign boundary. The residuals themselves are available from `daily_rate_residuals`, which
+      computes them; this function only reduces them to their first moments.
     - R2 is the coefficient of determination on **reflectance** (predicted vs. measured), pooled
       over `experiments`. Called with the training vs. test experiments it yields the in-sample /
       out-of-sample reflectance R2 respectively.
@@ -895,12 +1029,9 @@ def regression_performance_stats(model, reflectance_data, experiments, mirrors=N
     pi = reflectance_data.prediction_indices
     meas = reflectance_data.average
     sf = model.helios.soiling_factor
-    times = reflectance_data.times
 
     # Reflectance-level pairing (predicted vs. measured) -> R2 only.
     pred_list, meas_list = [], []
-    # Daily soiling-rate residual, in dimensionless soiling-factor units -> MBE/MAE/RMSE.
-    rate_resid_list = []
     for f in experiments:
         m = meas[f] if mirrors is None else meas[f][:, mirrors]
         sfm = sf[f] if mirrors is None else sf[f][mirrors, :]
@@ -912,28 +1043,10 @@ def regression_performance_stats(model, reflectance_data, experiments, mirrors=N
         pred_list.append((r0 * sf_pred).flatten())  # predicted reflectance, for R2
         meas_list.append(m.flatten())  # measured reflectance, for R2
 
-        # Measured soiling factor = measured reflectance / nominal (clean) reflectance, so both
-        # sides of the rate residual are in the same dimensionless soiling-factor units.
-        sf_meas = m / r0
-
-        # Elapsed days between consecutive measurements (same convention as loss_table_from_sim).
-        t = np.asarray(times[f])
-        if np.issubdtype(t.dtype, np.datetime64):
-            dt_days = np.diff(t) / np.timedelta64(1, "D")
-        else:
-            dt_days = np.diff(t.astype(float))
-        dt_days = dt_days[:, None]
-
-        # Daily soiling rate = drop in soiling factor per day (a drop is positive soiling).
-        rate_pred = -np.diff(sf_pred, axis=0) / dt_days
-        rate_meas = -np.diff(sf_meas, axis=0) / dt_days
-        rate_resid_list.append((rate_pred - rate_meas).flatten())
-
-    # Daily soiling-rate error metrics. Mask non-finite entries (NaN measurements, zero-length
-    # intervals) so a few gaps don't void the whole set's MBE/MAE/RMSE; if nothing survives
-    # (e.g. a campaign with a single measurement), report NaN rather than warn on an empty mean.
-    rate_resid = np.concatenate(rate_resid_list)
-    rate_resid = rate_resid[np.isfinite(rate_resid)]
+    # Daily soiling-rate error metrics, over the already-finite-masked residuals. If nothing
+    # survives (e.g. a campaign with a single measurement), report NaN rather than warn on an
+    # empty mean.
+    rate_resid = daily_rate_residuals(model, reflectance_data, experiments, mirrors=mirrors)
     if rate_resid.size:
         mbe, mae, rmse = np.mean(rate_resid), np.mean(np.abs(rate_resid)), np.sqrt(np.mean(rate_resid**2))
     else:

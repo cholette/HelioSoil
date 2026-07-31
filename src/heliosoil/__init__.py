@@ -87,6 +87,7 @@ from .paper_specific_utilities import (
     fit_quality_plots,
     summarize_fit_quality,
     regression_performance_stats,
+    daily_rate_residuals,
     daily_soiling_tilt_all_data,
     plot_experiment_PA,
 )
@@ -163,6 +164,7 @@ __all__ = [
     "fit_quality_plots",
     "summarize_fit_quality",
     "regression_performance_stats",
+    "daily_rate_residuals",
     "daily_soiling_tilt_all_data",
     "plot_experiment_PA",
 ]

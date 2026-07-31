@@ -42,8 +42,8 @@ dust type.
 
 This module exposes ``run()`` -- it is driven by the unified CLI
 (``python -m analysis_scripts.cli select ...``); see cli.py for the configuration surface,
-model_pipeline.py for the shared fitting kernel, and single_campaign_fit.py for the single-
-campaign fit/report workflow.
+model_pipeline.py for the shared fitting kernel, and simulate.py for the single-campaign
+fit/report workflow.
 """
 
 import dataclasses

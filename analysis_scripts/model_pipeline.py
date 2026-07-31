@@ -4,9 +4,9 @@ Shared kernel for the HelioSoil analysis workflows.
 Holds the configuration, data loading, model construction, and fit/evaluate logic
 shared by the two workflow scripts:
 
-  - single_campaign_fit.py -- fit each model on the training campaign(s) and report
+  - simulate.py        -- fit each model on the training campaign(s) and report
     fitted parameters, performance statistics, and per-campaign plots.
-  - model_selection.py     -- leave-n-campaigns-out cross-validation sweeping the
+  - model_selection.py -- leave-n-campaigns-out cross-validation sweeping the
     number of training campaigns, plus out-of-sample-RMSE-ranked model comparison.
 
 Nothing here runs at import time; the workflow scripts import these helpers and
