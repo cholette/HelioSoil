@@ -1,5 +1,6 @@
 """
-Unit tests for regression_performance_stats (heliosoil.paper_specific_utilities).
+Unit tests for regression_performance_stats and daily_rate_residuals
+(heliosoil.paper_specific_utilities).
 
 These lock in the metric's two-quantity design: MBE/MAE/RMSE are computed on the *daily
 soiling rate* (the drop in soiling factor per day), while R2 stays a *reflectance*
@@ -12,7 +13,7 @@ import types
 import numpy as np
 import pytest
 
-from heliosoil.paper_specific_utilities import regression_performance_stats
+from heliosoil.paper_specific_utilities import daily_rate_residuals, regression_performance_stats
 
 
 def _make(soiling_factor, average, r0=0.9, days=(0, 1, 3)):
@@ -91,3 +92,68 @@ def test_all_nan_returns_nan_without_error():
     model, rdat = _make(soiling_factor=[[1.0, 0.98, 0.95]], average=[[0.9], [np.nan], [0.84]])
     got = regression_performance_stats(model, rdat, [0])
     assert np.isnan(got["MBE"]) and np.isnan(got["MAE"]) and np.isnan(got["RMSE"])
+
+
+def test_an_empty_split_is_an_absent_statistic_not_an_error():
+    """A split can legitimately hold no campaigns -- a model trained on every one of them has no
+    test set -- and that must report N=0 rather than raise on the empty concatenate."""
+    model, rdat = _make(soiling_factor=[[1.0, 0.98, 0.95]], average=[[0.9], [0.87], [0.84]])
+    got = regression_performance_stats(model, rdat, [])
+
+    assert got["N"] == 0
+    assert all(np.isnan(got[key]) for key in ("MBE", "MAE", "RMSE", "R2"))
+
+
+def test_daily_rate_residuals_returns_the_per_interval_vector():
+    """The residual vector the boxplot groups by tilt is the same quantity the reported metrics
+    reduce -- one value per (mirror, measurement interval), in soiling-factor per day."""
+    r0 = 0.9
+    model, rdat = _make(soiling_factor=[[1.0, 0.98, 0.95]], average=[[0.9], [0.87], [0.84]], r0=r0, days=(0, 1, 3))
+
+    sf_pred, sf_meas = np.array([1.0, 0.98, 0.95]), np.array([0.9, 0.87, 0.84]) / r0
+    dt = np.array([1.0, 2.0])
+    expected = (-np.diff(sf_pred) / dt) - (-np.diff(sf_meas) / dt)
+
+    assert daily_rate_residuals(model, rdat, [0]) == pytest.approx(expected)
+
+
+def test_the_reported_mae_is_the_mean_of_the_returned_residuals():
+    """regression_performance_stats delegates to daily_rate_residuals, so a figure built on the
+    vector and a CSV built on the scalar cannot drift apart."""
+    model, rdat = _make(soiling_factor=[[1.0, 0.98, 0.95], [1.0, 0.99, 0.97]], average=[[0.9, 0.9], [0.87, 0.885], [0.84, 0.855]], days=(0, 1, 3))
+    stats = regression_performance_stats(model, rdat, [0])
+    residuals = daily_rate_residuals(model, rdat, [0])
+
+    assert stats["MAE"] == pytest.approx(np.abs(residuals).mean())
+    assert stats["MBE"] == pytest.approx(residuals.mean())
+    assert stats["RMSE"] == pytest.approx(np.sqrt((residuals**2).mean()))
+
+
+def test_daily_rate_residuals_drops_intervals_a_nan_bounds():
+    """Same masking as the metrics: the NaN mirror's two intervals go, mirror 0's survive."""
+    model, rdat = _make(soiling_factor=[[1.0, 0.98, 0.95], [1.0, 0.99, 0.97]], average=[[0.9, 0.9], [0.87, np.nan], [0.84, 0.855]], days=(0, 1, 3))
+    residuals = daily_rate_residuals(model, rdat, [0])
+
+    assert residuals.size == 2  # 2 mirrors x 2 intervals, less the 2 the NaN bounds
+    assert np.isfinite(residuals).all()
+
+
+def test_daily_rate_residuals_returns_empty_rather_than_raising():
+    """No finite residual gives size 0, so callers must handle it -- the boxplot skips the group
+    rather than drawing a box over nothing."""
+    model, rdat = _make(soiling_factor=[[1.0, 0.98, 0.95]], average=[[0.9], [np.nan], [0.84]])
+
+    assert daily_rate_residuals(model, rdat, [0]).size == 0
+
+
+def test_daily_rate_residuals_selects_mirrors():
+    """`mirrors` indexes reflectance columns and model rows alike -- the property the tilt
+    grouping relies on."""
+    model, rdat = _make(soiling_factor=[[1.0, 0.98, 0.95], [1.0, 0.99, 0.97]], average=[[0.9, 0.9], [0.87, 0.885], [0.84, 0.855]], days=(0, 1, 3))
+
+    both = daily_rate_residuals(model, rdat, [0])
+    first = daily_rate_residuals(model, rdat, [0], mirrors=np.array([0]))
+    second = daily_rate_residuals(model, rdat, [0], mirrors=np.array([1]))
+
+    assert first.size == second.size == 2 and both.size == 4
+    assert sorted(np.concatenate([first, second])) == pytest.approx(sorted(both))

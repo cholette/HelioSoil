@@ -368,6 +368,84 @@ def test_plot_reflectance_series_marks_the_nominal_reflectance(data, mirrors, ti
     plt.close(fig)
 
 
+def test_series_labels_use_orientation_and_tilt(data, mirrors):
+    frame = mirrors[mirrors["campaign_index"] == 0].set_index("mirror")
+    names = data.reflect_data_total.mirror_names[0]
+
+    # "Mirror_4" carries a tilt but no orientation; "Mirror_5" would too, so both are tilt-only and
+    # collide -- hence the indices.
+    assert es.series_labels(frame, names) == ["NE 0°", "SE 30°", "SW 60°", "45° (1)", "45° (2)"]
+
+
+def test_series_labels_fall_back_to_the_mirror_name_without_any_geometry(mirrors):
+    frame = mirrors[mirrors["campaign_index"] == 0].set_index("mirror")
+    frame.loc["Mirror_4", "tilt_deg"] = np.nan
+
+    assert es.series_labels(frame, ["Mirror_4"]) == ["Mirror_4"]
+
+
+def test_plot_reflectance_series_labels_traces_by_geometry(data, mirrors, ticks):
+    fig = es.plot_reflectance_series(data, mirrors, ticks, "Yadnarie", FALLBACK)
+    labels = [text.get_text() for text in fig.axes[0].get_legend().get_texts()]
+
+    assert "SE 30°" in labels
+    assert not any(label.startswith("OSE_M2") for label in labels)
+    plt.close(fig)
+
+
+def test_tilt_figure_name_matches_the_simulate_workflows_stem():
+    """The two workflows write into the same campaign_{f+1} folder shape, so a tilt's measured-only
+    figure and its measured-vs-predicted counterpart sort together."""
+    assert es.tilt_figure_name(0.0) == "reflectance_tilt_00.pdf"
+    assert es.tilt_figure_name(180.0) == "reflectance_tilt_180.pdf"
+
+
+def test_plot_reflectance_at_tilt_draws_only_that_tilts_mirrors(data, mirrors):
+    """Campaign 0 has one mirror at 30 (OSE_M2_T30); the tilt-45 pair is Mirror_4 and the all-NaN
+    Mirror_5, which has no finite sample and so no trace."""
+    fig = es.plot_reflectance_at_tilt(data, mirrors, 0, 30.0, "Yadnarie 11-11-24", "Yadnarie", FALLBACK)
+    labels = [text.get_text() for text in fig.axes[0].get_legend().get_texts()]
+
+    assert set(labels) == {"SE", "nominal (reference)"}  # orientation alone: the tilt is in the title
+    assert "tilt 30°" in fig._suptitle.get_text()
+    plt.close(fig)
+
+
+def test_plot_reflectance_at_tilt_falls_back_to_the_mirror_name_without_an_orientation(data, mirrors):
+    fig = es.plot_reflectance_at_tilt(data, mirrors, 0, 45.0, "Yadnarie 11-11-24", "Yadnarie", FALLBACK)
+    labels = [text.get_text() for text in fig.axes[0].get_legend().get_texts()]
+
+    assert set(labels) == {"Mirror_4", "nominal (reference)"}  # Mirror_5 has no finite measurement
+    plt.close(fig)
+
+
+def test_plot_reflectance_at_tilt_returns_none_when_the_campaign_has_no_mirror_there(data, mirrors):
+    """Campaign 1 measures 0 and 30 only; asking it for 45 is not an error."""
+    assert es.plot_reflectance_at_tilt(data, mirrors, 1, 45.0, "Yadnarie 06-02-25", "Yadnarie", FALLBACK) is None
+
+
+def test_write_tilt_figures_writes_one_file_per_campaign_and_tilt(data, mirrors, ticks, tmp_path):
+    written = es.write_tilt_figures(data, mirrors, str(tmp_path), ticks, "Yadnarie", FALLBACK)
+
+    assert written == [
+        "campaign_1/reflectance_tilt_00.pdf",
+        "campaign_1/reflectance_tilt_30.pdf",
+        "campaign_1/reflectance_tilt_45.pdf",
+        "campaign_1/reflectance_tilt_60.pdf",
+        "campaign_2/reflectance_tilt_00.pdf",
+        "campaign_2/reflectance_tilt_30.pdf",
+    ]
+    assert all((tmp_path / name).exists() for name in written)
+
+
+def test_write_tilt_figures_writes_nothing_when_no_mirror_has_a_tilt(data, mirrors, ticks, tmp_path):
+    untilted = mirrors.copy()
+    untilted["tilt_deg"] = np.nan
+
+    assert es.write_tilt_figures(data, untilted, str(tmp_path), ticks, "Yadnarie", FALLBACK) == []
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.parametrize("key", ["xtick.labelsize", "legend.fontsize", "axes.labelsize"])
 def test_figures_do_not_leak_the_paper_rcparams(data, mirrors, ticks, key):
     before = plt.rcParams[key]
@@ -375,6 +453,7 @@ def test_figures_do_not_leak_the_paper_rcparams(data, mirrors, ticks, key):
         es.plot_soiling_rate_vs_tilt(mirrors, ticks, "Yadnarie"),
         es.plot_soiling_rate_by_orientation(mirrors, ["yadnarie/a.xlsx"], ticks, "Yadnarie"),
         es.plot_reflectance_series(data, mirrors, ticks, "Yadnarie", FALLBACK),
+        es.plot_reflectance_at_tilt(data, mirrors, 0, 0.0, "Yadnarie 11-11-24", "Yadnarie", FALLBACK),
     ]:
         plt.close(fig)
 

@@ -3,7 +3,7 @@ Unified command-line interface for the HelioSoil analysis workflows.
 
 Three subcommands:
 
-  simulate    single-campaign fit + report            -> simulate.run
+  simulate    fit + report (leave-one-campaign-out)   -> simulate.run
   select      leave-n-out cross-validation sweep      -> model_selection.run
   experiment  per-campaign weather + soiling summary  -> experiment.run
 
@@ -21,11 +21,12 @@ Both model workflows take a --model expression in the notation the workflows rep
 
     --model "PM2.5*tangential_wind + (PM10-PM2.5)*turbulent_wind + PMT*gravitational"
 
-`simulate` fits that one model (defaulting to the library's gravitational + normal_wind). `select`
+`simulate` fits that one model (defaulting to the library's gravitational + normal_wind) and, unless
+--train-experiments names a training split, cross-validates it leave-one-campaign-out. `select`
 compares models, so --model is optional there: without it, every unique non-empty subset of the
-wind-component vocabulary is compared. The fold schedule is fixed either way, leaving --dust as
-the other choice -- one measure, "all", or "sweep", which drives each of --model's mechanisms
-with its own channel and therefore requires one (see model_selection).
+wind-component vocabulary is compared. Its fold schedule is fixed, leaving --dust as the other
+choice -- one measure, "all", or "sweep", which drives each of --model's mechanisms with its own
+channel and therefore requires one (see model_selection).
 
 Shared-option defaults come from model_pipeline.PipelineConfig, so the dataclass is the single
 source of truth.
@@ -138,8 +139,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_sim = sub.add_parser(
         "simulate",
         parents=[common_site, common_model, common_run],
-        help="fit each model on the training campaign(s) and report",
-        description="Single-campaign fit + report workflow.",
+        help="fit each model and report (leave-one-campaign-out by default)",
+        description="Fit + report workflow: leave-one-campaign-out cross-validation, or one named training split.",
     )
     p_sim.add_argument("--dust-type", default=defaults.dust_type, help='dust channel driving the model, e.g. "PM10", "PM2.5" (default: %(default)s)')
     p_sim.add_argument(
@@ -148,7 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=defaults.train_experiments,
         metavar="INDEX",
-        help="campaign indices to train on (default: %(default)s)",
+        help="campaign indices to train on; omit to leave-one-campaign-out cross-validate (one fold per campaign, each trained on all the others)",
     )
     p_sim.set_defaults(func=_run_simulate)
 
@@ -188,10 +189,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _build_config(args) -> mp.PipelineConfig:
     # `select` overwrites dust_type per pass from its own --dust selection, so it does not
-    # take one; PipelineConfig's default stands in until then.
+    # take one; PipelineConfig's default stands in until then. train_experiments stays None
+    # when it was not given (and for `select`, which never takes it): that is what tells
+    # `simulate` to cross-validate rather than fit one named split.
+    train_experiments = getattr(args, "train_experiments", None)
     return mp.PipelineConfig(
         location=args.location,
-        train_experiments=list(getattr(args, "train_experiments", None) or [0]),
+        train_experiments=list(train_experiments) if train_experiments else None,
         train_mirrors=args.train_mirrors,
         dust_type=getattr(args, "dust_type", None) or mp.PipelineConfig.dust_type,
         k_factor=args.k_factor,

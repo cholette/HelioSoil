@@ -12,7 +12,7 @@ from heliosoil.horizontal_impaction import COMPONENT_KEYS, describe_components, 
 
 from analysis_scripts import model_pipeline as mp
 from analysis_scripts import model_selection as ms
-from analysis_scripts.cli import build_parser
+from analysis_scripts.cli import _build_config, build_parser
 
 
 # ---------------------------------------------------------------------------
@@ -291,16 +291,41 @@ def test_select_takes_a_model_expression_for_a_dust_sweep():
     assert (args.model, args.dust) == ("gravitational + tangential_wind", "sweep")
 
 
-def test_fit_takes_a_model_expression():
-    args = build_parser().parse_args(["fit", "--location", "yadnarie", "--model", "PM2.5*tangential_wind + PMT*gravitational", "--dust-type", "PM10"])
+def test_simulate_takes_a_model_expression():
+    args = build_parser().parse_args(
+        ["simulate", "--location", "yadnarie", "--model", "PM2.5*tangential_wind + PMT*gravitational", "--dust-type", "PM10"]
+    )
 
     assert args.model == "PM2.5*tangential_wind + PMT*gravitational"
     assert args.dust_type == "PM10"
     assert parse_model_expression(args.model)[0] == ["gravitational", "tangential_wind"]
 
 
-def test_fit_defaults_to_the_library_model():
-    assert build_parser().parse_args(["fit"]).model is None
+def test_simulate_defaults_to_the_library_model():
+    assert build_parser().parse_args(["simulate"]).model is None
+
+
+def test_simulate_cross_validates_unless_a_training_split_is_named():
+    """No --train-experiments means no named training split, which is what tells `simulate` to
+    run leave-one-campaign-out instead of fitting one."""
+    cross_validated = _build_config(build_parser().parse_args(["simulate"]))
+    named = _build_config(build_parser().parse_args(["simulate", "--train-experiments", "0", "2"]))
+
+    assert cross_validated.train_experiments is None
+    assert named.train_experiments == [0, 2]
+
+
+def test_select_carries_no_training_split():
+    """`select` enumerates its own fold schedule and never reads the field; it must not inherit a
+    stale default from the shared config either."""
+    assert _build_config(build_parser().parse_args(["select"])).train_experiments is None
+
+
+def test_the_old_fit_subcommand_is_gone():
+    """The stage is named `simulate` everywhere now (it always wrote to results/simulate/); a
+    script still saying `fit` must fail loudly rather than silently do something else."""
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["fit", "--location", "yadnarie"])
 
 
 @pytest.mark.parametrize(
@@ -321,7 +346,7 @@ def test_fit_defaults_to_the_library_model():
 def test_removed_flags_are_gone(flag):
     """These were folded into fixed defaults or into --dust/--model; a stale script using one
     must fail loudly rather than silently ignore it."""
-    for command in ("select", "fit"):
+    for command in ("select", "simulate"):
         with pytest.raises(SystemExit):
             build_parser().parse_args([command, flag, "gravitational"])
 
@@ -374,9 +399,9 @@ def test_experiment_rejects_the_model_and_physics_options(flag):
         build_parser().parse_args(["experiment", flag, "gravitational"])
 
 
-@pytest.mark.parametrize("command", ["fit", "select"])
+@pytest.mark.parametrize("command", ["simulate", "select"])
 def test_the_model_workflows_keep_their_options_after_the_parent_split(command):
-    """The other half of the split guard: fit/select must be unchanged by it."""
+    """The other half of the split guard: simulate/select must be unchanged by it."""
     args = build_parser().parse_args(
         [command, "--model-type", "semi_physical", "--model", "gravitational", "--k-factor", "2.0", "--surface", "first"]
     )

@@ -4,8 +4,9 @@ Shared kernel for the HelioSoil analysis workflows.
 Holds the configuration, data loading, model construction, and fit/evaluate logic
 shared by the two workflow scripts:
 
-  - simulate.py        -- fit each model on the training campaign(s) and report
-    fitted parameters, performance statistics, and per-campaign plots.
+  - simulate.py        -- fit each model on the training campaign(s) (or, by default,
+    leave-one-campaign-out over every campaign) and report fitted parameters,
+    performance statistics, and per-campaign plots.
   - model_selection.py -- leave-n-campaigns-out cross-validation sweeping the
     number of training campaigns, plus out-of-sample-RMSE-ranked model comparison.
 
@@ -48,7 +49,7 @@ import json
 import logging
 import platform
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from itertools import combinations, product
 from typing import Any
@@ -80,14 +81,20 @@ PER_COMPONENT_SUBDIR = "per-component-dust"
 
 @dataclass
 class PipelineConfig:
-    """Shared, non-cross-validation configuration for both analysis workflows.
+    """Shared site/physics configuration for both analysis workflows.
 
     Derived paths (data_dir/file_prefix/parameter_file/site_name) follow the
     heliosoil analysis-script convention for a dataset named by `location`.
+
+    `train_experiments` is the only fold-related field: it names `simulate`'s training
+    campaigns, or None for its leave-one-campaign-out default. `model_selection` ignores
+    it and enumerates its own fold schedule.
     """
 
     location: str = "mountisa"  # "mountisa" | "carwarp" | "yadnarie" | "qut" | "ablrf" | "wodonga"
-    train_experiments: list = field(default_factory=lambda: [0])  # indices (into the sorted file list) used for training
+    # Indices (into the sorted file list) used for training. None -> leave-one-campaign-out
+    # cross-validation: `simulate` fits one model per campaign, each trained on every other one.
+    train_experiments: list | None = None
     train_mirrors: Any = None  # None -> model-aware default per run; explicit list overrides every run
     dust_type: str = "PM10"  # "PM10" or "PM2.5", selects the dust distribution in the parameter file
     k_factor: Any = "import"  # None sets equal to 1.0, "import" imports from the file
@@ -146,8 +153,15 @@ def uses_wind_variance(model_type, wind_components):
     """Only "constant_mean_wind" with an active wind-driven noise term ties sigma to
     wind direction x mirror orientation; every other configuration (constant_mean,
     semi_physical, or constant_mean_wind with only "gravitational") shares a single
-    sigma_dep process across mirrors and must train on one representative mirror."""
-    return model_type == "constant_mean_wind" and any(c in wind_components for c in ("normal_wind", "tangential_wind", "impaction_retention"))
+    sigma_dep process across mirrors and must train on one representative mirror.
+
+    wind_components is resolved rather than read directly, so None -- the library's default
+    gravitational + normal_wind, which is what a run with no --model expression fits -- is
+    judged on the components the model will actually be built with."""
+    if model_type != "constant_mean_wind":
+        return False
+    keys = resolve_component_keys(wind_components)
+    return any(c in keys for c in ("normal_wind", "tangential_wind", "impaction_retention"))
 
 
 def build_model(

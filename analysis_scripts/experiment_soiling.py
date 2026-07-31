@@ -9,10 +9,13 @@ meteorology and its soiling can be read side by side.
 Per run it adds, to results/experiment/{site}/{run_name}/:
   - soiling_summary.csv : one row per campaign, mirrors aggregated;
   - soiling_by_tilt.csv : one row per campaign and tilt;
-  - soiling_rate_vs_tilt.pdf, soiling_rate_by_orientation.pdf, reflectance_series.pdf.
+  - soiling_rate_vs_tilt.pdf, soiling_rate_by_orientation.pdf, reflectance_series.pdf;
+  - campaign_{f+1}/reflectance_tilt_NN.pdf : the same measurements as reflectance_series, one figure
+    per campaign and tilt, so the mirrors in it differ only by orientation. Same folder and filename
+    the simulate workflow uses for its measured-vs-predicted counterpart.
 
 Everything derives from one tidy per-mirror frame (`mirror_table`); both tables are groupby
-aggregations of it and all three figures are filters on it.
+aggregations of it and every figure is a filter on it.
 
 Loss is measured on the *soiling factor* rho/rho_nominal rather than on raw reflectance, so campaigns
 that started at different reflectance are comparable and, at the two sites with a re-cleaned
@@ -28,6 +31,7 @@ rho_initial/rho_final, Total Loss -> loss_pp, Soiling Rate -> soiling_rate_pp_da
 lowercase-underscore to match weather_summary.csv.
 """
 
+import os
 import re
 import dataclasses
 
@@ -62,9 +66,10 @@ _METRIC_KEYS = ["elapsed_days", "rho_initial", "rho_final", "sf_initial", "sf_fi
 VS_TILT_CAPTION = "marker: one mirror; line: per-tilt mean ± 1 s.d.; whole-campaign first-to-last endpoint rate"
 BY_ORIENTATION_CAPTION = (
     "bar: mean over that orientation's mirrors ± 1 s.d.; ●: one mirror; number in bar: n\n"
-    "groups pool every tilt, so compare orientations only where their tilts match (see soiling_by_tilt.csv)"
+    "groups pool every tilt, so compare orientations only where their tilts match (see soiling_by_tilt.csv "
+    "and reflectance_by_tilt.pdf)"
 )
-SERIES_CAPTION = "error bars: 95% CI on the mean of repeat measurements; dotted: nominal reflectance"
+AT_TILT_CAPTION = "trace: one mirror at this tilt, labelled by orientation; bars: 95% CI; raw ρ, unshifted"
 
 
 @dataclasses.dataclass
@@ -414,6 +419,29 @@ def plot_soiling_rate_by_orientation(mirrors: pd.DataFrame, files: list, tick_la
     return fig
 
 
+def _disambiguate(stems: list) -> list:
+    """`stems` with a trailing index on any label that occurs more than once, in the order given.
+
+    Geometry does not identify a mirror on its own -- two mirrors can share an orientation and a tilt
+    -- so without this a legend would name two traces the same and stop being a map onto them."""
+    return [f"{stem} ({stems[:i].count(stem) + 1})" if stems.count(stem) > 1 else stem for i, stem in enumerate(stems)]
+
+
+def series_labels(frame: pd.DataFrame, names: list) -> list:
+    """Legend labels for one campaign's mirrors: geometry ("SE 30°") rather than the workbook column
+    name ("OSE_M2_T30"), which says the same two things in a spelling only the workbook cares about.
+
+    A mirror missing half its geometry is labelled by the half it has, and by its raw name only when
+    it has neither -- qut's "Mirror_4" with no tilt on the sheet and none in the name."""
+    stems = []
+    for name in names:
+        code = frame["orientation"].get(name, NO_ORIENTATION)
+        tilt = frame["tilt_deg"].get(name, np.nan)
+        parts = [code if code != NO_ORIENTATION else "", f"{tilt:.0f}°" if np.isfinite(tilt) else ""]
+        stems.append(" ".join(part for part in parts if part) or str(name))
+    return _disambiguate(stems)
+
+
 def plot_reflectance_series(data: mp.LoadedData, mirrors: pd.DataFrame, tick_labels: list, site: str, fallback: float) -> plt.Figure:
     """Measured reflectance against time, one panel per campaign, one series per mirror.
 
@@ -436,12 +464,13 @@ def plot_reflectance_series(data: mp.LoadedData, mirrors: pd.DataFrame, tick_lab
             rho = np.asarray(rdat.average[f], dtype=float)
             sigma = np.asarray(rdat.sigma_of_the_mean[f], dtype=float)
             frame = mirrors[mirrors["campaign_index"] == f].set_index("mirror")
+            names = list(rdat.mirror_names[f])
+            labels = series_labels(frame, names)
 
-            for m, name in enumerate(rdat.mirror_names[f]):
+            for m, name in enumerate(names):
                 code = frame["orientation"].get(name, NO_ORIENTATION)
-                tilt = frame["tilt_deg"].get(name, np.nan)
                 color = colors.get(code, f"C{m}") if code != NO_ORIENTATION else f"C{m}"
-                label = f"{name} ({tilt:.0f}°)" if np.isfinite(tilt) else str(name)
+                label = labels[m]
                 # NaN points are simply not drawn, so a mirror installed mid-campaign starts partway
                 # across its panel -- the truth, rather than a gap-filled line.
                 ax.errorbar(
@@ -465,17 +494,115 @@ def plot_reflectance_series(data: mp.LoadedData, mirrors: pd.DataFrame, tick_lab
 
         axes[0].set_ylabel("Reflectance ρ [-]")
         fig.suptitle(f"{site} — Measured reflectance")
-        fig.text(0.5, 0.005, SERIES_CAPTION, ha="center", fontsize=8, color="0.35")
         fig.tight_layout(rect=(0, 0.03, 1, 1))
     return fig
+
+
+def tilt_figure_name(tilt: float) -> str:
+    """Filename of one campaign's measured-reflectance figure at one tilt.
+
+    Deliberately simulate.tilt_figure_name's stem minus the role/fold suffix, which names the fit
+    that drew a figure and has no counterpart in a workflow with no fit: a campaign_{f+1} folder
+    here and one there then hold the same filenames for the same tilts."""
+    return f"reflectance_tilt_{tilt:02.0f}.pdf"
+
+
+def plot_reflectance_at_tilt(
+    data: mp.LoadedData, mirrors: pd.DataFrame, f: int, tilt: float, campaign: str, site: str, fallback: float
+) -> plt.Figure | None:
+    """Measured reflectance against time for every mirror of campaign `f` at one tilt, or None when
+    that campaign has no mirror there.
+
+    The per-tilt cut of plot_reflectance_series, and the answer to the caveat printed on
+    soiling_rate_by_orientation.pdf -- its bars pool every tilt, so orientations may only be compared
+    where their tilts match. Here the figure *is* one tilt within one campaign, so its traces differ
+    by orientation and by nothing else, and the title says what was held fixed.
+
+    The measured-data counterpart of paper_specific_utilities.plot_reflectance_by_tilt, which the
+    simulate workflow writes into the same campaign_{f+1}/reflectance_tilt_NN.pdf slot. Two
+    deliberate differences, both because there is no model here: no dashed prediction and no fit
+    statistics, and y is raw rho rather than each trace shifted to start at 1 -- that shift is a
+    model-comparison device, and here it would contradict the raw rho the tables report and blank any
+    mirror whose first sample is NaN."""
+    rdat = data.reflect_data_total
+    # n_points >= 1 rather than the tables' >= 2: one measurement still draws a marker, and only a
+    # mirror with nothing at all should be missing from its tilt's figure.
+    frame = mirrors[(mirrors["campaign_index"] == f) & (mirrors["tilt_deg"] == tilt) & (mirrors["n_points"] >= 1)]
+    if frame.empty:
+        return None
+
+    times = np.asarray(rdat.times[f])
+    days = (times - times[0]) / np.timedelta64(1, "D")
+    rho = np.asarray(rdat.average[f], dtype=float)
+    sigma = np.asarray(rdat.sigma_of_the_mean[f], dtype=float)
+    columns = {name: m for m, name in enumerate(rdat.mirror_names[f])}
+    colors = psu._orientation_colors(data.files)
+
+    # Orientation alone: the tilt is in the title, so repeating it in every legend entry would be
+    # noise. A mirror without one keeps its name, which is all that is left to say about it.
+    stems = [code if code != NO_ORIENTATION else str(name) for name, code in zip(frame["mirror"], frame["orientation"])]
+
+    with plt.rc_context(FIGURE_RC):
+        fig, ax = plt.subplots(figsize=(6.0, 4.2))
+        for (_, mirror), label in zip(frame.iterrows(), _disambiguate(stems)):
+            m = columns[mirror["mirror"]]
+            code = mirror["orientation"]
+            color = colors.get(code, f"C{m}") if code != NO_ORIENTATION else f"C{m}"
+            ax.errorbar(days, rho[:, m], yerr=1.96 * sigma[:, m], marker="o", ms=4, lw=1.2, capsize=3, color=color, label=label)
+
+        nominal = smu._nominal_reflectance_series(rdat, f, fallback)
+        if nominal is not fallback:
+            ax.plot(days, np.asarray(nominal, dtype=float)[:, 0], color="0.6", ls=":", lw=1, label="nominal (reference)")
+        else:
+            ax.axhline(fallback, color="0.6", ls=":", lw=1, label="nominal (parameter file)")
+
+        ax.set_xlabel("Days since first measurement")
+        ax.set_ylabel("Reflectance ρ [-]")
+        ax.grid(alpha=0.4)
+        ax.set_axisbelow(True)
+        ax.legend(fontsize=8, ncol=2, loc="best")
+        ax.set_title(AT_TILT_CAPTION, color="0.35")
+        fig.suptitle(f"{site} — {campaign}, tilt {tilt:.0f}°")
+        fig.tight_layout()
+    return fig
+
+
+def write_tilt_figures(data: mp.LoadedData, mirrors: pd.DataFrame, run_dir: str, tick_labels: list, site: str, fallback: float, log=None) -> list:
+    """Write campaign_{f+1}/reflectance_tilt_NN.pdf for every (campaign, tilt) present and return
+    the paths written, relative to `run_dir`.
+
+    Tilts come from the per-mirror frame rather than from a fixed list, so there is nothing for a
+    caller to mis-specify and a campaign gets exactly the tilts it measured."""
+    usable = mirrors[mirrors["tilt_deg"].notna() & (mirrors["n_points"] >= 1)]
+    if log is not None and usable.empty:
+        log.warning("no per-tilt reflectance figures: no mirror has both a tilt and a finite measurement.")
+
+    written = []
+    for f in sorted(usable["campaign_index"].unique()):
+        frame = usable[usable["campaign_index"] == f]
+        campaign_dir = os.path.join(run_dir, f"campaign_{f + 1}")
+        for tilt in sorted(frame["tilt_deg"].unique()):
+            # The date alone, as on the other figures' ticks: the site is already in the suptitle,
+            # and campaign_label ("Yadnarie 12-11-24") would put it there twice.
+            fig = plot_reflectance_at_tilt(data, mirrors, f, tilt, tick_labels[f], site, fallback)
+            if fig is None:  # unreachable from here, but plot_reflectance_at_tilt is public
+                continue
+            os.makedirs(campaign_dir, exist_ok=True)
+            name = tilt_figure_name(tilt)
+            fig.savefig(os.path.join(campaign_dir, name), bbox_inches="tight")
+            plt.close(fig)
+            written.append(f"campaign_{f + 1}/{name}")
+        if log is not None:
+            log.info(f"{frame['campaign'].iloc[0]}: {len(frame['tilt_deg'].unique())} per-tilt reflectance figure(s) in campaign_{f + 1}/.")
+    return written
 
 
 # ------------------------------ entry point ------------------------------
 
 
 def write_outputs(cfg: mp.PipelineConfig, data: mp.LoadedData, run_dir: str, log, tick_labels: list, site: str) -> SoilingOutputs | None:
-    """Write the two soiling tables and the three figures, or return None when the site has no
-    usable reflectance data to summarise."""
+    """Write the two soiling tables, the three site-wide figures and the per-campaign per-tilt
+    reflectance figures, or return None when the site has no usable reflectance data to summarise."""
     if data.reflect_data_total is None:
         log.warning("no reflectance data loaded; the soiling summary is skipped.")
         return None
@@ -512,5 +639,7 @@ def write_outputs(cfg: mp.PipelineConfig, data: mp.LoadedData, run_dir: str, log
     fig = plot_reflectance_series(data, mirrors, tick_labels, site, fallback)
     fig.savefig(f"{run_dir}/reflectance_series.pdf", bbox_inches="tight")
     plt.close(fig)
+
+    write_tilt_figures(data, mirrors, run_dir, tick_labels, site, fallback, log=log)
 
     return SoilingOutputs(mirrors=mirrors, summary=summary, by_tilt=by_tilt)

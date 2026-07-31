@@ -13,7 +13,8 @@ Per run it writes, to results/experiment/{site}/{run_name}/:
   - wind_rose.pdf, one rose per campaign on a shared scale, where the site records wind direction;
   - weather_summary.csv: one row per campaign with its name ("Yadnarie 11-11-24"), duration in days,
     and, for every plotted variable, numeric mean/std columns plus a formatted "24.3 +/- 5.1" column;
-  - soiling_summary.csv, soiling_by_tilt.csv and three soiling figures (see experiment_soiling).
+  - soiling_summary.csv, soiling_by_tilt.csv, three soiling figures and one measured-reflectance
+    figure per campaign and tilt under campaign_{f+1}/ (see experiment_soiling).
 
 Wind direction is treated as the circular, frequently multi-modal quantity it is: calm samples are
 excluded (a vane reports nothing meaningful in still air, and some loggers write 0 deg for it), the
@@ -349,7 +350,7 @@ def run(cfg: mp.PipelineConfig, *, run_name: str | None, force: bool, run_metada
     actually recorded.
 
     Writes one violin per weather variable (a violin per campaign), the wind rose, the two soiling
-    tables and the three soiling figures under results/experiment/{site}/{run_name}/, the run
+    tables and the soiling figures under results/experiment/{site}/{run_name}/, the run
     settings + version to run_config.json, and the per-campaign sample counts and any data gaps to
     run.log."""
     cfg = _prepare_config(cfg)  # must precede load_data: it pins a dust_type the site has

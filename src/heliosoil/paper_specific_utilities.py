@@ -1024,8 +1024,14 @@ def regression_performance_stats(model, reflectance_data, experiments, mirrors=N
 
     Returns:
         dict with keys "MBE", "MAE", "RMSE" (daily soiling rate, soiling-factor per day),
-        "R2" (reflectance), and "N" (number of pooled reflectance observations).
+        "R2" (reflectance), and "N" (number of pooled reflectance observations). An empty
+        `experiments` yields NaN statistics over N=0 rather than an error: a split can
+        legitimately be empty (a model trained on every campaign has no test set), and that
+        is an absent statistic, not a failure.
     """
+    if len(experiments) == 0:
+        return {"MBE": np.nan, "MAE": np.nan, "RMSE": np.nan, "R2": np.nan, "N": 0}
+
     pi = reflectance_data.prediction_indices
     meas = reflectance_data.average
     sf = model.helios.soiling_factor
