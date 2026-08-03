@@ -5,6 +5,7 @@ import pandas as pd
 import pickle
 import soiling_model.base_models as smb
 import soiling_model.fitting as smf
+from soiling_model.utilities import _parse_dust_str
 
 # %% Plot for the paper
 plt.rc('xtick', labelsize=16)
@@ -739,7 +740,7 @@ def daily_soiling_rate( sim_dat: smb.simulation_inputs,
     df = pd.concat(df)
     df.sort_values(by="Time",inplace=True)
 
-    prototype_pm = getattr(sim_dat.dust,dust_type)[0]
+    prototype_pm = getattr(sim_dat.dust,_parse_dust_str(dust_type))[0]
     df['alpha'] = df[dust_type]/prototype_pm
     df['date'] = (df['Time'].dt.date)
     df['alpha2'] = df['alpha']**2
@@ -934,16 +935,21 @@ def daily_soiling_tilt_all_data( sim_dat: smb.simulation_inputs,
                                     M: int = 1000,
                                     dust_type="TSP",
                                     tilt:float = None,
-                                    trim_percents = None):
+                                    trim_percents = None,
+                                    max_daily_pm10 = None):
 
     # get daily sums for \alpha and \alpha^2
     df = [pd.read_excel(f,"Weather") for f in sim_dat.file_name.values()]
     df = pd.concat(df)
     df.sort_values(by="Time",inplace=True)
-
-    prototype_pm = getattr(sim_dat.dust,dust_type)[0]
-    df['alpha'] = df[dust_type]/prototype_pm
     df['date'] = (df['Time'].dt.date)
+
+    if max_daily_pm10 is not None:
+        exceed_dates = df.loc[df['PM10']>max_daily_pm10,'date'].unique() # dates with at least one PM10 reading above threshold
+        df = df[~df['date'].isin(exceed_dates)]
+
+    prototype_pm = getattr(sim_dat.dust,_parse_dust_str(dust_type))[0]
+    df['alpha'] = df[dust_type]/prototype_pm
     df['alpha2'] = df['alpha']**2
     daily_sum_alpha = (df.groupby('date')['alpha'].sum()).values
     daily_sum_alpha2 = (df.groupby('date')['alpha2'].sum()).values

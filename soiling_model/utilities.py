@@ -589,13 +589,14 @@ def _parse_dust_str(dust_type):
             attr = "PM"+"_".join(attr.split('.'))
     return attr
 
-def wind_rose(simulation_data,exp_idx):
+def wind_rose(simulation_data,exp_idx, mask=None):
     """
     Generate a wind rose plot from the provided simulation data.
 
     Args:
         simulation_data (pandas.DataFrame): A DataFrame containing the simulation data, including wind direction and wind speed.
         exp_idx (int): The index of the experiment to plot.
+        mask (array-like, optional): Boolean mask to filter data points. Defaults to None (no filtering).
 
     Returns:
         matplotlib.figure.Figure, windrose.WindroseAxes: The figure and axes objects for the wind rose plot.
@@ -604,6 +605,11 @@ def wind_rose(simulation_data,exp_idx):
     fig = plt.figure()
     wd = simulation_data.wind_direction[exp_idx]
     ws = simulation_data.wind_speed[exp_idx]
+
+    if mask is not None:
+        wd = wd[mask]
+        ws = ws[mask]
+
     wax = WindroseAxes.from_ax(fig=fig)
     wax.bar(wd,ws,normed=True)
     wax.set_legend()

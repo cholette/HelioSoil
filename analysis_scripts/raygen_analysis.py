@@ -25,8 +25,8 @@ import re
 # %% Analysis setup
 
 # CHOOSE RAYGEN LOCATION (Carwarp or Yadnarie)
-raygen_site = "Carwarp"
-# raygen_site = "Yadnarie"
+# raygen_site = "Carwarp"
+raygen_site = "Yadnarie"
 
 # CHOOSE PM FRACTION TO USE FOR FITTING
 # dust_type = "PM10" # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
@@ -35,11 +35,11 @@ dust_type = "PM2.5" # choose PM fraction to use for analysis --> PMT, PM10, PM2.
 # CHOOSE WHETHER TO USE DAILY AVERAGE OF REFLECTANCE VALUES OR ARVO DATA ONLY
 DAILY_AVERAGE = True
 
-# CHOOSE TRAIN EXPERIMENTS 
+# CHOOSE TRAIN EXPERIMENTS
 train_experiments = [0] # indices for training experiments from 0 to len(files)-1
 
 # CHOOSE TRAIN MIRRORS (default = True, otherwise choose individual mirrors)
-train_mirror_default = True # Set the default train mirrors for Carwarp ["ON_M1_T00"] and Yadnarie ["ONE_M2_T00"] 
+train_mirror_default = True # Set the default train mirrors for Carwarp ["ON_M1_T00"] and Yadnarie ["ONE_M2_T00"]
 # train_mirrors_custom = ["OAV_M1_T00"] # WORKS ONLY IF train_mirror_defaul is False
 train_mirrors_custom = ["OAV_M2_T60"] # WORKS ONLY IF train_mirror_defaul is False
 # train_mirrors_custom = ["ONW_M4_T00","OSE_M4_T00","ONE_M2_T00"] # WORKS ONLY IF train_mirror_defaul is False
@@ -68,7 +68,7 @@ site_paths = {
         "all_intervals": np.array([
             [np.datetime64('2024-01-30T10:00:00'), np.datetime64('2024-02-05T08:00:00')], # January 2024 (first experiments --- nothing to remove)
             [np.datetime64('2024-06-06T17:00:00'), np.datetime64('2024-06-11T08:00:00')]], # June 2024 (second experiments --- already removed rainy data - consider adding them back)
-            dtype='datetime64[m]') 
+            dtype='datetime64[m]')
     },
     "Yadnarie": {
         "sp_save_file": f"{main_directory}/results/sp_fitting_results_yadnarie",
@@ -100,7 +100,7 @@ reflectometer_incidence_angle = 15 # [deg] angle of incidence of reflectometer
 reflectometer_acceptance_angle = 12.5e-3 # [rad] half acceptance angle of reflectance measurements
 second_surf = True # True if using the second-surface model. Otherwise, use first-surface
 
-time_to_remove_at_end = [0,0]  # time to be removed for each experiment, in hours
+time_to_remove_at_end = [0,0,0,0,0]  # time to be removed for each experiment, in hours
 k_factor = "import" # None sets equal to 1.0, "import" imports from the file
 
 
@@ -110,7 +110,7 @@ files,all_intervals,exp_mirrors,all_mirrors = smu.get_training_data(d,"experimen
 orientation = [ [s[1:1+site_paths[raygen_site]['compass']] for s in mirrors] for mirrors in exp_mirrors]
 
 testing_intervals = all_intervals
-        
+
 Nfiles = len(files)
 extract = lambda x,ind: [x[ii] for ii in ind]
 files_train = extract(files,train_experiments)
@@ -134,15 +134,15 @@ reflect_data_train = smb.reflectance_measurements(  files_train,
                                                     import_tilts=True,
                                                     column_names_to_import=train_mirrors
                                                     )
-# %% Trim training data 
+# %% Trim training data
 sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                                 reflect_data_train,
-                                                                training_intervals 
+                                                                training_intervals
                                                             )
-                                                            
+
 sim_data_train,reflect_data_train = smu.trim_experiment_data(   sim_data_train,
                                                                 reflect_data_train,
-                                                                training_intervals 
+                                                                training_intervals
                                                             )
 
 
@@ -174,7 +174,7 @@ if HELIOSTATS:
     n_meas = 36.0
 else:
     n_meas = 6.0
-    
+
 reflect_data_total = smb.reflectance_measurements(  files,
                                                     sim_data_total.time,
                                                     number_of_measurements=n_meas,
@@ -190,10 +190,10 @@ if DAILY_AVERAGE:
                                            sim_data_total.time,
                                            dt=None)
 
-# %% Trim data and plot                                                           
+# %% Trim data and plot
 sim_data_total,reflect_data_total = smu.trim_experiment_data(   sim_data_total,
                                                                 reflect_data_total,
-                                                                all_intervals 
+                                                                all_intervals
                                                             )
 
 for ii,experiment in enumerate(sim_data_total.dt.keys()):
@@ -206,13 +206,13 @@ for ii,experiment in enumerate(sim_data_total.dt.keys()):
     # ax.set_title(f"Wind for file {files[experiment]}")
 
 # %% Daily average of reflectance values and trimming of simulation inputs (Training data)
-    
+
 if DAILY_AVERAGE:
     reflect_data_train = smu.daily_average(reflect_data_train,sim_data_train.time,sim_data_train.dt)    # compute daily_averaged values of reflectance to avoid morning-afternoon (not understood) recoveries
     # sim_data_train , _ = smu.trim_experiment_data(      sim_data_train,                                 # trim the correspoding simulation inputs to align with the new reflectance values (start and end time can be modified by the average)
     #                                                 reflect_data_train,
     #                                                 "reflectance_data")
-    
+
 # %% Daily average of reflectance values and trimming of simulation inputs (Total data)
 
 if DAILY_AVERAGE:
@@ -241,7 +241,7 @@ if DAILY_AVERAGE:
         else:
             fig,ax = smu.plot_experiment_data(sim_data_total,reflect_data_total,ii)
 
-# %% PLOT EXPERIMENTAL DATA 
+# %% PLOT EXPERIMENTAL DATA
 
 for f in range(len(reflect_data_total.average)):
     lgd_size=10
@@ -249,18 +249,18 @@ for f in range(len(reflect_data_total.average)):
 
     ave = reflect_data_total.average[f]
     t = reflect_data_total.times[f]
-    # if t[0] 
+    # if t[0]
     std = reflect_data_total.sigma[f]
-    lgd_label = [re.sub(r"_T\d{2,3}", "", lg.replace("O", "").replace("_M", "")) for lg in exp_mirrors[f]]      
+    lgd_label = [re.sub(r"_T\d{2,3}", "", lg.replace("O", "").replace("_M", "")) for lg in exp_mirrors[f]]
     for ii in range(ave.shape[1]):
         if (lgd_label[ii]=='W1' and pd.Timestamp(t[0].astype('datetime64[ns]')).month==1) or (lgd_label[ii]=='W2' and pd.Timestamp(t[0].astype('datetime64[ns]')).month==6) or lgd_label[ii]=='NE1':
             ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],linestyle='dashed',marker='o',capsize=4.0)
         elif 'AV' in lgd_label[ii]:
-            continue        
+            continue
         else:
             ax[0].errorbar(t,ave[:,ii],yerr=1.96*std[:,ii],label=lgd_label[ii],marker='o',capsize=4.0)
-    ax[0].grid(True) 
-    # label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0]) 
+    ax[0].grid(True)
+    # label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0])
     label_str = "Measured Reflectance"
     ax[0].set_ylabel(label_str)
     ax[0].legend(fontsize=lgd_size,loc='center right',bbox_to_anchor=(1.15,0.5))
@@ -273,9 +273,9 @@ for f in range(len(reflect_data_total.average)):
         title_plot += ' - HELIOSTATS'
     plt.suptitle(title_plot,fontsize = 20,x=0.5,y=0.92)
 
-    ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")#     if f == 0 else '') 
+    ax[1].plot(sim_data_total.time[f],sim_data_total.dust_concentration[f],color='brown',label="Measurements")#     if f == 0 else '')
     # f==0 and ...
-    ax[1].axhline(y=sim_data_total.dust_concentration[f].mean(),color='brown',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.dust_concentration[f].mean())) 
+    ax[1].axhline(y=sim_data_total.dust_concentration[f].mean(),color='brown',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.dust_concentration[f].mean()))
     label_str = r'{0:s} [$\mu g\,/\,m^3$]'.format(sim_data_total.dust_type[0])
     ax[1].set_ylabel(label_str,color='brown',fontsize=20)
     ax[1].tick_params(axis='y', labelcolor='brown')
@@ -286,14 +286,14 @@ for f in range(len(reflect_data_total.average)):
 
     ax[2].plot(sim_data_total.time[f],sim_data_total.wind_speed[f],color='green',label="Measurements")#     if f == 0 else '')
     # f==0 and ...
-    ax[2].axhline(y=sim_data_total.wind_speed[f].mean(),color='green',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean())) 
+    ax[2].axhline(y=sim_data_total.wind_speed[f].mean(),color='green',ls='--',label = r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean()))
     label_str = r'Wind Speed [$m\,/\,s$]'
     ax[2].set_ylabel(label_str,color='green')
     ax[2].tick_params(axis='y', labelcolor='green')
     ax[2].grid(True)
     ax[2].legend(fontsize=lgd_size)
 
-    ax[3].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")#     if f == 0 else '') 
+    ax[3].plot(sim_data_total.time[f],sim_data_total.relative_humidity[f],color='blue',label="Measurements")#     if f == 0 else '')
     # f==0 and ...
     ax[3].axhline(y=sim_data_total.relative_humidity[f][~np.isnan(sim_data_total.relative_humidity[f])].mean(),color='blue',ls='--',label = r"Average = {0:.1f}".format(sim_data_total.relative_humidity[f][~np.isnan(sim_data_total.relative_humidity[f])].mean()))
     label_str = r'Relative Humidity [%]'
@@ -364,7 +364,7 @@ for ii in range(len(reflect_data_total.average)):
 
 # %% Plot reflectance losses in each interval for train mirrors (with mirror rig), or horizontal heliostat (H58)
 if HELIOSTATS==True:
-    train_mirrors = ['H58']  
+    train_mirrors = ['H58']
 for m,mir in enumerate(train_mirrors):
     for exp in sim_data_total.time.keys():
         diff_array_times = -np.diff(reflect_data_total.times[exp])
@@ -408,7 +408,7 @@ imodel_constant.helios_angles(sim_data_train,reflect_data_train,second_surface=s
 file_inds = np.arange(len(files_train))
 imodel_constant = smu.set_extinction_coefficients(imodel_constant,ext_weights,file_inds)
 
-# %% Fit semi-physical model 
+# %% Fit semi-physical model
 log_param_hat,log_param_cov = imodel.fit_mle(   sim_data_train,
                                                 reflect_data_train,
                                                 transform_to_original_scale=False)
@@ -429,7 +429,7 @@ imodel.save(f"{sp_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_e
             training_simulation_data=sim_data_train,
             training_reflectance_data=reflect_data_train)
 
-# %% Fit constant mean model 
+# %% Fit constant mean model
 log_param_hat_con,log_param_cov_con = imodel_constant.fit_mle(  sim_data_train,
                                                                 reflect_data_train,
                                                                 transform_to_original_scale=False)
@@ -454,7 +454,7 @@ if DAILY_AVERAGE:
     sim_data_train , reflect_data_train = smu.trim_experiment_data( sim_data_train,      # trim the correspoding simulation inputs to align with the new reflectance values (start and end time can be modified by the average)
                                                                     reflect_data_train,
                                                                     "reflectance_data")
-    
+
 # %% updated imodel with new daily-averaged training data
 if DAILY_AVERAGE:
     imodel.helios_angles(sim_data_train,reflect_data_train,second_surface=second_surf)
@@ -508,8 +508,8 @@ if HELIOSTATS==True:
                                     orientation,
                                     legend_shift=(0.04,0),
                                     yticks=(0.97,0.98,0.99,1.0))#0.97,0.98,
-    fig.set_size_inches(10, 20) 
-    
+    fig.set_size_inches(10, 20)
+
     df_hel_sp = smu.loss_hel_table_from_sim(ref_hel_sp,sim_data_total)
     if save_output:
         df_hel_sp.to_csv(f"{sp_save_file}_HEL_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
@@ -523,7 +523,7 @@ else:
                                 orientation,
                                 legend_shift=(0.04,0),
                                 # yticks=(0.75,0.80,0.85,0.90,0.95,1.00))
-                                yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) # 
+                                yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) #
 
     df_sim_sp = smu.loss_table_from_sim(ref_simulation_sp,sim_data_total)
     if save_output:
@@ -536,7 +536,7 @@ if save_output:
 
 plt.show()
 
-# %% 
+# %%
 
 # df_plot_sp =smu.loss_table_from_fig(ref_simulation_sp,sim_data_total) # NEED TO BE FIXED
 
@@ -552,7 +552,7 @@ if HELIOSTATS:
                                     train_mirrors,
                                     orientation,
                                     legend_shift=(0.04,0),
-                                    yticks=(0.97,0.98,0.99,1.02))   
+                                    yticks=(0.97,0.98,0.99,1.02))
     df_hel_cm = smu.loss_hel_table_from_sim(ref_hel_cm,sim_data_total)
     if save_output:
         df_hel_cm.to_csv(f"{cm_save_file}_HEL_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
@@ -566,8 +566,8 @@ else:
                                 orientation,
                                 legend_shift=(0.04,0),
                                 # yticks=(0.75,0.80,0.85,0.90,0.95,1.00))
-                                yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) # 
-    
+                                yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) #
+
     df_sim_cm = smu.loss_table_from_sim(ref_simulation_cm,sim_data_total)
     if save_output:
         df_sim_cm.to_csv(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
@@ -898,8 +898,8 @@ plt.show()
 #                                     orientation,
 #                                     legend_shift=(0.04,0),
 #                                     yticks=(0.97,0.98,0.99,1.0))#0.97,0.98,
-#     fig.set_size_inches(10, 20) 
-    
+#     fig.set_size_inches(10, 20)
+
 #     df_hel_sp = smu.loss_hel_table_from_sim(ref_hel_sp,sim_data_total)
 #     if save_output:
 #         df_hel_sp.to_csv(f"{sp_save_file}_HEL_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
@@ -913,7 +913,7 @@ plt.show()
 #                                 orientation,
 #                                 legend_shift=(0.04,0),
 #                                 # yticks=(0.75,0.80,0.85,0.90,0.95,1.00))
-#                                 yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) # 
+#                                 yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) #
 
 #     df_sim_sp = smu.loss_table_from_sim(ref_simulation_sp,sim_data_total)
 #     if save_output:
@@ -926,7 +926,7 @@ plt.show()
 
 # plt.show()
 
-# # %% 
+# # %%
 
 # # df_plot_sp =smu.loss_table_from_fig(ref_simulation_sp,sim_data_total) # NEED TO BE FIXED
 
@@ -942,7 +942,7 @@ plt.show()
 #                                     train_mirrors,
 #                                     orientation,
 #                                     legend_shift=(0.04,0),
-#                                     yticks=(0.97,0.98,0.99,1.02))   
+#                                     yticks=(0.97,0.98,0.99,1.02))
 #     df_hel_cm = smu.loss_hel_table_from_sim(ref_hel_cm,sim_data_total)
 #     if save_output:
 #         df_hel_cm.to_csv(f"{cm_save_file}_HEL_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)
@@ -956,8 +956,8 @@ plt.show()
 #                                 orientation,
 #                                 legend_shift=(0.04,0),
 #                                 # yticks=(0.75,0.80,0.85,0.90,0.95,1.00))
-#                                 yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) # 
-    
+#                                 yticks=(0.94,0.95,0.96,0.97,0.98,0.99,1.00)) #
+
 #     df_sim_cm = smu.loss_table_from_sim(ref_simulation_cm,sim_data_total)
 #     if save_output:
 #         df_sim_cm.to_csv(f"{cm_save_file}_{dust_type.replace('.', '-')}{'_train_'+str(train_experiments)}{'_'+train_mirrors[0][-3:]}{'_daily' if DAILY_AVERAGE else ''}.csv", index=False)

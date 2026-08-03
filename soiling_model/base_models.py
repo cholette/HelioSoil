@@ -273,11 +273,23 @@ class physical_base(soiling_base):
                 Ntimes = helios.tilt[f].shape[1]
                 helios.pdfqN[f] = cumulative_trapezoid(y=helios.pdfqN[f],dx=dt[f],axis=1,initial=0) # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
                 for h in range(Nhelios):
+                    # Tracking heliostats have time-varying tilt (unlike a fixed-tilt mirror rig, where tilt is
+                    # constant). For those, a removal event should only clear what has accumulated since the
+                    # last event, not disable all future deposition of that diameter.
+                    tracking_heliostat = np.ptp(helios.tilt[f][h,:]) > 1e-6
                     for k in range(Ntimes):
                         mom_removal = np.sin(rad(helios.tilt[f][h,k]))* F_gravity*np.sqrt((D_meters**2)/4-radius_sep**2) # [Nm] removal moment exerted by gravity at each tilt for each diameter
                         mom_adhesion =  (F_adhesion+F_gravity*np.cos(rad(helios.tilt[f][h,k])))*radius_sep             # [Nm] adhesion moment
-                        helios.pdfqN[f][h,k:,mom_adhesion<mom_removal] = 0 # ALL dust desposited at this diameter up to this point falls off
-                        # if any(mom_adhesion<mom_removal):
+                        removed = mom_adhesion<mom_removal
+                        if tracking_heliostat:
+                            # NOTE: mixing the h,k: slice with the removed boolean mask in one index (as below)
+                            # would reorder axes, since numpy moves a boolean-indexed axis to the front when it is
+                            # separated from another index by a slice. Apply the mask as a second step on an
+                            # already basic-indexed view instead, to keep axes aligned for the subtraction.
+                            helios.pdfqN[f][h,k:,:][:,removed] -= helios.pdfqN[f][h,k,removed] # reset accumulated deposit for this diameter to zero at this instant, but allow future deposition to resume
+                        else:
+                            helios.pdfqN[f][h,k:,removed] = 0 # ALL dust desposited at this diameter up to this point falls off
+                        # if any(removed):
                         #     _print_if("Some dust is removed",verbose)
 
 
@@ -775,8 +787,8 @@ class dust:
 
         plt.xscale('log')
         ax2[-1].set_xticks(10.0**np.arange(np.log10(D_dust[0]),np.log10(D_dust[-1]),1))
-        plt.tight_layout()
         fig.suptitle("Number and Mass PDFs")
+        plt.tight_layout()
 
         return fig,ax1,ax2
 
