@@ -2660,21 +2660,24 @@ class ReflectanceMeasurements:
             "description": "A fine grid of times where reflectance measurements are desired (e.g. at times where simulations are available)."
         },
     )
+    # The three fields below, and imported_column_names, are tested against None in
+    # __post_init__ / import_reflectance_data, so their default must be None rather than
+    # an empty list.
     number_of_measurements: Optional[List[float]] = field(
-        default_factory=list,
+        default=None,
         metadata={
             "description": "Number of measurements for each file. This should be a float for later operations."
         },
     )
     reflectometer_incidence_angle: Optional[List[float]] = field(
-        default_factory=list,
+        default=None,
         metadata={
             "description": "Incidence angle of the reflectometer for each file.",
             "units": "degrees",
         },
     )
     reflectometer_acceptance_angle: Optional[List[float]] = field(
-        default_factory=list,
+        default=None,
         metadata={
             "description": "Half-angle describing the (conical) acceptance solid angle of the reflectometer ",
             "units": "radians",
@@ -2682,9 +2685,12 @@ class ReflectanceMeasurements:
     )
     import_tilts: bool = False
     imported_column_names: Optional[List[str]] = field(
-        default_factory=list,
+        default=None,
         metadata={
-            "description": "List of column names to import from the reflectance data files."
+            "description": (
+                "List of column names to import from the reflectance data files. None "
+                "imports every column except the time column."
+            )
         },
     )
     verbose: bool = True
@@ -2738,6 +2744,175 @@ class ReflectanceMeasurements:
             column_names_to_import=self.imported_column_names,
         )
 
+    def _populate_experiment(
+        self,
+        index: int,
+        times: np.ndarray,
+        average: np.ndarray,
+        sigma: np.ndarray,
+        mirror_names: List[str],
+        time_grid: Any,
+        incidence_angle: float,
+        acceptance_angle: float,
+        tilts: Optional[np.ndarray] = None,
+    ):
+        """
+        Fills the per-experiment dictionaries from arrays.
+
+        Shared by the Excel importer and by ``from_arrays``.
+
+        Args:
+            index: Experiment key.
+            times: Measurement times, shape (n_measurements,).
+            average: Mean reflectance as a **fraction**, not a percentage, shape
+                (n_measurements, n_mirrors). The Excel importer divides by 100 before
+                calling.
+            sigma: Standard deviation of the reflectance measurements, same shape and
+                units as ``average``.
+            mirror_names: One name per mirror.
+            time_grid: Simulation time grid, used to locate each measurement.
+            incidence_angle: Reflectometer incidence angle [degrees].
+            acceptance_angle: Reflectometer acceptance half-angle [radians].
+            tilts: Optional tilts, shape (n_mirrors, n_times) on the simulation grid.
+
+        Notes:
+            ``number_of_measurements[index]`` must already be set, since
+            ``sigma_of_the_mean`` divides by its square root.
+        """
+        self.times[index] = np.asarray(times)
+        self.mirror_names[index] = list(mirror_names)
+
+        average = np.asarray(average, dtype=float)
+        sigma = np.asarray(sigma, dtype=float)
+
+        # Ensure 2D arrays for both single and multiple columns
+        if average.ndim == 1:
+            self.average[index] = average.reshape(-1, 1)
+            self.sigma[index] = sigma.reshape(-1, 1)
+        else:
+            self.average[index] = average
+            self.sigma[index] = sigma
+
+        # Calculate delta_ref with proper dimensions
+        self.delta_ref[index] = np.vstack(
+            (
+                np.zeros((1, self.average[index].shape[1])),
+                -np.diff(self.average[index], axis=0),
+            )
+        )
+
+        # Set up prediction indices and times
+        time_grid = np.asarray(time_grid)
+        self.prediction_indices[index] = []
+        self.prediction_times[index] = []
+        for m in self.times[index]:
+            self.prediction_indices[index].append(np.argmin(np.abs(m - time_grid)))
+        self.prediction_times[index].append(time_grid[self.prediction_indices[index]])
+
+        # Calculate initial reflectance (rho0), handling NaN values
+        self.rho0[index] = np.nanmax(self.average[index], axis=0)
+
+        # Set reflectometer parameters
+        self.reflectometer_incidence_angle[index] = incidence_angle
+        self.reflectometer_acceptance_angle[index] = acceptance_angle
+        self.sigma_of_the_mean[index] = self.sigma[index] / np.sqrt(
+            self.number_of_measurements[index]
+        )
+
+        if tilts is not None:
+            self.tilts[index] = np.asarray(tilts)
+
+    @classmethod
+    def from_arrays(
+        cls,
+        times: List[Any],
+        average: List[np.ndarray],
+        sigma: List[np.ndarray],
+        time_grids: List[Any],
+        tilts: Optional[List[np.ndarray]] = None,
+        mirror_names: Optional[List[List[str]]] = None,
+        number_of_measurements: Any = 1.0,
+        reflectometer_incidence_angle: Any = 0.0,
+        reflectometer_acceptance_angle: Any = 0.0,
+        names: Optional[List[str]] = None,
+    ) -> "ReflectanceMeasurements":
+        """
+        Builds a ReflectanceMeasurements from arrays instead of Excel files.
+
+        For synthetic data, tests, and any workflow that has measurements in memory. The
+        per-experiment fields are filled by the same ``_populate_experiment`` the Excel
+        importer uses, so the two constructors agree by construction.
+
+        Args:
+            times: Measurement times for each experiment.
+            average: Mean reflectance for each experiment as a **fraction**, shape
+                (n_measurements, n_mirrors). Note the Excel sheets are in percent and are
+                converted on import; no conversion happens here.
+            sigma: Measurement standard deviations, same shapes and units as ``average``.
+            time_grids: Simulation time grid for each experiment.
+            tilts: Optional tilts for each experiment, shape (n_mirrors, n_times).
+            mirror_names: Optional names; defaults to "mirror_0", "mirror_1", ...
+            number_of_measurements: Repeats behind each mean, per experiment or global.
+            reflectometer_incidence_angle: Incidence angle [degrees], per experiment or
+                global.
+            reflectometer_acceptance_angle: Acceptance half-angle [radians], per
+                experiment or global.
+            names: Optional labels used in place of file paths.
+
+        Returns:
+            ReflectanceMeasurements: A populated instance.
+
+        Raises:
+            ValueError: If the per-experiment lists have inconsistent lengths.
+        """
+        average = _ensure_list(average)
+        sigma = _ensure_list(sigma)
+        times = _ensure_list(times)
+        time_grids = _ensure_list(time_grids)
+        n = len(average)
+
+        for label, supplied in (
+            ("sigma", sigma),
+            ("times", times),
+            ("time_grids", time_grids),
+        ):
+            if len(supplied) != n:
+                raise ValueError(
+                    f"{label} has {len(supplied)} entries but average has {n}; one entry "
+                    "per experiment is required."
+                )
+
+        self = cls()  # empty: __post_init__ imports nothing when there are no files
+        self.files = list(names) if names is not None else [f"array_{ii}" for ii in range(n)]
+        self.number_of_measurements = _import_option_helper(self.files, number_of_measurements)
+        self.reflectometer_incidence_angle = _import_option_helper(
+            self.files, reflectometer_incidence_angle
+        )
+        self.reflectometer_acceptance_angle = _import_option_helper(
+            self.files, reflectometer_acceptance_angle
+        )
+
+        for ii in range(n):
+            columns = np.asarray(average[ii]).reshape(len(times[ii]), -1).shape[1]
+            if mirror_names is not None:
+                names_ii = mirror_names[ii]
+            else:
+                names_ii = [f"mirror_{jj}" for jj in range(columns)]
+
+            self._populate_experiment(
+                ii,
+                times[ii],
+                average[ii],
+                sigma[ii],
+                names_ii,
+                time_grids[ii],
+                self.reflectometer_incidence_angle[ii],
+                self.reflectometer_acceptance_angle[ii],
+                tilts=None if tilts is None else tilts[ii],
+            )
+
+        return self
+
     def import_reflectance_data(
         self,
         time_grids: List[Any],
@@ -2766,7 +2941,7 @@ class ReflectanceMeasurements:
                 None,
             )
             if time_column is not None:
-                self.times[ii] = reflectance_data["Average"][time_column].values
+                times = reflectance_data["Average"][time_column].values
             else:
                 raise ValueError(f"No 'Time' or 'Timestamp' column found in file {fpath}")
 
@@ -2775,51 +2950,33 @@ class ReflectanceMeasurements:
                 # Extract selected columns
                 avg_data = reflectance_data["Average"][column_names_to_import].values / 100.0
                 sig_data = reflectance_data["Sigma"][column_names_to_import].values / 100.0
-                self.mirror_names[ii] = column_names_to_import
+                names = column_names_to_import
             else:
                 # Extract all columns except the first (time) column
                 avg_data = reflectance_data["Average"].iloc[:, 1:].values / 100.0
                 sig_data = reflectance_data["Sigma"].iloc[:, 1:].values / 100.0
-                self.mirror_names[ii] = list(reflectance_data["Average"].keys())[1:]
-
-            # Ensure 2D arrays for both single and multiple columns
-            if avg_data.ndim == 1:
-                self.average[ii] = avg_data.reshape(-1, 1)
-                self.sigma[ii] = sig_data.reshape(-1, 1)
-            else:
-                self.average[ii] = avg_data
-                self.sigma[ii] = sig_data
-
-            # Calculate delta_ref with proper dimensions
-            self.delta_ref[ii] = np.vstack(
-                (
-                    np.zeros((1, self.average[ii].shape[1])),
-                    -np.diff(self.average[ii], axis=0),
-                )
-            )
-
-            # Set up prediction indices and times
-            self.prediction_indices[ii] = []
-            self.prediction_times[ii] = []
-            for m in self.times[ii]:
-                self.prediction_indices[ii].append(np.argmin(np.abs(m - time_grids[ii])))
-            self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
-
-            # Calculate initial reflectance (rho0), handling NaN values
-            self.rho0[ii] = np.nanmax(self.average[ii], axis=0)
-
-            # Set reflectometer parameters
-            self.reflectometer_incidence_angle[ii] = incidence_angles[ii]
-            self.reflectometer_acceptance_angle[ii] = acceptance_angles[ii]
-            self.sigma_of_the_mean[ii] = self.sigma[ii] / np.sqrt(self.number_of_measurements[ii])
+                names = list(reflectance_data["Average"].keys())[1:]
 
             # Import tilts if requested
+            tilts = None
             if import_tilts:
-                tilt_data = pd.read_excel(fpath, sheet_name="Tilts")[self.mirror_names[ii]].values
+                tilt_data = pd.read_excel(fpath, sheet_name="Tilts")[names].values
                 if tilt_data.ndim == 1:
-                    self.tilts[ii] = tilt_data.reshape(1, -1)  # Single row becomes (1, n_times)
+                    tilts = tilt_data.reshape(1, -1)  # Single row becomes (1, n_times)
                 else:
-                    self.tilts[ii] = tilt_data.transpose()  # Shape becomes (n_heliostats, n_times)
+                    tilts = tilt_data.transpose()  # Shape becomes (n_heliostats, n_times)
+
+            self._populate_experiment(
+                ii,
+                times,
+                avg_data,
+                sig_data,
+                names,
+                time_grids[ii],
+                incidence_angles[ii],
+                acceptance_angles[ii],
+                tilts=tilts,
+            )
 
     def get_experiment_subset(self, idx):
         attributes = [
