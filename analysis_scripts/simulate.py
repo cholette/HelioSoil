@@ -40,7 +40,6 @@ validation model-comparison workflow.
 """
 
 import os
-import copy
 
 import numpy as np
 import pandas as pd
@@ -87,37 +86,9 @@ def tilt_figure_name(tilt: float, role: str, fold: int | None = None) -> str:
     return f"reflectance_tilt_{tilt:02.0f}_{suffix}.pdf"
 
 
-class FoldStitchedModel:
-    """A model-shaped view of the cross-validation's out-of-sample predictions: every campaign's
-    prediction taken from the fold that held that campaign out.
-
-    plot_for_paper, plot_reflectance_by_tilt and regression_performance_stats each take a single
-    fitted model, so the only way to show or score the whole site out-of-sample at once is to hand
-    them one object whose per-campaign predictions come from different fits. Everything but the
-    predictions is fold-invariant (every fold ends by re-running helios_angles on the full
-    evaluation data), so tilt/azimuth/nominal_reflectance are taken from `template`, an arbitrary
-    fold's fitted model.
-
-    predict_soiling_factor is a no-op on purpose: both plotting helpers call it on entry, which
-    would otherwise overwrite the stitched predictions with the template fold's own."""
-
-    def __init__(self, template, soiling_factor: dict, prediction_variance: dict):
-        self._template = template
-        # Shallow copy, then new dicts for the two stitched fields: the template's own predictions
-        # must stay untouched, since it is a real fitted model the caller may still be using.
-        self.helios = copy.copy(template.helios)
-        self.helios.soiling_factor = dict(soiling_factor)
-        self.helios.soiling_factor_prediction_variance = dict(prediction_variance)
-
-    def predict_soiling_factor(self, *args, **kwargs) -> None:
-        """No-op: the stitched predictions are already the out-of-sample ones."""
-
-    def __getattr__(self, name):
-        # Only reached for attributes this class does not define. The underscore guard keeps a
-        # partially-initialised instance (during copy/pickle, say) from recursing on _template.
-        if name.startswith("_"):
-            raise AttributeError(name)
-        return getattr(self._template, name)
+# Shared with model_selection's cross-validation, which builds the same stitched view to
+# compute its pooled out-of-sample statistic.
+FoldStitchedModel = mp.FoldStitchedModel
 
 
 def _abs_rate_error_by_tilt(model, rdat, experiments) -> dict:

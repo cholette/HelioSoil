@@ -13,6 +13,16 @@ results/model_select/{site}/{run_name}/{dust_type}/{label}/:
   - cross_validation_summary.pdf : out-of-sample RMSE (daily soiling rate) and R2
     (reflectance) vs number of training campaigns.
 
+Two estimators appear in the summary and they are not interchangeable. The `*_mean`/`*_std`
+columns reduce the per-fold statistics, weighting each fold equally. The `*_pooled` columns
+score every held-out prediction in one pass, weighting each observation equally; they are
+defined only on the leave-one-campaign-out row (n_train = C-1), the one schedule under which
+each campaign is held out exactly once, and are identical to simulate.py's cv_pooled row.
+They diverge whenever folds carry different observation counts. R2 is reported pooled only:
+each fold's R2 is normalised by its own held-out campaign's reflectance variance, so a mean
+of fold R2s divides by a different denominator every time and estimates nothing (the per-fold
+values are still plotted, as a scatter, and their spread kept as R2_fold_std).
+
 The fold schedule is fixed: every training-set size 1..C-1 and every split of each. What is
 compared is set by two arguments (see resolve_selection):
 
@@ -32,9 +42,9 @@ aimed at one model and gated behind a printed count and a confirmation (--force 
 unattended).
 
 After every run, all summaries for the site are compiled into all_models_kfold_summary.csv
-(tagged with dust_type + model, sorted globally by out-of-sample MAE with any failed-fold run
-pushed to the bottom). The error metrics (MBE/MAE/RMSE) score the daily soiling rate -- the
-drop in soiling factor per day -- so ranking (by out-of-sample MAE) rewards predicting the
+(tagged with dust_type + model, sorted globally by pooled out-of-sample MAE with any
+failed-fold run pushed to the bottom). The error metrics (MBE/MAE/RMSE) score the daily
+soiling rate -- the drop in soiling factor per day -- so ranking rewards predicting the
 *change* in soiling loss rather than the reflectance shape; R2 stays a reflectance goodness-of-
 fit. All are scored on the common evaluation set (all common mirrors, identical reflectance
 targets across dust types) for every run, so it is directly comparable across BOTH model and
@@ -57,18 +67,33 @@ from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 import heliosoil.utilities as smu
 from heliosoil.horizontal_impaction import parse_model_expression
+from heliosoil.paper_specific_utilities import regression_performance_stats
 
 from . import model_pipeline as mp
 
 
-def _fold_task(cfg, data, model_type, wind_components, component_dust_types, train_mirrors_run, train_combo, test_combo):
+def _fold_task(
+    cfg, data, model_type, wind_components, component_dust_types, train_mirrors_run, train_combo, test_combo, stitch=False, keep_model=False
+):
     """Fit + evaluate one fold and return only the lightweight fields the summary needs.
 
     Runs on a worker thread; keeping the return value small lets the fitted model and its
     training inputs be freed as each fold finishes instead of accumulating one big dict per
-    fold in flight (see model_pipeline.fit_and_evaluate and the Concurrency-safety notes)."""
+    fold in flight (see model_pipeline.fit_and_evaluate and the Concurrency-safety notes).
+
+    `stitch` additionally returns this fold's held-out soiling-factor predictions, which the
+    leave-one-campaign-out folds need to assemble the pooled statistic. They are copied, since
+    the fitted model they came from is dropped as soon as this returns. `keep_model` retains the
+    fitted model itself for use as the stitched view's geometry template -- set on exactly one
+    fold per run, because a model per fold is precisely the accumulation noted above."""
     result = mp.fit_and_evaluate(cfg, data, model_type, wind_components, component_dust_types, train_mirrors_run, train_combo, test_combo)
-    return {"stats_in": result["stats_in"], "stats_out": result["stats_out"], "param_names": result["param_names"], "param_hat": result["param_hat"]}
+    out = {"stats_in": result["stats_in"], "stats_out": result["stats_out"], "param_names": result["param_names"], "param_hat": result["param_hat"]}
+    if stitch:
+        sf = result["model"].helios.soiling_factor
+        out["stitch"] = {e: sf[e].copy() for e in test_combo}
+    if keep_model:
+        out["model"] = result["model"]
+    return out
 
 
 def cross_validate_run(
@@ -104,18 +129,36 @@ def cross_validate_run(
 
     # Enumerate every fold and dispatch its fit to the pool; results are gathered below in
     # submit order so the folds file is deterministic regardless of completion order.
+    # Only the leave-one-campaign-out folds (n_train = C-1) hold out each campaign exactly once,
+    # so only they can be stitched into a whole-site out-of-sample prediction and pooled. This is
+    # the schedule simulate.py cross-validates on, which makes the pooled row directly comparable
+    # to its cv_pooled statistic.
+    n_train_pooled = C - 1
+
     tasks = []  # (row, n_train, fold_idx, train_combo, test_combo, future)
     for n_train in range(1, C):
         for fold_idx, train_combo in enumerate(combinations(range(C), n_train)):
             train_combo = list(train_combo)
             test_combo = [e for e in range(C) if e not in train_combo]
             row = {"n_train_campaigns": n_train, "fold": fold_idx, "train_experiments": str(train_combo), "test_experiments": str(test_combo)}
+            stitch = n_train == n_train_pooled
             future = executor.submit(
-                _fold_task, cfg, data, model_type, wind_components, component_dust_types, train_mirrors_run, train_combo, test_combo
+                _fold_task,
+                cfg,
+                data,
+                model_type,
+                wind_components,
+                component_dust_types,
+                train_mirrors_run,
+                train_combo,
+                test_combo,
+                stitch=stitch,
+                keep_model=stitch and fold_idx == 0,
             )
             tasks.append((row, n_train, fold_idx, train_combo, test_combo, future))
 
     fold_rows = []
+    stitched_soiling_factor, stitch_template = {}, None
     for row, n_train, fold_idx, train_combo, test_combo, future in tasks:
         try:
             result = future.result()
@@ -138,6 +181,9 @@ def cross_validate_run(
         for name, value in zip(result["param_names"], result["param_hat"]):
             row[name] = value
         fold_rows.append(row)
+        stitched_soiling_factor.update(result.get("stitch", {}))
+        if result.get("model") is not None:
+            stitch_template = result["model"]
         # A fold that completes but yields a non-finite out-of-sample R2 is a failure too
         # (and is counted in n_failed below), so label it FAILED rather than PASS.
         r2_is = result["stats_in"]["R2"]
@@ -148,9 +194,28 @@ def cross_validate_run(
     folds_df = pd.DataFrame(fold_rows)
     folds_df.to_csv(f"{results_dir}/cross_validation_folds.csv", index=False, float_format="%.3g")
 
+    # The pooled out-of-sample statistic: every campaign predicted by the fold that held it out,
+    # scored in ONE pass over all held-out predictions at once. This is a different estimator from
+    # the fold means below -- pooling weights each residual equally, whereas an unweighted mean of
+    # fold statistics weights each fold equally regardless of how many observations it carried.
+    # For R2 the gap is structural rather than a matter of weights: each fold's R2 is normalised by
+    # its own held-out campaign's reflectance variance, so averaging them across folds divides by
+    # a different denominator every time and does not estimate anything. Only the pooled R2 is
+    # reported for that reason. simulate.py computes the identical quantity as its cv_pooled row.
+    pooled = {}
+    if stitch_template is not None and len(stitched_soiling_factor) == C:
+        stitched = mp.FoldStitchedModel(stitch_template, stitched_soiling_factor, {})
+        stats = regression_performance_stats(stitched, data.reflect_data_total, list(range(C)))
+        pooled = {f"{key}_pooled": stats[key] for key in ("MBE", "MAE", "RMSE", "R2")}
+        pooled["N_pooled"] = stats["N"]
+    else:
+        # A failed fold leaves a campaign unpredicted, so there is no whole-site prediction to
+        # pool. Better an absent statistic than one silently computed over a partial site.
+        log.info(f"no pooled statistic: {len(stitched_soiling_factor)}/{C} campaigns stitched (a leave-one-out fold failed).")
+
     # Aggregate per n_train. n_failed counts the NaN (failed) folds so they are not silently
     # dropped by the NaN-skipping mean/std. Ordered by n_train; the meaningful cross-model
-    # ranking (by out-of-sample MAE) happens in mp.compile_results.
+    # ranking (by pooled out-of-sample MAE) happens in mp.compile_results.
     summary_df = (
         folds_df.groupby("n_train_campaigns")
         .agg(
@@ -162,14 +227,17 @@ def cross_validate_run(
             MAE_std=("MAE", "std"),
             RMSE_mean=("RMSE", "mean"),
             RMSE_std=("RMSE", "std"),
-            R2_mean=("R2", "mean"),
-            R2_std=("R2", "std"),
+            R2_fold_std=("R2", "std"),
             R2_in_sample_mean=("R2_in_sample", "mean"),
         )
         .reset_index()
         .sort_values("n_train_campaigns")
         .reset_index(drop=True)
     )
+    # Pooling needs each campaign held out exactly once, which only the leave-one-campaign-out
+    # row satisfies; every smaller training size leaves the pooled columns blank.
+    for column, value in pooled.items():
+        summary_df[column] = np.where(summary_df["n_train_campaigns"] == n_train_pooled, value, np.nan)
     # Carried into the compiled all-models table: which mechanisms were fitted and, when they
     # differ, the dust channel driving each -- plus how they were fitted, since a run where
     # semi_physical fell back to MLE is not comparing like with like on that column alone.
@@ -184,7 +252,15 @@ def cross_validate_run(
     ax_rmse.set_xticks(summary_df["n_train_campaigns"])
     ax_rmse.grid(alpha=0.3)
 
-    ax_r2.errorbar(summary_df["n_train_campaigns"], summary_df["R2_mean"], yerr=summary_df["R2_std"], marker="o", capsize=4, color="darkorange")
+    # Every fold's own R2 as a scatter, rather than a mean +- std across folds: fold R2s are each
+    # normalised by a different campaign's reflectance variance, so their mean is not a quantity.
+    # The pooled R2 (one pass over all held-out predictions) is the summary value, marked where it
+    # is defined -- at the leave-one-campaign-out size only.
+    ax_r2.scatter(folds_df["n_train_campaigns"], folds_df["R2"], marker="o", color="darkorange", alpha=0.6, label="per fold")
+    if "R2_pooled" in summary_df.columns:
+        defined = summary_df.dropna(subset=["R2_pooled"])
+        ax_r2.scatter(defined["n_train_campaigns"], defined["R2_pooled"], marker="D", s=70, color="black", zorder=3, label="pooled")
+    ax_r2.legend(fontsize=8)
     ax_r2.set_xlabel("Number of training campaigns")
     ax_r2.set_ylabel("Out-of-sample R2 (reflectance)")
     ax_r2.set_xticks(summary_df["n_train_campaigns"])
@@ -199,10 +275,14 @@ def cross_validate_run(
 
 
 def _best_mae(summary_df: pd.DataFrame) -> float:
-    """Lowest out-of-sample MAE_mean among this run's rows that had no failed fold, or inf if
-    none qualify -- so the best-so-far indicator never reflects a run/size with a failed fold."""
+    """Lowest pooled out-of-sample MAE among this run's rows that had no failed fold, or inf if
+    none qualify -- so the best-so-far indicator never reflects a run/size with a failed fold.
+
+    Pooled rather than the fold mean, matching the ranking mp.compile_results applies and the
+    statistic simulate.py quotes, so the best-so-far readout tracks the same number the final
+    table is sorted on."""
     ok = summary_df[summary_df["n_failed"] == 0]
-    values = ok["MAE_mean"].dropna()
+    values = ok["MAE_pooled"].dropna() if "MAE_pooled" in ok.columns else pd.Series(dtype=float)
     return float(values.min()) if not values.empty else np.inf
 
 

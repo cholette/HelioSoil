@@ -65,6 +65,7 @@ model types.
 
 import os
 import sys
+import copy
 import json
 import logging
 import platform
@@ -99,6 +100,43 @@ FIT_METHODS = ("mle", "ls")
 # depend on cfg.dust_type, so they sit outside the per-dust-type subtrees (see
 # is_dust_type_independent).
 PER_COMPONENT_SUBDIR = "per-component-dust"
+
+
+class FoldStitchedModel:
+    """A model-shaped view of the cross-validation's out-of-sample predictions: every campaign's
+    prediction taken from the fold that held that campaign out.
+
+    plot_for_paper, plot_reflectance_by_tilt and regression_performance_stats each take a single
+    fitted model, so the only way to show or score the whole site out-of-sample at once is to hand
+    them one object whose per-campaign predictions come from different fits. Everything but the
+    predictions is fold-invariant (every fold ends by re-running helios_angles on the full
+    evaluation data), so tilt/azimuth/nominal_reflectance are taken from `template`, an arbitrary
+    fold's fitted model.
+
+    Only meaningful when each campaign was held out exactly once, i.e. the leave-one-campaign-out
+    schedule (n_train = C-1). At smaller training sizes a campaign is held out by several folds and
+    has several competing predictions, which this mapping cannot represent.
+
+    predict_soiling_factor is a no-op on purpose: both plotting helpers call it on entry, which
+    would otherwise overwrite the stitched predictions with the template fold's own."""
+
+    def __init__(self, template, soiling_factor: dict, prediction_variance: dict):
+        self._template = template
+        # Shallow copy, then new dicts for the two stitched fields: the template's own predictions
+        # must stay untouched, since it is a real fitted model the caller may still be using.
+        self.helios = copy.copy(template.helios)
+        self.helios.soiling_factor = dict(soiling_factor)
+        self.helios.soiling_factor_prediction_variance = dict(prediction_variance)
+
+    def predict_soiling_factor(self, *args, **kwargs) -> None:
+        """No-op: the stitched predictions are already the out-of-sample ones."""
+
+    def __getattr__(self, name):
+        # Only reached for attributes this class does not define. The underscore guard keeps a
+        # partially-initialised instance (during copy/pickle, say) from recursing on _template.
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._template, name)
 
 
 @dataclass
@@ -732,14 +770,21 @@ def compile_results(cfg: PipelineConfig, run_name: str, workflow: str = "model_s
         return
 
     kfold_df = pd.concat(kfold_frames, ignore_index=True)
-    if "MAE_mean" in kfold_df.columns:
-        # Global ranking: best (lowest out-of-sample MAE) first across every (dust_type,
+    if "MAE_pooled" in kfold_df.columns:
+        # Global ranking: best (lowest pooled out-of-sample MAE) first across every (dust_type,
         # model, n_train) row, with any row that had a failed fold pushed to the very bottom
         # regardless of its MAE (a strong-looking mean on surviving folds is not trustworthy).
+        #
+        # Ranked on the POOLED MAE, which weights every held-out residual equally and is the
+        # number simulate.py quotes, rather than the unweighted mean of per-fold MAEs -- the two
+        # disagree whenever folds carry different observation counts, and ranking on one while
+        # reporting the other is how a model selected here could fail to be the best one there.
+        # Only the leave-one-campaign-out rows carry it (see cross_validate_run), so the smaller
+        # training sizes sort below them as diagnostics rather than competing for the top spot.
         has_failed = kfold_df["n_failed"] > 0 if "n_failed" in kfold_df.columns else False
         kfold_df = (
             kfold_df.assign(_has_failed=has_failed)
-            .sort_values(["_has_failed", "MAE_mean"], na_position="last")
+            .sort_values(["_has_failed", "MAE_pooled"], na_position="last")
             .drop(columns="_has_failed")
             .reset_index(drop=True)
         )
