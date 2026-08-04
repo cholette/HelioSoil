@@ -20,7 +20,33 @@ Per model, both modes report:
     ("reflectance_tilt_00_train-f2.pdf", "reflectance_tilt_00_test-f1.pdf"), each annotated with
     that tilt's MAE/RMSE, plus a per-campaign stats CSV;
   - a boxplot of the absolute daily soiling-rate error grouped by tilt, paired in-sample vs
-    out-of-sample, showing how each reported MAE is distributed rather than only its value.
+    out-of-sample, showing how each reported MAE is distributed rather than only its value;
+  - fit_quality_{train_mirrors,test_mirrors,test_experiments}.pdf, predicted-vs-measured daily
+    loss, one standalone figure per split of what the fit held out (they share axis limits, so
+    they stay comparable), written per fold when cross-validating. The held-out-mirror figure is
+    not written when the fit trained on every common mirror -- which is the case for any
+    least-squares fit, and for any model whose noise term is orientation-dependent;
+  - loss_vs_tilt.pdf/.csv, predicted daily loss against fixed mirror tilt -- one curve per
+    orientation, a band for the parameter uncertainty, and a dashed envelope for the day-to-day
+    range;
+  - loss_distributions.pdf/.csv, the full distribution of a horizontal mirror's loss on the low,
+    median, high and worst dust day of the record, each histogram (parameters sampled from their
+    covariance, plus the deposition noise) overlaid with the point estimate -- the normal implied
+    by holding the parameters at their fitted values, i.e. the noise alone. The gap between them
+    is how much not knowing the parameters widens the answer.
+
+Both read the fit forward on virtual mirrors at geometries that were never measured, so a
+wind-driven model is covered as readily as a tilt-only one: its orientation curves separate where
+a tilt-only model's coincide exactly, and that separation is the orientation contrast the wind
+mechanisms exist to capture. Two fits cannot back either figure, and print why they were skipped:
+a physical model, whose flux comes from per-mirror state a synthetic mirror never built, and any
+least-squares fit, which estimates no sigma and so leaves no noise process to sample.
+
+Because these are design outputs rather than cross-validation results, they are backed by the
+parameters you would actually quote: under cross-validation one extra fit on every campaign is run
+for them (saved as fitting_results, and reported as the "all_campaigns" rows of the same
+fitted_parameters.csv the folds are in), since no single fold's model has seen all the data. That
+extra fit happens only when they are producible, so runs that cannot draw them cost nothing.
 
 The wind model to fit is given as an expression in the notation the workflows report --
 "PM2.5*tangential_wind + (PM10-PM2.5)*turbulent_wind + PMT*gravitational" -- so a model picked
@@ -44,8 +70,18 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import heliosoil.base_models as smb
 from heliosoil.horizontal_impaction import parse_model_expression
-from heliosoil.paper_specific_utilities import daily_rate_residuals, plot_for_paper, plot_reflectance_by_tilt, regression_performance_stats
+from heliosoil.paper_specific_utilities import (
+    daily_rate_residuals,
+    plot_for_paper,
+    plot_loss_distributions,
+    plot_loss_vs_tilt,
+    plot_reflectance_by_tilt,
+    regression_performance_stats,
+    save_fit_quality_figures,
+    supports_loss_curve,
+)
 
 from . import model_pipeline as mp
 from .campaign_summary import FIGURE_RC, site_display_name
@@ -292,6 +328,67 @@ def _campaign_tilt_figures(model, data: mp.LoadedData, orientation: list, result
     return rows
 
 
+def _fit_quality_figures(model, data: mp.LoadedData, train_experiments: list, test_experiments: list, train_mirrors: list, results_dir: str) -> None:
+    """Predicted-vs-measured daily-loss scatter for one fit, one standalone figure per split.
+
+    Each split is its own file rather than a column of a shared grid: these are square scatters
+    read against a 1:1 line, and three of them side by side leaves each too small to judge. Common
+    axis limits across the files are computed up front, so they stay comparable to each other (see
+    save_fit_quality_figures).
+
+    The mirror split is derived from `train_mirrors` (names) against data.all_mirrors, since
+    fit_quality_plots indexes measurement columns positionally. When the fit trained on every
+    common mirror -- any least-squares fit, and any model whose noise term is
+    orientation-dependent -- there are no held-out mirrors and that split is dropped rather than
+    written as an empty figure."""
+    train_idx = [m for m, name in enumerate(data.all_mirrors) if name in train_mirrors]
+    test_idx = [m for m, name in enumerate(data.all_mirrors) if name not in train_mirrors]
+    save_fit_quality_figures(model, data.reflect_data_total, train_experiments, train_idx, test_idx, test_experiments, results_dir)
+
+
+def _predicted_loss_figures(cfg: mp.PipelineConfig, data: mp.LoadedData, model, model_save_stem: str, results_dir: str) -> None:
+    """What the fit predicts a mirror will lose, drawn two ways.
+
+    loss_vs_tilt reads the fit across geometry: expected daily loss against fixed tilt, one curve
+    per orientation, over the whole weather record. loss_distributions reads it across days
+    instead: the full distribution of a single day's loss on the mildest through the worst dust
+    day, for a horizontal mirror. Both evaluate the model forward on virtual mirrors, so a
+    wind-driven model is covered as readily as a tilt-only one.
+
+    Both are skipped together, with the reason printed rather than silently, for a fit that cannot
+    back them: a physical model, whose flux comes from per-mirror state a synthetic mirror never
+    built, or any least-squares fit, which leaves no noise process to sample (see
+    supports_loss_curve)."""
+    if not supports_loss_curve(model):
+        reason = (
+            "a physical model has no virtual-mirror forward evaluation"
+            if not isinstance(model, smb.ConstantMeanBase)
+            else "the fit left no noise process (least squares estimates no sigma)"
+        )
+        print(f"[predicted-loss] loss_vs_tilt and loss_distributions skipped: {reason} -- {type(model).__name__}, fit={cfg.fit_method}.")
+        return
+
+    fig, _ax, table = plot_loss_vs_tilt(model, data.sim_data_total, model_save_stem)
+    fig.savefig(f"{results_dir}/loss_vs_tilt.pdf", bbox_inches="tight")
+    plt.close(fig)
+    table.to_csv(f"{results_dir}/loss_vs_tilt.csv", index=False, float_format="%.4g")
+    print(f"[loss-vs-tilt] wrote loss_vs_tilt.pdf/.csv ({table['tilt'].nunique()} tilts x {table['orientation'].nunique()} orientations).")
+
+    # The same fit read the other way round: not the loss against tilt, but the whole distribution
+    # of one day's loss, on the mildest through the worst dust day in the record.
+    fig_d, _ax_d, table_d = plot_loss_distributions(model, data.sim_data_total, model_save_stem)
+    fig_d.savefig(f"{results_dir}/loss_distributions.pdf", bbox_inches="tight")
+    plt.close(fig_d)
+    table_d.to_csv(f"{results_dir}/loss_distributions.csv", index=False, float_format="%.4g")
+    print("[loss-distributions] wrote loss_distributions.pdf/.csv; predicted daily loss (p.p./day), mean +/- sd:")
+    for _, row in table_d.iterrows():
+        print(
+            f"  {row['scenario']:8s} (p{row['percentile']:g})  "
+            f"sampled {row['sampled_mean_pp_per_day']:6.2f} +/- {row['sampled_sd_pp_per_day']:.2f}   "
+            f"point estimate {row['point_estimate_mean_pp_per_day']:6.2f} +/- {row['point_estimate_sd_pp_per_day']:.2f}"
+        )
+
+
 def _report_single_fit(
     cfg: mp.PipelineConfig, data: mp.LoadedData, run: tuple, results_dir: str, expression: str, train_mirrors_run: list, orientation: list, site: str
 ) -> None:
@@ -345,6 +442,10 @@ def _report_single_fit(
 
     _all_campaigns_figure(imodel, data, cfg.train_experiments, train_mirrors_run, orientation, f"{results_dir}/all_campaigns.pdf")
 
+    # Predicted-vs-measured daily loss, and the loss-vs-tilt design curve off the fit just saved.
+    _fit_quality_figures(imodel, data, cfg.train_experiments, test_experiments, train_mirrors_run, results_dir)
+    _predicted_loss_figures(cfg, data, imodel, f"{results_dir}/fitting_results", results_dir)
+
     # How the daily soiling-rate error is distributed within each tilt, in-sample vs out-of-sample.
     # helios.soiling_factor is already populated over every campaign by fit_and_evaluate, so this
     # re-reads the same prediction the stats above were computed from.
@@ -391,6 +492,9 @@ def _report_cross_validation(
         model = result["model"]
 
         _all_campaigns_figure(model, data, train_experiments, train_mirrors_run, orientation, f"{results_dir}/fold_{fold}/all_campaigns.pdf")
+        # Per fold rather than once for the run: the panels are defined by a train/test split, and
+        # under cross-validation each fold has its own.
+        _fit_quality_figures(model, data, train_experiments, test_experiments, train_mirrors_run, f"{results_dir}/fold_{fold}")
 
         # This fold's view of every campaign: the held-out one gets its test figure, each training
         # campaign the training figure it contributes to its own campaign folder.
@@ -456,6 +560,43 @@ def _report_cross_validation(
     print(f"  RMSE = {pooled['RMSE']:.4f}  (daily soiling rate)")
     print(f"  R2   = {pooled['R2']:.3f}  (reflectance)")
 
+    # The loss-vs-tilt curve is a design curve, not a cross-validation result: it wants the
+    # parameters (and their covariance) you would actually quote, which means a fit that saw every
+    # campaign rather than any one fold's. No fold's model is that, so one final fit on all
+    # campaigns is run for it -- and only when the curve is actually producible, so runs that
+    # cannot draw it pay nothing. Its test split is empty by construction, which
+    # regression_performance_stats reports as NaN over N=0 rather than treating as a failure.
+    final_param_rows: list = []
+    if supports_loss_curve(template):
+        print("\nFitting a final model on every campaign to back the loss-vs-tilt curve ...")
+        final = mp.fit_and_evaluate(cfg, data, *run, train_mirrors_run, all_experiments, [])
+        final_model = final["model"]
+        final_model.save(
+            f"{results_dir}/fitting_results",
+            log_p_hat=final["log_param_hat"],
+            log_p_hat_cov=final["log_param_cov"],
+            training_simulation_data=final["sim_train"],
+            training_reflectance_data=final["reflect_train"],
+        )
+        # Rows of the one fitted_parameters.csv, not a file of their own: this is another fit of the
+        # same parameters, and the "fit" column already distinguishes it from the folds. A second
+        # file with a different schema made the reader work out which of two tables to quote from.
+        final_param_rows = [
+            {
+                "fit": "all_campaigns",
+                "train_experiments": str(all_experiments),
+                "test_experiments": "[]",
+                "parameter": name,
+                "value": value,
+                "ci_lower": lower,
+                "ci_upper": upper,
+            }
+            for name, value, lower, upper in zip(final["param_names"], final["param_hat"], final["lower_ci"], final["upper_ci"])
+        ]
+        _predicted_loss_figures(cfg, data, final_model, f"{results_dir}/fitting_results", results_dir)
+    else:
+        _predicted_loss_figures(cfg, data, template, f"{results_dir}/fitting_results", results_dir)
+
     # Aggregate rows: the metrics are the mean/std over the folds of a split, N the total number of
     # observations behind that mean (blank for the spread row, which has no count of its own).
     # cv_pooled is not a mean of folds -- it is the single statistic over every held-out prediction
@@ -474,7 +615,10 @@ def _report_cross_validation(
     )
 
     # Per-fold parameters, plus how far each one moved across the folds: a parameter whose
-    # across-fold spread swamps its own confidence interval is not identified by this data.
+    # across-fold spread swamps its own confidence interval is not identified by this data. The
+    # all-campaigns refit lands here too, as its own "fit" row -- the spread is computed off the
+    # folds alone (params_df), before those rows are appended, so it stays a statement about the
+    # folds rather than about a fit that saw everything.
     params_df = pd.DataFrame(param_rows)
     spread = params_df.groupby("parameter", sort=False)["value"].agg(["mean", "std"]).reset_index()
     aggregate_rows = [
@@ -482,7 +626,7 @@ def _report_cross_validation(
         for fit, column in (("cv_mean", "mean"), ("cv_std", "std"))
         for _, row in spread.iterrows()
     ]
-    pd.concat([params_df, pd.DataFrame(aggregate_rows)], ignore_index=True).to_csv(
+    pd.concat([params_df, pd.DataFrame(aggregate_rows + final_param_rows)], ignore_index=True).to_csv(
         f"{results_dir}/fitted_parameters.csv", index=False, float_format="%.3g"
     )
     print("")
