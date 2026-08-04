@@ -464,7 +464,7 @@ def periodic_schedule_tcc(opt, n_trucks, n_cleans=None, verbose=True):
         "degradation_costs": C_deg,
         "direct_cleaning_costs": C_cl,
         "soiling_factor": field.helios.soiling_factor.copy(),
-        "area_loss": area_loss,
+        "arealoss": area_loss,
         "cleaning_actions": cleans,
         "soiling_induced_off_times": np.sum(
             ~receiver_saturation["clean_field"] & receiver_saturation["soiled_field"]

@@ -38,6 +38,26 @@ class CommonFittingMethods:
 
         self.helios = helios
 
+    def _predicted_reflectance(self, f, reflectance_data):
+        """
+        Predicted reflectance at the measurement times of experiment ``f``.
+
+        Requires ``predict_soiling_factor(..., rho0=reflectance_data.rho0)`` to have
+        been called first: the per-mirror initial reflectance is carried by the
+        soiling factor, so the scaling here is the nominal reflectance, matching the
+        ``b`` used in ``_compute_variance_of_measurements``.
+
+        Args:
+            f: Experiment (file) key.
+            reflectance_data (ReflectanceMeasurements): Supplies ``prediction_indices``.
+
+        Returns:
+            numpy.ndarray: Predicted reflectance, shape (n_measurements, n_mirrors).
+        """
+        pi = reflectance_data.prediction_indices[f]
+        sf = self.helios.soiling_factor[f]
+        return self.helios.nominal_reflectance * sf[:, pi].transpose()
+
     def _compute_variance_of_measurements(
         self, sigma_dep, simulation_inputs, reflectance_data=None
     ):
@@ -102,9 +122,7 @@ class CommonFittingMethods:
         # Computes the sum of squared errors between a soiling model and
         # the reflectance measurements.
 
-        pi = reflectance_data.prediction_indices
         meas = reflectance_data.average
-        # r0 = self.helios.nominal_reflectance # nominal clean reflectance # Commented since r0 is not always 0.95
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs, reflectance_data)
@@ -112,13 +130,9 @@ class CommonFittingMethods:
         sse = 0
         self.update_model_parameters(params)
         self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0, verbose=False)
-        sf = self.helios.soiling_factor
-        files = list(sf.keys())
+        files = list(self.helios.soiling_factor.keys())
         for f in files:
-            r0 = reflectance_data.rho0[
-                f
-            ]  # Added here since initial cleanliness can change for each mirror
-            rho_prediction = r0 * sf[f][:, pi[f]].transpose()
+            rho_prediction = self._predicted_reflectance(f, reflectance_data)
             sse += np.sum((rho_prediction - meas[f]) ** 2)
         return sse
 
@@ -129,26 +143,25 @@ class CommonFittingMethods:
 
         sim_in = simulation_inputs
         files = list(reflectance_data.times.keys())
-        pi = reflectance_data.prediction_indices
         meas = reflectance_data.average
-        r0 = self.helios.nominal_reflectance  # nominal clean reflectance
-        NL = [reflectance_data.average[f].shape[0] for f in files]
 
         # define optimization objective function (negative log likelihood)
         sigma_dep = params[1]
-        loglike = -0.5 * np.sum(NL) * np.log(2 * np.pi)
         self.update_model_parameters(params)
         self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0, verbose=False)
-        sf = self.helios.soiling_factor  # soiling factor to be multiplied by clean reflectance
 
         # Compute variance in reflectance, not soiling factor
         s2total = self._compute_variance_of_measurements(
             sigma_dep, sim_in, reflectance_data=reflectance_data
         )
 
+        # One Gaussian term per reflectance difference, per mirror, per experiment.
+        n_terms = sum(s2total[f].size for f in files)
+        loglike = -0.5 * n_terms * np.log(2 * np.pi)
+
         for f in files:
             delta_r = np.diff(meas[f], axis=0)
-            rho_prediction = r0 * sf[f][:, pi[f]].transpose()
+            rho_prediction = self._predicted_reflectance(f, reflectance_data)
             mu_delta_r = np.diff(rho_prediction, axis=0)
             loglike += np.sum(
                 -0.5 * np.log(s2total[f]) - (delta_r - mu_delta_r) ** 2 / (2 * s2total[f])
