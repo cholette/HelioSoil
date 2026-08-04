@@ -11,6 +11,7 @@ from scipy.linalg import cho_factor, cho_solve
 from scipy.special import expit, logit
 import numdifftools as ndt
 import pickle
+import warnings
 
 
 class CommonFittingMethods:
@@ -660,6 +661,28 @@ class CommonFittingMethods:
 
         return unnormalized_posterior
 
+    def _mean_parameter_bounds(self, simulation_inputs, reflectance_data):
+        """
+        Bracket for the one-dimensional least-squares search over the mean parameter.
+
+        The bracket is model specific because the mean parameter is: `hrz0` is bounded
+        below by one, while `mu_tilde` is a small positive number.
+
+        Args:
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+
+        Returns:
+            tuple: Lower and upper bounds.
+
+        Raises:
+            NotImplementedError: Always, in the base class.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must define _mean_parameter_bounds so that "
+            "fit_least_squares searches a range appropriate to its mean parameter."
+        )
+
     def fit_least_squares(self, simulation_inputs, reflectance_data, verbose=True):
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
@@ -669,11 +692,26 @@ class CommonFittingMethods:
             return self._sse(x, simulation_inputs, reflectance_data)
 
         _print_if("Fitting parameters with least squares ...", verbose)
-        xL = 1e-6 + 1.0
-        xU = 1000
+        xL, xU = self._mean_parameter_bounds(simulation_inputs, reflectance_data)
+        width = xU - xL
+
+        # Resolve the optimum far more finely than the edge test below. The default
+        # absolute tolerance is 1e-5 regardless of the bracket, which on a narrow
+        # bracket is coarser than the edge test and would hide a pinned result.
         res = minimize_scalar(
-            fun, bounds=(xL, xU), method="Bounded"
-        )  # use bounded to prevent evaluation at values <=1
+            fun, bounds=(xL, xU), method="Bounded", options={"xatol": 1e-9 * width}
+        )
+
+        # A bounded search stops near an endpoint when the optimum lies outside the
+        # bracket, which is otherwise indistinguishable from a converged fit.
+        if min(res.x - xL, xU - res.x) <= 1e-6 * width:
+            warnings.warn(
+                f"Least-squares estimate of {self._mean_parameter_name} is at the edge of "
+                f"the search bracket [{xL:.3e}, {xU:.3e}]. The optimum probably lies "
+                "outside it, and the value returned is the bound rather than a fit.",
+                RuntimeWarning,
+            )
+
         _print_if("... done! \n estimated parameter is = " + str(res.x), verbose)
         return res.x, res.fun
 
@@ -1185,6 +1223,19 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
         else:
             self.helios.soiling_factor_prediction_variance = {}
 
+    def _mean_parameter_bounds(self, simulation_inputs, reflectance_data):
+        """
+        Bracket for the least-squares search over `hrz0`.
+
+        `hrz0` is a ratio of the boundary layer height to the surface roughness length,
+        so it exceeds one; the `log(log(hrz0))` fitting transform requires it too. The
+        upper bound is a generous fixed value.
+
+        Returns:
+            tuple: Lower and upper bounds.
+        """
+        return 1.0 + 1e-6, 1000.0
+
     def update_model_parameters(self, x):
         """
         Updates the model parameters from a parameter vector.
@@ -1398,6 +1449,45 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
             _print_if(fmt.format("log(sigma_dep)", x_ci[0, 1], x_ci[1, 1]), verbose)
 
         return x_hat, x_hat_cov
+
+    def _mean_parameter_bounds(self, simulation_inputs, reflectance_data):
+        """
+        Bracket for the least-squares search over `mu_tilde`.
+
+        `mu_tilde` scales the soiled area directly: mirror `p` accumulates
+        `mu_tilde * sum_j alpha_j cos(tilt_j_p)` over the measured span, and the
+        predicted reflectance is `rho0` minus `b` times that. Requiring the prediction
+        to stay positive gives
+
+            mu_tilde < min_p rho0_p / (b * sum_j alpha_j cos(tilt_j_p))
+
+        which adapts to the dust loading and tilt history of the data rather than
+        assuming a scale. Falls back to one if the loading is degenerate.
+
+        Args:
+            simulation_inputs (SimulationInputs): Supplies the dust loading.
+            reflectance_data (ReflectanceMeasurements): Supplies `rho0` and the
+                measurement span.
+
+        Returns:
+            tuple: Lower and upper bounds.
+        """
+        upper = np.inf
+        for f in reflectance_data.average:
+            loading = self._loading_matrix(f, simulation_inputs)
+            last = reflectance_data.prediction_indices[f][-1]
+            accumulated = np.sum(loading[: last + 1, :], axis=0)  # per mirror
+            b = self._reflectance_loss_factor(f)
+            rho0 = np.asarray(reflectance_data.rho0[f], dtype=float)
+
+            positive = accumulated > 0
+            if not np.any(positive):
+                continue
+            upper = min(upper, float(np.min(rho0[positive] / (b * accumulated[positive]))))
+
+        if not np.isfinite(upper) or upper <= 0:
+            upper = 1.0
+        return smb.tol, upper
 
     def update_model_parameters(self, x):
         """
