@@ -1,5 +1,5 @@
 import heliosoil.base_models as smb
-from heliosoil.utilities import _print_if, _check_keys, _parse_dust_str
+from heliosoil.utilities import _print_if, _check_keys, _parse_dust_str, cosd
 import numpy as np
 from numpy import radians as rad
 from numpy.linalg import inv
@@ -7,6 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from scipy.optimize import minimize_scalar, minimize
+from scipy.linalg import cho_factor, cho_solve
 import numdifftools as ndt
 import pickle
 
@@ -58,6 +59,255 @@ class CommonFittingMethods:
         sf = self.helios.soiling_factor[f]
         return self.helios.nominal_reflectance * sf[:, pi].transpose()
 
+    def _reflectance_loss_factor(self, f):
+        """
+        Reflectance lost per unit soiled area, ``b = nominal_reflectance * inc_ref_factor``.
+
+        Assumes a fixed reflectometer incidence angle within an experiment, so that ``b``
+        is the same at both ends of a reflectance difference.
+
+        Args:
+            f: Experiment (file) key.
+
+        Returns:
+            float: The loss factor ``b``.
+
+        Raises:
+            ValueError: If ``inc_ref_factor[f]`` is not a single value.
+        """
+        inc = np.asarray(self.helios.inc_ref_factor[f])
+        if inc.size != 1:
+            raise ValueError(
+                f"Experiment {f} has {inc.size} incidence-reflectance factors. The fitting "
+                "likelihoods assume a fixed reflectometer incidence angle per experiment."
+            )
+        return self.helios.nominal_reflectance * float(inc.reshape(-1)[0])
+
+    def _loading_matrix(self, f, simulation_inputs):
+        """
+        Deposition loading ``alpha_j * cos(tilt_j)`` on the simulation grid.
+
+        ``alpha`` is the airborne dust concentration relative to the prototype
+        distribution, and is a site quantity shared by all mirrors; the tilt history is
+        per mirror.
+
+        Args:
+            f: Experiment (file) key.
+            simulation_inputs (SimulationInputs): Supplies dust concentration and type.
+
+        Returns:
+            numpy.ndarray: Loading, shape (n_times, n_mirrors).
+        """
+        sim_in = simulation_inputs
+        try:
+            attr = _parse_dust_str(sim_in.dust_type[f])
+            den = getattr(sim_in.dust, attr)  # dust.(sim_in.dust_type[f])
+        except Exception:
+            raise ValueError(
+                "Dust measurement "
+                + sim_in.dust_type[f]
+                + " not present in dust class. Use dust_type="
+                + sim_in.dust_type[f]
+                + " option when initializing the model"
+            )
+
+        alpha = sim_in.dust_concentration[f] / den[f]
+        return (alpha[None, :] * cosd(self.helios.tilt[f])).transpose()
+
+    def _difference_windows(self, f, reflectance_data):
+        """
+        Simulation-grid slices spanned by each reflectance difference.
+
+        Difference ``i`` covers intervals ``k_{i-1}+1 ... k_i``, matching the inclusive
+        cumulative sum in ``compute_soiling_factor``. Because all mirrors in an
+        experiment share a measurement grid, these windows partition the timeline.
+
+        Args:
+            f: Experiment (file) key.
+            reflectance_data (ReflectanceMeasurements): Supplies ``prediction_indices``.
+
+        Returns:
+            list[slice]: One slice per difference.
+        """
+        pi = reflectance_data.prediction_indices[f]
+        return [slice(pi[i] + 1, pi[i + 1] + 1) for i in range(len(pi) - 1)]
+
+    def _deposition_cross_products(self, f, simulation_inputs, reflectance_data):
+        """
+        Between-mirror deposition cross-products for each reflectance difference.
+
+        Entry ``[i, p, q]`` is ``sum_j a_ij_p * a_ij_q`` over the intervals of difference
+        ``i``, with ``a_ij_p = b * alpha_j * cos(tilt_j_p)``. Scaled by the variance
+        components this gives the deposition part of the difference covariance.
+
+        Args:
+            f: Experiment (file) key.
+            simulation_inputs (SimulationInputs): Supplies the loading matrix.
+            reflectance_data (ReflectanceMeasurements): Supplies the difference windows.
+
+        Returns:
+            numpy.ndarray: Cross-products, shape (n_differences, n_mirrors, n_mirrors).
+        """
+        m = self._loading_matrix(f, simulation_inputs)
+        b = self._reflectance_loss_factor(f)
+        windows = self._difference_windows(f, reflectance_data)
+
+        cross_products = np.empty((len(windows), m.shape[1], m.shape[1]))
+        for i, window in enumerate(windows):
+            loading = m[window, :]
+            cross_products[i] = b**2 * (loading.transpose() @ loading)
+        return cross_products
+
+    def _differenced_measurement_covariance(self, f, reflectance_data, endpoint_correction=True):
+        """
+        Covariance of the differenced reflectometer noise, per mirror.
+
+        Successive differences share the measurement at their common endpoint, which
+        makes the covariance tridiagonal. Setting ``endpoint_correction`` False keeps
+        only the diagonal, i.e. treats the differences as independent.
+
+        Args:
+            f: Experiment (file) key.
+            reflectance_data (ReflectanceMeasurements): Supplies ``sigma_of_the_mean``.
+            endpoint_correction (bool): Whether to include the shared-endpoint
+                off-diagonal terms.
+
+        Returns:
+            numpy.ndarray: Covariance, shape (n_mirrors, n_differences, n_differences).
+        """
+        s2 = np.asarray(reflectance_data.sigma_of_the_mean[f]) ** 2  # (n_meas, n_mirrors)
+        n_diff, n_mirrors = s2.shape[0] - 1, s2.shape[1]
+
+        cov = np.zeros((n_mirrors, n_diff, n_diff))
+        diag = np.arange(n_diff)
+        for p in range(n_mirrors):
+            cov[p, diag, diag] = s2[1:, p] + s2[:-1, p]
+            if endpoint_correction and n_diff > 1:
+                shared = -s2[1:n_diff, p]
+                cov[p, diag[:-1], diag[:-1] + 1] = shared
+                cov[p, diag[:-1] + 1, diag[:-1]] = shared
+        return cov
+
+    def _experiment_covariance(
+        self,
+        f,
+        sigma_dep,
+        rho,
+        simulation_inputs,
+        reflectance_data,
+        endpoint_correction=True,
+    ):
+        """
+        Covariance of all reflectance differences in one experiment.
+
+        Deposition noise is split into a common component shared by every mirror during
+        an interval, ``sigma_c**2 = rho * sigma_dep**2``, and a mirror-specific component,
+        ``sigma_m**2 = (1 - rho) * sigma_dep**2``. The common component couples mirrors;
+        the mirror-specific component and the measurement noise do not.
+
+        Entries are ordered mirror-major: difference ``i`` of mirror ``p`` is at index
+        ``p * n_differences + i``.
+
+        Args:
+            f: Experiment (file) key.
+            sigma_dep (float): Total deposition noise standard deviation.
+            rho (float): Fraction of the deposition variance that is common to all
+                mirrors, in [0, 1].
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+            endpoint_correction (bool): Passed to
+                ``_differenced_measurement_covariance``.
+
+        Returns:
+            numpy.ndarray: Covariance, shape (n_mirrors * n_differences, same).
+        """
+        cross_products = self._deposition_cross_products(f, simulation_inputs, reflectance_data)
+        meas_cov = self._differenced_measurement_covariance(
+            f, reflectance_data, endpoint_correction=endpoint_correction
+        )
+        n_diff, n_mirrors = cross_products.shape[0], cross_products.shape[1]
+
+        s2_common = rho * sigma_dep**2
+        s2_mirror = (1.0 - rho) * sigma_dep**2
+
+        cov = np.zeros((n_mirrors * n_diff, n_mirrors * n_diff))
+        diag = np.arange(n_diff)
+        for p in range(n_mirrors):
+            for q in range(n_mirrors):
+                weight = s2_common + (s2_mirror if p == q else 0.0)
+                block = cov[p * n_diff : (p + 1) * n_diff, q * n_diff : (q + 1) * n_diff]
+                block[diag, diag] = weight * cross_products[:, p, q]
+            block = cov[p * n_diff : (p + 1) * n_diff, p * n_diff : (p + 1) * n_diff]
+            block += meas_cov[p]
+        return cov
+
+    def _negative_log_likelihood_components(
+        self,
+        params,
+        simulation_inputs,
+        reflectance_data,
+        endpoint_correction=True,
+    ):
+        """
+        Negative log-likelihood with the deposition noise split into variance components.
+
+        Generalises ``_negative_log_likelihood`` to mirrors observed simultaneously at one
+        site, whose deposition noise is partly shared. Each experiment contributes one
+        multivariate normal over its stacked reflectance differences. Differences with a
+        missing endpoint measurement are dropped, which marginalises them exactly.
+
+        Separating the two components requires at least two mirrors in some experiment;
+        with one mirror the likelihood depends only on ``sigma_dep``.
+
+        Args:
+            params: ``(mean_parameter, sigma_dep, rho)``, where ``mean_parameter`` is
+                ``hrz0`` or ``mu_tilde`` depending on the model, ``sigma_dep**2`` is the
+                total deposition variance and ``rho`` is the common fraction.
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+            endpoint_correction (bool): Whether to model the correlation between
+                consecutive differences induced by their shared measurement.
+
+        Returns:
+            float: The negative log-likelihood.
+        """
+        # check to ensure that reflectance_data and simulation_input keys correspond to the same files
+        _check_keys(simulation_inputs, reflectance_data)
+
+        sigma_dep, rho = params[1], params[2]
+        self.update_model_parameters(params[0:2])
+        self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0, verbose=False)
+
+        nll = 0.0
+        for f in list(reflectance_data.times.keys()):
+            observed = np.diff(reflectance_data.average[f], axis=0)
+            predicted = np.diff(self._predicted_reflectance(f, reflectance_data), axis=0)
+
+            # mirror-major ordering, matching _experiment_covariance
+            residual = (observed - predicted).transpose().ravel()
+            cov = self._experiment_covariance(
+                f,
+                sigma_dep,
+                rho,
+                simulation_inputs,
+                reflectance_data,
+                endpoint_correction=endpoint_correction,
+            )
+
+            observed_mask = np.isfinite(residual)
+            if not observed_mask.all():
+                residual = residual[observed_mask]
+                cov = cov[np.ix_(observed_mask, observed_mask)]
+
+            factor = cho_factor(cov, lower=True)
+            nll += 0.5 * (
+                residual.size * np.log(2 * np.pi)
+                + 2 * np.sum(np.log(np.diag(factor[0])))
+                + residual @ cho_solve(factor, residual)
+            )
+
+        return nll
+
     def _compute_variance_of_measurements(
         self, sigma_dep, simulation_inputs, reflectance_data=None
     ):
@@ -85,31 +335,19 @@ class CommonFittingMethods:
             else:
                 pif = reflectance_data.prediction_indices[f]
 
-            b = (
-                self.helios.nominal_reflectance * self.helios.inc_ref_factor[f]
-            )  # fixed for fitting experiments at reflectometer incidence angle
-            try:
-                attr = _parse_dust_str(sim_in.dust_type[f])
-                den = getattr(sim_in.dust, attr)  # dust.(sim_in.dust_type[f])
-            except Exception:
-                raise ValueError(
-                    "Dust measurement "
-                    + sim_in.dust_type[f]
-                    + " not present in dust class. Use dust_type="
-                    + sim_in.dust_type[f]
-                    + " option when initializing the model"
-                )
-
-            alpha = sim_in.dust_concentration[f] / den[f]
+            b = self._reflectance_loss_factor(f)
+            m = self._loading_matrix(f, sim_in)
 
             if reflectance_data is None:
                 meas_sig = np.zeros(self.helios.tilt[f].shape).transpose()
             else:
                 meas_sig = reflectance_data.sigma_of_the_mean[f]
 
-            c2t = np.cumsum(alpha**2 * np.cos(rad(self.helios.tilt[f])) ** 2, axis=1).transpose()
+            # Difference i spans simulation intervals k_{i-1}+1 ... k_i, matching the
+            # inclusive cumulative sum in compute_soiling_factor that forms the mean.
+            c2t = np.cumsum(m**2, axis=0)
             ind1 = pif[0:-1]
-            ind2 = [x - 1 for x in pif[1::]]
+            ind2 = pif[1::]
             s2total[f] = (
                 s2_dep * b**2 * (c2t[ind2, :] - c2t[ind1, :])
                 + meas_sig[0:-1, :] ** 2
