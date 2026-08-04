@@ -14,6 +14,15 @@ import pickle
 import warnings
 
 
+def _experiment_value(value, f):
+    """Value for experiment ``f``, from a per-experiment mapping or a shared scalar."""
+    if isinstance(value, dict):
+        return value[f]
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return value[f]
+    return value
+
+
 class CommonFittingMethods:
 
     # Deposition noise model. "scalar" is the historical two-parameter model;
@@ -520,6 +529,121 @@ class CommonFittingMethods:
             )
 
         return nll
+
+    def simulate_reflectance_data(
+        self,
+        simulation_inputs,
+        params,
+        measurement_indices,
+        measurement_sigma,
+        rho0=None,
+        number_of_measurements=1.0,
+        reflectometer_incidence_angle=None,
+        rng=None,
+        missing_fraction=0.0,
+    ):
+        """
+        Simulates a reflectance dataset from the model, ready to be fitted.
+
+        Draws deposition from the generative process via
+        ``SoilingBase.random_delta_soiled_area``, accumulates it into a reflectance path,
+        samples that path at the requested times and adds measurement noise. The result
+        is a ``ReflectanceMeasurements`` that ``fit_mle`` accepts.
+
+        Args:
+            simulation_inputs (SimulationInputs): Simulation inputs. Tilts and
+                ``inc_ref_factor`` must already be set on ``helios``, as
+                ``helios_angles`` does.
+            params: Parameter vector, ``(mean_parameter, sigma_dep)`` plus ``kappa`` for
+                the components model.
+            measurement_indices: Indices into the simulation grid at which the mirrors
+                are measured, either one sequence applied to every experiment or a dict
+                keyed by experiment.
+            measurement_sigma: Standard deviation of a single reflectometer reading,
+                scalar or per experiment. The noise actually added has standard deviation
+                ``measurement_sigma / sqrt(number_of_measurements)``, matching the
+                ``sigma_of_the_mean`` the likelihood uses.
+            rho0 (dict, optional): Initial reflectance per mirror. Defaults to the
+                nominal reflectance for every mirror.
+            number_of_measurements (float): Readings behind each reported mean.
+            reflectometer_incidence_angle (float, optional): Recorded on the result.
+                Defaults to ``helios.incidence_angle`` when available, else zero.
+            rng (numpy.random.Generator, optional): Source of randomness.
+            missing_fraction (float): Fraction of measurements to replace with NaN, for
+                exercising the missing-data path. Defaults to none.
+
+        Returns:
+            ReflectanceMeasurements: The simulated dataset.
+        """
+        if rng is None:
+            rng = np.random.default_rng()
+        if not 0.0 <= missing_fraction < 1.0:
+            raise ValueError(f"missing_fraction must be in [0, 1), got {missing_fraction}.")
+
+        sim_in = simulation_inputs
+        files = list(self.helios.tilt.keys())
+
+        if not isinstance(measurement_indices, dict):
+            measurement_indices = {f: list(measurement_indices) for f in files}
+        if rho0 is None:
+            rho0 = {
+                f: np.full(self.helios.tilt[f].shape[0], self.helios.nominal_reflectance)
+                for f in files
+            }
+
+        self.update_model_parameters(params)
+
+        # Populates delta_soiled_area_variance, and for the semi-physical model the
+        # deposition flux and adhesion removal that the draw depends on.
+        self.predict_soiling_factor(sim_in, rho0=rho0, verbose=False)
+        deposited = self.random_delta_soiled_area(sim_in, rng=rng, verbose=False)
+
+        times, average, sigma, tilts, angles = [], [], [], [], []
+        for f in files:
+            indices = measurement_indices[f]
+            b = self._reflectance_loss_factor(f)
+
+            # Same relation compute_soiling_factor inverts: an inclusive cumulative sum,
+            # so index k already includes the deposition during interval k.
+            path = np.asarray(rho0[f])[:, None] - b * np.cumsum(deposited[f], axis=1)
+            clean = path[:, indices].transpose()
+
+            sigma_f = np.full(clean.shape, _experiment_value(measurement_sigma, f))
+            noise_sd = sigma_f / np.sqrt(_experiment_value(number_of_measurements, f))
+            measured = clean + noise_sd * rng.standard_normal(clean.shape)
+
+            if missing_fraction > 0.0:
+                measured = measured.copy()
+                measured[rng.random(measured.shape) < missing_fraction] = np.nan
+
+            if reflectometer_incidence_angle is not None:
+                angle = _experiment_value(reflectometer_incidence_angle, f)
+            else:
+                angle = float(np.asarray(self.helios.incidence_angle.get(f, 0.0)).reshape(-1)[0])
+
+            times.append(np.asarray(sim_in.time[f])[indices])
+            average.append(measured)
+            sigma.append(sigma_f)
+            tilts.append(self.helios.tilt[f])
+            angles.append(angle)
+
+        # Carry the simulation inputs' labels so that _check_keys passes and the result
+        # can be handed straight to the likelihood.
+        source_names = getattr(sim_in, "files", None)
+        names = [source_names[f] for f in files] if source_names else None
+
+        return smb.ReflectanceMeasurements.from_arrays(
+            times=times,
+            average=average,
+            sigma=sigma,
+            time_grids=[np.asarray(sim_in.time[f]) for f in files],
+            tilts=tilts,
+            number_of_measurements=[
+                _experiment_value(number_of_measurements, f) for f in files
+            ],
+            reflectometer_incidence_angle=angles,
+            names=names,
+        )
 
     def _compute_variance_of_measurements(
         self, sigma_dep, simulation_inputs, reflectance_data=None
