@@ -228,11 +228,12 @@ class CommonFittingMethods:
         summary = {}
         for name, gradient in gradients.items():
             sd = np.sqrt(max(gradient @ y_cov @ gradient, 0.0))
-            summary[name] = (
-                np.exp(logs[name]),
-                np.exp(logs[name] - 1.96 * sd),
-                np.exp(logs[name] + 1.96 * sd),
-            )
+            with np.errstate(over="ignore"):
+                summary[name] = (
+                    np.exp(logs[name]),
+                    np.exp(logs[name] - 1.96 * sd),
+                    np.exp(logs[name] + 1.96 * sd),
+                )
         return summary
 
     def compute_soiling_factor(self, rho0=None):
@@ -452,16 +453,23 @@ class CommonFittingMethods:
         s2_common = kappa * sigma_dep**2
         s2_mirror = (1.0 - kappa) * sigma_dep**2
 
-        cov = np.zeros((n_mirrors * n_diff, n_mirrors * n_diff))
+        # Assembled as (mirror, difference, mirror, difference) and then flattened, which
+        # keeps the mirror-major ordering while avoiding a Python loop over mirror pairs.
+        # This runs on every likelihood evaluation, so it is worth vectorising.
+        cov = np.zeros((n_mirrors, n_diff, n_mirrors, n_diff))
         diag = np.arange(n_diff)
-        for p in range(n_mirrors):
-            for q in range(n_mirrors):
-                weight = s2_common + (s2_mirror if p == q else 0.0)
-                block = cov[p * n_diff : (p + 1) * n_diff, q * n_diff : (q + 1) * n_diff]
-                block[diag, diag] = weight * cross_products[:, p, q]
-            block = cov[p * n_diff : (p + 1) * n_diff, p * n_diff : (p + 1) * n_diff]
-            block += meas_cov[p]
-        return cov
+        mirrors = np.arange(n_mirrors)
+
+        # Deposition is diagonal in the difference index because the windows partition
+        # the timeline; the common component couples mirrors, the mirror-specific one
+        # only adds to the diagonal.
+        weights = s2_common * np.ones((n_mirrors, n_mirrors)) + s2_mirror * np.eye(n_mirrors)
+        cov[:, diag, :, diag] = weights[None, :, :] * cross_products
+
+        # Measurement noise acts within a single mirror.
+        cov[mirrors, :, mirrors, :] += meas_cov
+
+        return cov.reshape(n_mirrors * n_diff, n_mirrors * n_diff)
 
     def _negative_log_likelihood_components(
         self,
@@ -939,7 +947,7 @@ class CommonFittingMethods:
         for ii, name in enumerate(names):
             _print_if(fmt.format(name, p_hat[ii], ci[0, ii], ci[1, ii]), verbose)
 
-        if self.variance_model == "components":
+        if verbose and self.variance_model == "components":
             # Reported on the natural scale in both cases: the split is what the
             # components model exists to estimate, and it is not one of the coordinates.
             for name, (estimate, lower, upper) in self._variance_component_summary(

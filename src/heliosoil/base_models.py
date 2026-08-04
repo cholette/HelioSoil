@@ -478,29 +478,30 @@ class PhysicalBase(SoilingBase):
                 )
             alpha = sim_in.dust_concentration[f] / den[f]
 
-            # Compute the area coverage by dust at each time step
-            N_helios = helios.tilt[f].shape[0]
-            N_times = helios.tilt[f].shape[1]
+            # Compute the area coverage by dust at each time step, over all mirrors and
+            # timesteps at once. This runs on every likelihood evaluation during fitting,
+            # where the elementwise loop it replaces dominated the cost.
+            #
+            # if loss_model == 'geometry':
+            #     # The below two integrals are equivalent, but the version with the log10(D)
+            #     # as the independent variable is used due to the log spacing of the diameter grid
+            #     #
+            #     # ... alpha[jj] * np.trapezoid(pdfqN[f][ii,jj,:]*(np.pi/4*D_meters**2)
+            #     #                              *sim_in.dt[f]/dust.D[f]/np.log(10), dust.D[f])
+            #     #
+            #     # ... alpha[jj] * np.pi/4 * np.trapezoid(pdfqN[f][ii,jj,:]*(D_meters**2)
+            #     #                                        *sim_in.dt[f], np.log10(dust.D[f]))
+            # else: # loss_model == "mie"
             DT = sim_in.dt[f]
-            for ii in range(N_helios):
-                ext_weights = extinction_weighting[f][ii, :]
-                for jj in range(N_times):
-
-                    # if loss_model == 'geometry':
-                    #     # The below two integrals are equivalent, but the version with the log10(D)
-                    #     # as the independent variable is used due to the log spacing of the diameter grid
-                    #     #
-                    #     # helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.trapezoid(helios.pdfqN[f][ii,jj,:]*\
-                    #     #     (np.pi/4*D_meters**2)*sim_in.dt[f]/dust.D[f]/np.log(10),dust.D[f])
-                    #
-                    #     helios.delta_soiled_area[f][ii,jj] = alpha[jj] * np.pi/4 *np.trapezoid(helios.pdfqN[f][ii,jj,:]*\
-                    #         (D_meters**2)*sim_in.dt[f],np.log10(dust.D[f]))
-                    # else: # loss_model == "mie"
-
-                    # pdfqN includes cos(tilt)
-                    number_density = helios.pdfqN[f][ii, jj, :]
-                    int_val = np.trapezoid(number_density*D2*DT*ext_weights,np.log10(dust.D[f]),)
-                    helios.delta_soiled_area[f][ii, jj] = (alpha[jj]*np.pi/4*int_val)  
+            # pdfqN includes cos(tilt); index order is (mirror, time, diameter) and the
+            # extinction weighting is (mirror, diameter).
+            integrand = (
+                helios.pdfqN[f]
+                * (D2 * DT)[None, None, :]
+                * extinction_weighting[f][:, None, :]
+            )
+            integral = np.trapezoid(integrand, np.log10(dust.D[f]), axis=2)
+            helios.delta_soiled_area[f] = alpha[None, :] * np.pi / 4 * integral
 
             # variance of noise for each measurement
             if sigma_dep is not None:
@@ -650,10 +651,6 @@ class ConstantMeanBase(SoilingBase):
 
         files = list(sim_in.time.keys())
         for f in files:
-            helios.delta_soiled_area[f] = np.empty(
-                (helios.tilt[f].shape[0], helios.tilt[f].shape[1])
-            )
-
             # compute alpha
             try:
                 attr = _parse_dust_str(sim_in.dust_type[f])
@@ -669,14 +666,10 @@ class ConstantMeanBase(SoilingBase):
 
             alpha = sim_in.dust_concentration[f] / den[f]
 
-            # Compute the area coverage by dust at each time step
-            N_helios = helios.tilt[f].shape[0]
-            N_times = helios.tilt[f].shape[1]
-            for ii in range(N_helios):
-                for jj in range(N_times):
-                    helios.delta_soiled_area[f][ii, jj] = (
-                        alpha[jj] * cosd(helios.tilt[f][ii, jj]) * mu_tilde
-                    )
+            # Area coverage by dust at each time step, over all mirrors at once. This is
+            # evaluated once per likelihood evaluation during fitting, so the elementwise
+            # loop it replaces dominated the cost of a fit.
+            helios.delta_soiled_area[f] = alpha[None, :] * cosd(helios.tilt[f]) * mu_tilde
 
             # Predict confidence interval if sigma_dep is defined. Fixed tilt assumed in this class.
             if sigma_dep is not None:
