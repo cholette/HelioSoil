@@ -3,9 +3,9 @@ Tests for the multi-mirror variance-components likelihood.
 
 Mirrors observed simultaneously at one site do not receive independent deposition
 noise: a dusty or gusty interval loads every mirror at once. The deposition noise is
-therefore split into a common component ``sigma_c**2 = rho * sigma_dep**2``, shared by
+therefore split into a common component ``sigma_c**2 = kappa * sigma_dep**2``, shared by
 all mirrors during an interval, and a mirror-specific component
-``sigma_m**2 = (1 - rho) * sigma_dep**2``. Each experiment then contributes one
+``sigma_m**2 = (1 - kappa) * sigma_dep**2``. Each experiment then contributes one
 multivariate normal over its stacked reflectance differences rather than a product of
 univariate ones.
 
@@ -15,7 +15,7 @@ restate them.
 
 1. ``test_reduces_*`` / ``test_single_mirror_*`` -- the model nests the scalar one.
 2. ``test_covariance_*`` -- assembly against the Kronecker form, and positive
-   definiteness over the admissible range of rho.
+   definiteness over the admissible range of kappa.
 """
 
 import types
@@ -101,8 +101,8 @@ def _fixture(n_mirrors, common_tilt=False, common_sigma=False, seed=0):
 # ---------------------------------------------------------------------------
 
 
-def test_reduces_to_scalar_likelihood_when_rho_is_zero():
-    """rho = 0 with independent differences recovers the scalar likelihood exactly."""
+def test_reduces_to_scalar_likelihood_when_kappa_is_zero():
+    """kappa = 0 with independent differences recovers the scalar likelihood exactly."""
     model, sim_in, ref_dat = _fixture(n_mirrors=4)
     sigma_dep = 8e-4
 
@@ -114,16 +114,16 @@ def test_reduces_to_scalar_likelihood_when_rho_is_zero():
     np.testing.assert_allclose(components, scalar, rtol=1e-11, atol=ATOL)
 
 
-def test_single_mirror_likelihood_does_not_depend_on_rho():
+def test_single_mirror_likelihood_does_not_depend_on_kappa():
     """With one mirror only the total sigma_dep is identified, not the split."""
     model, sim_in, ref_dat = _fixture(n_mirrors=1)
     sigma_dep = 8e-4
 
     values = [
         model._negative_log_likelihood_components(
-            [MU_TILDE, sigma_dep, rho], sim_in, ref_dat, endpoint_correction=True
+            [MU_TILDE, sigma_dep, kappa], sim_in, ref_dat, endpoint_correction=True
         )
-        for rho in (0.0, 0.25, 0.5, 1.0)
+        for kappa in (0.0, 0.25, 0.5, 1.0)
     ]
     for value in values[1:]:
         np.testing.assert_allclose(value, values[0], rtol=1e-12, atol=ATOL)
@@ -138,10 +138,10 @@ def test_covariance_matches_kronecker_form_for_common_tilt():
     """Common tilt and measurement noise give (sc^2 11' + sm^2 I) kron S + I kron R."""
     n_mirrors = 3
     model, sim_in, ref_dat = _fixture(n_mirrors, common_tilt=True, common_sigma=True)
-    sigma_dep, rho = 7e-4, 0.4
-    s2_common, s2_mirror = rho * sigma_dep**2, (1 - rho) * sigma_dep**2
+    sigma_dep, kappa = 7e-4, 0.4
+    s2_common, s2_mirror = kappa * sigma_dep**2, (1 - kappa) * sigma_dep**2
 
-    got = model._experiment_covariance(F, sigma_dep, rho, sim_in, ref_dat)
+    got = model._experiment_covariance(F, sigma_dep, kappa, sim_in, ref_dat)
 
     # Independent reference: per-difference dust loading S_i and tridiagonal R.
     m = model._loading_matrix(F, sim_in)
@@ -164,10 +164,10 @@ def test_covariance_matches_kronecker_form_for_common_tilt():
     np.testing.assert_allclose(got, expected, rtol=RTOL, atol=1e-300)
 
 
-def test_covariance_is_positive_definite_across_rho():
-    """Cholesky succeeds over the whole admissible range of rho."""
+def test_covariance_is_positive_definite_across_kappa():
+    """Cholesky succeeds over the whole admissible range of kappa."""
     model, sim_in, ref_dat = _fixture(n_mirrors=5)
-    for rho in np.linspace(0.0, 1.0, 11):
-        cov = model._experiment_covariance(F, 9e-4, rho, sim_in, ref_dat)
+    for kappa in np.linspace(0.0, 1.0, 11):
+        cov = model._experiment_covariance(F, 9e-4, kappa, sim_in, ref_dat)
         np.testing.assert_allclose(cov, cov.transpose(), rtol=RTOL, atol=ATOL)
         np.linalg.cholesky(cov)  # raises LinAlgError if not positive definite

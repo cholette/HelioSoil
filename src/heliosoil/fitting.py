@@ -8,11 +8,225 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from scipy.optimize import minimize_scalar, minimize
 from scipy.linalg import cho_factor, cho_solve
+from scipy.special import expit, logit
 import numdifftools as ndt
 import pickle
 
 
 class CommonFittingMethods:
+
+    # Deposition noise model. "scalar" is the historical two-parameter model;
+    # "components" splits the deposition variance into a site-common part and a
+    # mirror-specific part and takes a third parameter. Declared at class level so that
+    # models built before this option existed (e.g. unpickled) behave as before.
+    variance_model = "scalar"
+    _endpoint_correction = None
+
+    # Variance split, populated by update_model_parameters for the components model.
+    common_variance_fraction = 0.0
+    sigma_c = None
+    sigma_m = None
+
+    # Mean parameter: how it is transformed for fitting, and what to call it. Set by
+    # each model class.
+    _mean_parameter_transform = "log"
+    _mean_parameter_name = "mu_tilde"
+
+    def set_variance_model(self, variance_model="scalar", endpoint_correction=None):
+        """
+        Choose how the deposition noise is modelled.
+
+        The "scalar" model gives every mirror independent deposition noise of standard
+        deviation ``sigma_dep``. The "components" model splits that variance into a part
+        common to all mirrors at the site during an interval and a mirror-specific part,
+        adding a third parameter ``kappa``, the common fraction. Separating the two
+        requires at least two mirrors measured together.
+
+        Args:
+            variance_model (str): "scalar" or "components".
+            endpoint_correction (bool, optional): Whether to model the correlation
+                between consecutive reflectance differences created by the measurement
+                they share. Defaults to following ``variance_model``, so that "scalar"
+                reproduces earlier fits exactly.
+
+        Raises:
+            ValueError: If ``variance_model`` is not recognised.
+        """
+        if variance_model not in ("scalar", "components"):
+            raise ValueError(
+                f"variance_model must be 'scalar' or 'components', got {variance_model!r}."
+            )
+        self.variance_model = variance_model
+        self._endpoint_correction = endpoint_correction
+
+    @property
+    def endpoint_correction(self):
+        """Whether consecutive differences share their endpoint measurement noise."""
+        if self._endpoint_correction is None:
+            return self.variance_model == "components"
+        return bool(self._endpoint_correction)
+
+    @property
+    def n_parameters(self):
+        """Number of fitted parameters under the current variance model."""
+        return 3 if self.variance_model == "components" else 2
+
+    @property
+    def parameter_names(self):
+        """Parameter names on the natural scale."""
+        names = [self._mean_parameter_name, "sigma_dep"]
+        if self.variance_model == "components":
+            names.append("kappa")
+        return names
+
+    @property
+    def transformed_parameter_names(self):
+        """Parameter names on the unconstrained fitting scale."""
+        if self._mean_parameter_transform == "log_log":
+            mean = f"log(log({self._mean_parameter_name}))"
+        else:
+            mean = f"log({self._mean_parameter_name})"
+        names = [mean, "log(sigma_dep)"]
+        if self.variance_model == "components":
+            names.append("logit(kappa)")
+        return names
+
+    def transform_scale(self, x, likelihood_hessian=None, direction="inverse"):
+        """
+        Map parameters between their natural scale and the unconstrained fitting scale.
+
+        The fitting scale is ``log(log(hrz0))`` or ``log(mu_tilde)`` for the mean
+        parameter, ``log(sigma_dep)``, and for the components model ``logit(kappa)``.
+        Optimising there enforces ``hrz0 > 1``, ``sigma_dep > 0`` and ``0 < kappa < 1``
+        without bounds.
+
+        Args:
+            x: Parameter vector, on the fitting scale when ``direction`` is "inverse"
+                and on the natural scale when it is "forward".
+            likelihood_hessian (numpy.ndarray, optional): If supplied, the Hessian is
+                transformed to the other scale and returned alongside the parameters.
+            direction (str): "inverse" to the natural scale, "forward" to the fitting
+                scale.
+
+        Returns:
+            numpy.ndarray: The transformed parameters, or a tuple of those and the
+            transformed Hessian if one was supplied.
+        """
+        x = np.asarray(x, dtype=float)
+        log_log_mean = self._mean_parameter_transform == "log_log"
+
+        if direction == "inverse":
+            values = [np.exp(np.exp(x[0])) if log_log_mean else np.exp(x[0]), np.exp(x[1])]
+            if x.size > 2:
+                values.append(expit(x[2]))
+        elif direction == "forward":
+            values = [np.log(np.log(x[0])) if log_log_mean else np.log(x[0]), np.log(x[1])]
+            if x.size > 2:
+                values.append(logit(x[2]))
+        else:
+            raise ValueError("Transformation direction not recognized.")
+        z = np.array(values)
+
+        if not isinstance(
+            likelihood_hessian, np.ndarray
+        ):  # can't use likelihood_hessian is None because it is an array if supplied
+            return z
+
+        # Jacobian d(natural)/d(fitting), evaluated at the point on the fitting scale.
+        # See Reparameterization at https://en.wikipedia.org/wiki/Fisher_information
+        y = x if direction == "inverse" else z
+        derivatives = [
+            np.exp(y[0] + np.exp(y[0])) if log_log_mean else np.exp(y[0]),
+            np.exp(y[1]),
+        ]
+        if x.size > 2:
+            fraction = expit(y[2])
+            derivatives.append(fraction * (1.0 - fraction))
+        J = np.diag(derivatives)
+
+        if direction == "inverse":
+            Ji = inv(J)
+            H = Ji.transpose() @ likelihood_hessian @ Ji
+        elif direction == "forward":
+            H = J.transpose() @ likelihood_hessian @ J
+
+        return z, H
+
+    def _set_variance_components(self, kappa):
+        """
+        Record the common/mirror-specific split of the deposition variance.
+
+        ``sigma_dep`` keeps its meaning as the total, so anything downstream that only
+        needs the per-mirror predictive variance is unaffected.
+
+        Args:
+            kappa (float): Fraction of the deposition variance common to all mirrors.
+
+        Raises:
+            ValueError: If ``kappa`` is outside [0, 1].
+        """
+        kappa = float(kappa)
+        if not 0.0 <= kappa <= 1.0:
+            raise ValueError(f"The common variance fraction must be in [0, 1], got {kappa}.")
+        self.common_variance_fraction = kappa
+        if self.sigma_dep is not None:
+            self.sigma_c = self.sigma_dep * np.sqrt(kappa)
+            self.sigma_m = self.sigma_dep * np.sqrt(1.0 - kappa)
+
+    def _check_variance_components_identifiable(self, reflectance_data):
+        """
+        Confirm some experiment has enough mirrors to separate the variance components.
+
+        The across-mirror scatter identifies the mirror-specific component and the
+        common movement of all mirrors identifies the common one, so a single mirror
+        determines only their sum.
+
+        Raises:
+            ValueError: If no experiment has two or more mirrors.
+        """
+        mirrors = [reflectance_data.average[f].shape[1] for f in reflectance_data.average]
+        if max(mirrors, default=0) < 2:
+            raise ValueError(
+                "Separating the common and mirror-specific deposition variances needs at "
+                "least two mirrors measured together, but every experiment has one. Use "
+                "set_variance_model('scalar') to fit the total deposition variance."
+            )
+
+    def _variance_component_summary(self, y_hat, y_cov):
+        """
+        Point estimates and 95% intervals for sigma_c and sigma_m.
+
+        Uses the delta method on the log scale, which keeps the intervals positive.
+        With ``u = log(sigma_dep)`` and ``v = logit(kappa)``, ``log(sigma_c) = u +
+        log(kappa)/2`` and ``log(sigma_m) = u + log(1-kappa)/2``.
+
+        Args:
+            y_hat (numpy.ndarray): Estimates on the fitting scale.
+            y_cov (numpy.ndarray): Their covariance on the fitting scale.
+
+        Returns:
+            dict: Maps "sigma_c" and "sigma_m" to (estimate, lower, upper).
+        """
+        kappa = expit(y_hat[2])
+        gradients = {
+            "sigma_c": np.array([0.0, 1.0, 0.5 * (1.0 - kappa)]),
+            "sigma_m": np.array([0.0, 1.0, -0.5 * kappa]),
+        }
+        logs = {
+            "sigma_c": y_hat[1] + 0.5 * np.log(kappa),
+            "sigma_m": y_hat[1] + 0.5 * np.log1p(-kappa),
+        }
+
+        summary = {}
+        for name, gradient in gradients.items():
+            sd = np.sqrt(max(gradient @ y_cov @ gradient, 0.0))
+            summary[name] = (
+                np.exp(logs[name]),
+                np.exp(logs[name] - 1.96 * sd),
+                np.exp(logs[name] + 1.96 * sd),
+            )
+        return summary
+
     def compute_soiling_factor(self, rho0=None):
         # Converts helios.delta_soiled_area into an accumulated area loss and
         # populates helios.soiling_factor.
@@ -192,7 +406,7 @@ class CommonFittingMethods:
         self,
         f,
         sigma_dep,
-        rho,
+        kappa,
         simulation_inputs,
         reflectance_data,
         endpoint_correction=True,
@@ -201,8 +415,8 @@ class CommonFittingMethods:
         Covariance of all reflectance differences in one experiment.
 
         Deposition noise is split into a common component shared by every mirror during
-        an interval, ``sigma_c**2 = rho * sigma_dep**2``, and a mirror-specific component,
-        ``sigma_m**2 = (1 - rho) * sigma_dep**2``. The common component couples mirrors;
+        an interval, ``sigma_c**2 = kappa * sigma_dep**2``, and a mirror-specific component,
+        ``sigma_m**2 = (1 - kappa) * sigma_dep**2``. The common component couples mirrors;
         the mirror-specific component and the measurement noise do not.
 
         Entries are ordered mirror-major: difference ``i`` of mirror ``p`` is at index
@@ -211,7 +425,7 @@ class CommonFittingMethods:
         Args:
             f: Experiment (file) key.
             sigma_dep (float): Total deposition noise standard deviation.
-            rho (float): Fraction of the deposition variance that is common to all
+            kappa (float): Fraction of the deposition variance that is common to all
                 mirrors, in [0, 1].
             simulation_inputs (SimulationInputs): Simulation inputs.
             reflectance_data (ReflectanceMeasurements): Measurement data.
@@ -227,8 +441,8 @@ class CommonFittingMethods:
         )
         n_diff, n_mirrors = cross_products.shape[0], cross_products.shape[1]
 
-        s2_common = rho * sigma_dep**2
-        s2_mirror = (1.0 - rho) * sigma_dep**2
+        s2_common = kappa * sigma_dep**2
+        s2_mirror = (1.0 - kappa) * sigma_dep**2
 
         cov = np.zeros((n_mirrors * n_diff, n_mirrors * n_diff))
         diag = np.arange(n_diff)
@@ -260,9 +474,9 @@ class CommonFittingMethods:
         with one mirror the likelihood depends only on ``sigma_dep``.
 
         Args:
-            params: ``(mean_parameter, sigma_dep, rho)``, where ``mean_parameter`` is
+            params: ``(mean_parameter, sigma_dep, kappa)``, where ``mean_parameter`` is
                 ``hrz0`` or ``mu_tilde`` depending on the model, ``sigma_dep**2`` is the
-                total deposition variance and ``rho`` is the common fraction.
+                total deposition variance and ``kappa`` is the common fraction.
             simulation_inputs (SimulationInputs): Simulation inputs.
             reflectance_data (ReflectanceMeasurements): Measurement data.
             endpoint_correction (bool): Whether to model the correlation between
@@ -274,7 +488,7 @@ class CommonFittingMethods:
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs, reflectance_data)
 
-        sigma_dep, rho = params[1], params[2]
+        sigma_dep, kappa = params[1], params[2]
         self.update_model_parameters(params[0:2])
         self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0, verbose=False)
 
@@ -288,7 +502,7 @@ class CommonFittingMethods:
             cov = self._experiment_covariance(
                 f,
                 sigma_dep,
-                rho,
+                kappa,
                 simulation_inputs,
                 reflectance_data,
                 endpoint_correction=endpoint_correction,
@@ -375,6 +589,30 @@ class CommonFittingMethods:
         return sse
 
     def _negative_log_likelihood(self, params, simulation_inputs, reflectance_data):
+        """
+        Negative log-likelihood under the currently selected variance model.
+
+        Args:
+            params: ``(mean_parameter, sigma_dep)``, plus ``kappa`` for the components
+                model.
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+
+        Returns:
+            float: The negative log-likelihood.
+        """
+        if self.variance_model == "components":
+            return self._negative_log_likelihood_components(
+                params,
+                simulation_inputs,
+                reflectance_data,
+                endpoint_correction=self.endpoint_correction,
+            )
+        return self._negative_log_likelihood_scalar(
+            params, simulation_inputs, reflectance_data
+        )
+
+    def _negative_log_likelihood_scalar(self, params, simulation_inputs, reflectance_data):
 
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs, reflectance_data)
@@ -475,6 +713,9 @@ class CommonFittingMethods:
         ref_dat = reflectance_data
         sim_in = simulation_inputs
 
+        if self.variance_model == "components":
+            self._check_variance_components_identifiable(ref_dat)
+
         if np.all(x0 is None):  # intialize using least squares and 1D MLE
             _print_if("Getting initial deposition parameter guess via least squares", verbose)
             p0, sse = self.fit_least_squares(simulation_inputs, reflectance_data, verbose=False)
@@ -484,14 +725,18 @@ class CommonFittingMethods:
                 verbose,
             )
 
+            # Start from an even split of the deposition variance, which is interior to
+            # the admissible range of kappa and so avoids starting on a boundary.
             def nloglike1D(y):
-                return self._negative_log_likelihood([p0, y], sim_in, ref_dat)
+                return self._negative_log_likelihood(
+                    [p0, y, 0.5][0 : self.n_parameters], sim_in, ref_dat
+                )
 
             s0 = minimize_scalar(
                 nloglike1D, bounds=(smb.tol, sse), method="Bounded"
             )  # use bounded to prevent evaluation at values <=1
-            x0 = np.array([p0, s0.x])
-            _print_if("x0 = [" + str(x0[0]) + ", " + str(x0[1]) + "]", verbose)
+            x0 = np.array([p0, s0.x, 0.5][0 : self.n_parameters])
+            _print_if("x0 = [" + ", ".join(f"{v}" for v in x0) + "]", verbose)
 
         # MLE. Transform to logs to ensure parameters are positive
         _print_if("Maximizing likelihood ...", verbose)
@@ -510,38 +755,39 @@ class CommonFittingMethods:
         )
         H_log = ndt.Hessian(nloglike)(y)  # Hessian is in the log transformed space
 
+        try:
+            y_cov = np.linalg.inv(H_log)  # Parameter covariance in the log space
+        except np.linalg.LinAlgError:
+            if np.linalg.det(H_log) == 0:
+                y_cov = np.linalg.pinv(H_log)  # Use pseudoinverse if determinant is zero
+            else:
+                raise  # Re-raise the exception if it's not due to zero determinant
+
         if transform_to_original_scale:
             # Get standard errors using observed information
-            x_hat, H = self.transform_scale(y, likelihood_hessian=H_log)
-            x_cov = np.linalg.inv(H)
-
-            p_hat = x_hat
-            p_cov = x_cov
-
+            p_hat, H = self.transform_scale(y, likelihood_hessian=H_log)
+            p_cov = np.linalg.inv(H)
+            names = self.parameter_names
         else:
-            y_hat = y
-            try:
-                y_cov = np.linalg.inv(H_log)  # Parameter covariance in the log space
-            except np.linalg.LinAlgError:
-                if np.linalg.det(H_log) == 0:
-                    y_cov = np.linalg.pinv(H_log)  # Use pseudoinverse if determinant is zero
-                else:
-                    raise  # Re-raise the exception if it's not due to zero determinant
+            p_hat, p_cov = y, y_cov
+            names = self.transformed_parameter_names
 
-            # print estimates
-            fmt = "log(log(hrz0)) = {0:.2e}, log(sigma_dep) = {1:.2e}"
-            _print_if("... done! \n" + fmt.format(y_hat[0], y_hat[1]), verbose)
+        _print_if("... done!", verbose)
+        standard_errors = np.sqrt(np.diag(p_cov))
+        ci = p_hat + 1.96 * standard_errors * np.array([[-1], [1]])
+        fmt = "  {0:s} = {1:.3e}, 95% confidence interval: [{2:.3e}, {3:.3e}]"
+        for ii, name in enumerate(names):
+            _print_if(fmt.format(name, p_hat[ii], ci[0, ii], ci[1, ii]), verbose)
 
-            # print confidence intervals
-            s = np.sqrt(np.diag(y_cov))
-            y_ci = y_hat + 1.96 * s * np.array([[-1], [1]])
-            fmt = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
-            _print_if(fmt.format("log(log(hrz0))", y_ci[0, 0], y_ci[1, 0]), verbose)
-            _print_if(fmt.format("log(sigma_dep)", y_ci[0, 1], y_ci[1, 1]), verbose)
-            p_hat = y_hat
-            p_cov = y_cov
+        if self.variance_model == "components":
+            # Reported on the natural scale in both cases: the split is what the
+            # components model exists to estimate, and it is not one of the coordinates.
+            for name, (estimate, lower, upper) in self._variance_component_summary(
+                y, y_cov
+            ).items():
+                _print_if(fmt.format(name, estimate, lower, upper), verbose)
 
-        _print_if("... done!\n", verbose)
+        _print_if("", verbose)
         return p_hat, p_cov
 
     def save_data(
@@ -551,7 +797,12 @@ class CommonFittingMethods:
         training_simulation_data=None,
         training_reflectance_data=None,
     ):
-        save_data = {"model": self, "type": None}
+        save_data = {
+            "model": self,
+            "type": None,
+            "variance_model": self.variance_model,
+            "endpoint_correction": self.endpoint_correction,
+        }
         if log_p_hat is not None:
             save_data["transformed_parameters"] = log_p_hat
         if log_p_hat_cov is not None:
@@ -830,9 +1081,14 @@ class CommonFittingMethods:
 
 
 class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
-    def __init__(self, file_params):
+
+    _mean_parameter_transform = "log_log"
+    _mean_parameter_name = "hrz0"
+
+    def __init__(self, file_params, variance_model="scalar", endpoint_correction=None):
         table = pd.read_excel(file_params, index_col="Parameter")
         super().__init__()
+        self.set_variance_model(variance_model, endpoint_correction=endpoint_correction)
         self.import_site_data_and_constants(file_params)
         self.helios.hamaker = float(table.loc["hamaker_glass"].Value)
         self.helios.poisson = float(table.loc["poisson_glass"].Value)
@@ -929,84 +1185,20 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
         else:
             self.helios.soiling_factor_prediction_variance = {}
 
-    def fit_mle(
-        self,
-        simulation_inputs,
-        reflectance_data,
-        verbose=True,
-        x0=None,
-        transform_to_original_scale=False,
-        **optim_kwargs,
-    ):
-
-        p_hat, p_cov = super().fit_mle(
-            simulation_inputs,
-            reflectance_data,
-            verbose=True,
-            x0=x0,
-            transform_to_original_scale=transform_to_original_scale,
-            **optim_kwargs,
-        )
-
-        # print estimates and confidence intervals
-        fmtCI = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
-        if transform_to_original_scale:
-            fmtE = "hrz0 = {0:.2e}, sigma_dep = {1:.2e}"
-            _print_if(fmtE.format(p_hat[0], p_hat[1]), verbose)
-
-            # print confidence intervals
-            s = np.sqrt(np.diag(p_cov))
-            x_ci = p_hat + 1.96 * s * np.array([[-1], [1]])
-            _print_if(fmtCI.format("hrz0", x_ci[0, 0], x_ci[1, 0]), verbose)
-            _print_if(fmtCI.format("sigma_dep", x_ci[0, 1], x_ci[1, 1]), verbose)
-        else:
-            fmtE = "log(log(hrz0)) = {0:.2e}, sigma_dep = {1:.2e}"
-            _print_if(fmtE.format(p_hat[0], p_hat[1]), verbose)
-            s = np.sqrt(np.diag(p_cov))
-            y_ci = p_hat + 1.96 * s * np.array([[-1], [1]])
-            _print_if(fmtCI.format("log(log(hrz0))", y_ci[0, 0], y_ci[1, 0]), verbose)
-            _print_if(fmtCI.format("log(sigma_dep)", y_ci[0, 1], y_ci[1, 1]), verbose)
-
-        return p_hat, p_cov
-
-    def transform_scale(self, x, likelihood_hessian=None, direction="inverse"):
-        # direction is either "forward" (to log-scaled space) or "inverse" (back to original scale)
-        x = np.array(x)
-        if direction == "inverse":
-            z = np.array([np.exp(np.exp(x[0])), np.exp(x[1])])
-        elif direction == "forward":
-            z = np.array([np.log(np.log(x[0])), np.log(x[1])])
-        else:
-            raise ValueError("Transformation direction not recognized.")
-
-        if not isinstance(
-            likelihood_hessian, np.ndarray
-        ):  # can't use likelihood_hessian is None because it is an array if supplied
-            return z
-        else:
-            # Jacobian for transformation. See Reparameterization at https://en.wikipedia.org/wiki/Fisher_information
-            J = np.array([[np.exp(x[0] + np.exp(x[0])), 0], [0, np.exp(x[1])]])
-
-            if direction == "inverse":
-                Ji = inv(J)
-                H = Ji.transpose() @ likelihood_hessian @ Ji
-            elif direction == "forward":
-                H = J.transpose() @ likelihood_hessian @ J
-
-            return z, H
-
     def update_model_parameters(self, x):
         """
-        Updates the model parameters `hrz0` and `sigma_dep` based on the input `x`.
+        Updates the model parameters from a parameter vector.
 
-        If `x` is a list or NumPy array, the first element is assigned to `hrz0` and the second element (if present) is assigned to `sigma_dep`.
-
-        If `x` is a single value, it is assigned to `hrz0` and `sigma_dep` is set to `None`.
+        The first element is `hrz0`, the second (if present) `sigma_dep`, and the third
+        (if present) the fraction of the deposition variance common to all mirrors. A
+        bare scalar sets `hrz0` and clears `sigma_dep`.
         """
         if isinstance(x, list) or isinstance(x, np.ndarray):
             self.hrz0 = x[0]
             if len(x) > 1:
                 self.sigma_dep = x[1]
+            if len(x) > 2:
+                self._set_variance_components(x[2])
         else:
             self.hrz0 = x
             self.sigma_dep = None
@@ -1034,7 +1226,12 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
         """
         with open(file_name, "wb") as f:
 
-            save_data = {"model": self, "type": "semi-physical"}
+            save_data = {
+                "model": self,
+                "type": "semi-physical",
+                "variance_model": self.variance_model,
+                "endpoint_correction": self.endpoint_correction,
+            }
             if log_p_hat is not None:
                 save_data["transformed_parameters"] = log_p_hat
             if log_p_hat_cov is not None:
@@ -1051,8 +1248,12 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
     simulation_inputs: smb.SimulationInputs
     reflectance_data: smb.ReflectanceMeasurements
 
-    def __init__(self, file_params):
+    _mean_parameter_transform = "log"
+    _mean_parameter_name = "mu_tilde"
+
+    def __init__(self, file_params, variance_model="scalar", endpoint_correction=None):
         super().__init__()
+        self.set_variance_model(variance_model, endpoint_correction=endpoint_correction)
         self.import_site_data_and_constants(file_params)
         table = pd.read_excel(file_params, index_col="Parameter")
         self.helios.nominal_reflectance = float(table.loc["nominal_reflectance"].Value)
@@ -1198,106 +1399,20 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
 
         return x_hat, x_hat_cov
 
-    def fit_mle(
-        self,
-        simulation_inputs,
-        reflectance_data,
-        verbose=True,
-        x0=None,
-        transform_to_original_scale=False,
-        save_file=None,
-    ):
-
-        _print_if("Getting MLE estimates ... ", verbose)
-        y, y_cov = super().fit_mle(
-            simulation_inputs,
-            reflectance_data,
-            verbose=False,
-            x0=x0,
-            transform_to_original_scale=False,
-        )
-        H_log = np.linalg.inv(y_cov)
-
-        _print_if("========== MLE Estimates ======== ", verbose)
-        if transform_to_original_scale:
-            x_hat, H = self.transform_scale(y, H_log)
-            x_hat_cov = np.linalg.inv(H)
-
-            # print estimates
-            fmt = "mu_tilde = {0:.2e}, sigma_dep = {1:.2e}"
-            _print_if(fmt.format(x_hat[0], x_hat[1]), verbose)
-
-            # print confidence intervals
-            s = np.sqrt(np.diag(x_hat_cov))
-            x_ci = x_hat + 1.96 * s * np.array([[-1], [1]])
-            fmt = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
-            _print_if(fmt.format("mu_tilde", x_ci[0, 0], x_ci[1, 0]), verbose)
-            _print_if(fmt.format("sigma_dep", x_ci[0, 1], x_ci[1, 1]), verbose)
-
-        else:
-            x_hat = y
-            x_hat_cov = y_cov
-
-            # print estimates
-            fmt = "log(mu_tilde) = {0:.2e}, log(sigma_dep) = {1:.2e} "
-            _print_if(fmt.format(x_hat[0], x_hat[1]), verbose)
-
-            # print confidence intervals
-            s = np.sqrt(np.diag(x_hat_cov))
-            x_ci = x_hat + 1.96 * s * np.array([[-1], [1]])
-            fmt = "95% confidence interval for {0:s}: [{1:.2e}, {2:.2e}]"
-            _print_if(fmt.format("log(mu_tilde)", x_ci[0, 0], x_ci[1, 0]), verbose)
-            _print_if(fmt.format("log(sigma_dep)", x_ci[0, 1], x_ci[1, 1]), verbose)
-
-        return x_hat, x_hat_cov
-
-    def transform_scale(self, x, likelihood_hessian=None, direction="inverse"):
-        if isinstance(x, np.ndarray) or isinstance(x, list):
-            x = np.array(x)
-            if direction == "inverse":
-                z = np.array([np.exp(x[0]), np.exp(x[1])])
-            elif direction == "forward":
-                z = np.array([np.log(x[0]), np.log(x[1])])
-            else:
-                raise ValueError("Transformation direction not recognized.")
-
-            if not isinstance(
-                likelihood_hessian, np.ndarray
-            ):  # can't use likelihood_hessian is None because it is an array if supplied
-                return z
-            else:
-                # Jacobian for transformation. See Reparameterization at https://en.wikipedia.org/wiki/Fisher_information
-                J = np.array([[np.exp(x[0]), 0], [0, np.exp(x[1])]])
-
-                if direction == "inverse":
-                    Ji = inv(J)
-                    H = Ji.transpose() @ likelihood_hessian @ Ji
-                elif direction == "forward":
-                    H = J.transpose() @ likelihood_hessian @ J
-
-                return z, H
-
-        # elif isinstance(x,az.data.inference_data.InferenceData):
-        #     if likelihood_hessian != None:
-        #         print("Warning: You have supplied an Arviz infrenceData object. The supplied likelihood Hessian will be ignored.")
-
-        #     p = x.posterior
-        #     if direction == "inverse":
-        #         p2 = {  'mu_tilde': np.exp(p.log_mu_tilde),\
-        #                 'sigma_dep':np.exp(p.log_sigma_dep)
-        #             }
-        #     elif direction == "forward":
-        #         p2 = {  'log_mu_tilde': np.log(p.mu_tilde),\
-        #                 'log_sigma_dep':np.log(p.sigma_dep)
-        #             }
-        #     p2 = az.convert_to_inference_data(p2)
-        #     return p2
-
     def update_model_parameters(self, x):
+        """
+        Updates the model parameters from a parameter vector.
+
+        The first element is `mu_tilde`, the second (if present) `sigma_dep`, and the
+        third (if present) the fraction of the deposition variance common to all
+        mirrors.
+        """
         if isinstance(x, list) or isinstance(x, np.ndarray):
             self.mu_tilde = x[0]
             if len(x) > 1:
                 self.sigma_dep = x[1]
+            if len(x) > 2:
+                self._set_variance_components(x[2])
         else:
             self.mu_tilde = x
 
@@ -1320,7 +1435,12 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
             training_reflectance_data (object, optional): The reflectance data used for training the model.
         """
         with open(file_name, "wb") as f:
-            save_data = {"model": self, "type": "constant-mean"}
+            save_data = {
+                "model": self,
+                "type": "constant-mean",
+                "variance_model": self.variance_model,
+                "endpoint_correction": self.endpoint_correction,
+            }
             if log_p_hat is not None:
                 save_data["transformed_parameters"] = log_p_hat
             if log_p_hat_cov is not None:
