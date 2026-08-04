@@ -7,7 +7,7 @@ import pickle
 from typing import Union
 import heliosoil.base_models as smb
 import heliosoil.fitting as smf
-from heliosoil.utilities import _nominal_reflectance_anchor, _nominal_reflectance_series
+from heliosoil.utilities import _nominal_reflectance_anchor, _nominal_reflectance_series, gravitational_settling_factor
 
 # %% Plot for the paper
 plt.rc("xtick", labelsize=16)
@@ -26,6 +26,18 @@ _ORIENTATION_NAMES = {
     "NW": "Northwest",
     "N/A": "N/A",
 }
+
+
+def _prediction_variance(mod, e):
+    """Campaign `e`'s soiling-factor prediction variance, or None when the fitted model has
+    no noise process to draw an interval from.
+
+    A least-squares fit estimates the mean parameters only -- the sum of squares does not
+    depend on the sigmas (see horizontal_impaction.ConstantMeanWindDeposition.fit_ls) -- so
+    predict_soiling_factor leaves the variance dict empty. Callers draw the mean prediction
+    and simply omit the shaded interval rather than failing on the missing key."""
+    variance = getattr(mod.helios, "soiling_factor_prediction_variance", None)
+    return variance.get(e) if variance else None
 
 
 def _orientation_colors(files):
@@ -197,17 +209,19 @@ def plot_for_paper(
 
             # Confidence interval: drawn once per tilt row from a single representative
             # mirror (not one band per orientation), to avoid clutter from overlapping
-            # shaded regions.
+            # shaded regions. Omitted entirely for a model with no noise process (see
+            # _prediction_variance).
             idx0 = idxs[0]
             r0_rep = r0_by_exp[e][idx[0]]
             ym = r0_rep * mod.helios.soiling_factor[e][idx0, 0 : rdat.prediction_indices[e][-1] + 1]
             ref_output[(e, int(t))] = ym.copy()
             ym = ym + (1.0 - ym[0])
-            var_predict = mod.helios.soiling_factor_prediction_variance[e][idx0, 0 : rdat.prediction_indices[e][-1] + 1]
-            sigma_predict = r0_rep * np.sqrt(var_predict)
-            Lp = ym - 1.96 * sigma_predict
-            Up = ym + 1.96 * sigma_predict
-            ax[jj, ii].fill_between(ts, Lp, Up, color="black", alpha=ci_alpha, label=r"Prediction Interval")
+            variance = _prediction_variance(mod, e)
+            if variance is not None:
+                sigma_predict = r0_rep * np.sqrt(variance[idx0, 0 : rdat.prediction_indices[e][-1] + 1])
+                Lp = ym - 1.96 * sigma_predict
+                Up = ym + 1.96 * sigma_predict
+                ax[jj, ii].fill_between(ts, Lp, Up, color="black", alpha=ci_alpha, label=r"Prediction Interval")
             ax[jj, ii].grid("on")
 
             if jj == 0:
@@ -458,14 +472,16 @@ def plot_reflectance_by_tilt(mod, rdat, sdat, experiment_index, tilt, orientatio
         yh = yh + (1.0 - yh[0])
         ax.plot(ts, yh, color=color, linestyle="--", label=f"{orientation_name} (predicted)")
 
-    # Prediction interval from one representative mirror at this tilt (as in plot_for_paper)
-    idx0 = idxs[0]
-    r0_rep = r0[idx[0]]
-    ym = r0_rep * mod.helios.soiling_factor[e][idx0, 0 : last_pred_idx + 1]
-    ym = ym + (1.0 - ym[0])
-    var_predict = mod.helios.soiling_factor_prediction_variance[e][idx0, 0 : last_pred_idx + 1]
-    sigma_predict = r0_rep * np.sqrt(var_predict)
-    ax.fill_between(ts, ym - 1.96 * sigma_predict, ym + 1.96 * sigma_predict, color="black", alpha=ci_alpha, label="Prediction interval")
+    # Prediction interval from one representative mirror at this tilt (as in plot_for_paper),
+    # omitted for a model with no noise process (see _prediction_variance).
+    variance = _prediction_variance(mod, e)
+    if variance is not None:
+        idx0 = idxs[0]
+        r0_rep = r0[idx[0]]
+        ym = r0_rep * mod.helios.soiling_factor[e][idx0, 0 : last_pred_idx + 1]
+        ym = ym + (1.0 - ym[0])
+        sigma_predict = r0_rep * np.sqrt(variance[idx0, 0 : last_pred_idx + 1])
+        ax.fill_between(ts, ym - 1.96 * sigma_predict, ym + 1.96 * sigma_predict, color="black", alpha=ci_alpha, label="Prediction interval")
 
     stats = regression_performance_stats(mod, rdat, [e], mirrors=idx)
 
@@ -1090,8 +1106,8 @@ def daily_soiling_tilt_all_data(
         daily_sum_alpha2 = daily_sum_alpha2[mask]
 
     if tilt is not None:
-        daily_sum_alpha = daily_sum_alpha * np.cos(np.radians(tilt))
-        daily_sum_alpha2 = daily_sum_alpha2 * np.cos(np.radians(tilt)) ** 2
+        daily_sum_alpha = daily_sum_alpha * gravitational_settling_factor(tilt)
+        daily_sum_alpha2 = daily_sum_alpha2 * gravitational_settling_factor(tilt) ** 2
 
     # simulate
     sims = soiling_rate(daily_sum_alpha, daily_sum_alpha2, model_save_file, M=M)

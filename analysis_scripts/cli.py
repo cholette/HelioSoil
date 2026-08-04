@@ -126,6 +126,14 @@ def build_parser() -> argparse.ArgumentParser:
         help='the constant_mean_wind model, e.g. "PM2.5*tangential_wind + (PM10-PM2.5)*turbulent_wind"; a bare mechanism uses the run\'s dust type. '
         "Default: fit -> gravitational + normal_wind; select -> compare every component combination. Required by select's --dust sweep",
     )
+    model.add_argument(
+        "--fit-method",
+        choices=mp.FIT_METHODS,
+        default=defaults.fit_method,
+        help='"mle" maximizes the likelihood over every parameter; "ls" fits the mean parameters by least squares (a linear solve for the '
+        "constant-mean models, a bounded scalar search for semi_physical) and fits no noise parameters, so it trains on every common mirror "
+        "and its figures carry no prediction interval (default: %(default)s)",
+    )
 
     common_run = argparse.ArgumentParser(add_help=False)
     run = common_run.add_argument_group("run control")
@@ -197,6 +205,7 @@ def _build_config(args) -> mp.PipelineConfig:
         location=args.location,
         train_experiments=list(train_experiments) if train_experiments else None,
         train_mirrors=args.train_mirrors,
+        fit_method=args.fit_method,
         dust_type=getattr(args, "dust_type", None) or mp.PipelineConfig.dust_type,
         k_factor=args.k_factor,
         number_of_measurements=args.number_of_measurements,

@@ -79,6 +79,21 @@ def cosd(theta):
     return np.cos(np.deg2rad(theta))
 
 
+def gravitational_settling_factor(theta):
+    """
+    Horizontal projection of a surface available to gravitational settling,
+    max(0, cos(theta)), for theta in degrees.
+
+    Settling flux onto a plate scales with the horizontal area it presents,
+    cos(tilt). Past vertical (tilt > 90) the face points at the ground and
+    cos(tilt) < 0, which would turn a deposition term negative -- a mirror that
+    cleans itself as dust falls. A downward-facing surface collects no settled
+    dust, so the factor is zero there rather than negative. Same clip, for the
+    same reason, as the cos(tilt) in horizontal_impaction.wind_retention_factors.
+    """
+    return np.maximum(0.0, cosd(theta))
+
+
 def get_project_root(subdir: str = None) -> Path:
     """
     Get the root directory of the project.

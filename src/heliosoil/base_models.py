@@ -32,6 +32,7 @@ from heliosoil.utilities import (
     get_project_root,
     cosd,
     sind,
+    gravitational_settling_factor,
 )
 
 tol = np.finfo(float).eps  # machine floating point precision
@@ -369,15 +370,16 @@ class PhysicalBase(SoilingBase):
                     int_val = np.trapezoid(number_density * D2 * DT * ext_weights, np.log10(dust.D[f]))
                     helios.delta_soiled_area[f][ii, jj] = alpha[jj] * np.pi / 4 * int_val
 
-            # variance of noise for each measurement
+            # variance of noise for each measurement. The clipped settling factor matches the
+            # mean above, whose cos(tilt) arrives via pdfqN and is already floored at 0 by
+            # deposition_flux -- an unclipped cos^2 here would give a face-down mirror full
+            # deposition noise around zero predicted deposition.
             if sigma_dep is not None:
-                theta = np.radians(self.helios.tilt[f])
-                helios.delta_soiled_area_variance[f] = sigma_dep**2 * (alpha**2 * np.cos(theta) ** 2)
+                helios.delta_soiled_area_variance[f] = sigma_dep**2 * (alpha**2 * gravitational_settling_factor(self.helios.tilt[f]) ** 2)
 
             elif self.sigma_dep is not None:
-                theta = np.radians(self.helios.tilt[f])
                 sigma_dep = self.sigma_dep
-                helios.delta_soiled_area_variance[f] = sigma_dep**2 * (alpha**2 * np.cos(theta) ** 2)
+                helios.delta_soiled_area_variance[f] = sigma_dep**2 * (alpha**2 * gravitational_settling_factor(self.helios.tilt[f]) ** 2)
 
         self.helios = helios
 
@@ -517,12 +519,13 @@ class ConstantMeanBase(SoilingBase):
             N_times = helios.tilt[f].shape[1]
             for ii in range(N_helios):
                 for jj in range(N_times):
-                    helios.delta_soiled_area[f][ii, jj] = alpha[jj] * cosd(helios.tilt[f][ii, jj]) * mu_tilde
+                    helios.delta_soiled_area[f][ii, jj] = alpha[jj] * gravitational_settling_factor(helios.tilt[f][ii, jj]) * mu_tilde
 
             # Predict confidence interval if sigma_dep is defined. Fixed tilt assumed in this class.
             if sigma_dep is not None:
-                theta = np.radians(self.helios.tilt[f])
-                dsav = sigma_dep**2 * (alpha**2 * np.cos(theta) ** 2)
+                # Same clipped factor as the mean above, not cos^2: a face-down mirror with
+                # zero predicted deposition must not carry full deposition noise.
+                dsav = sigma_dep**2 * (alpha**2 * gravitational_settling_factor(self.helios.tilt[f]) ** 2)
                 helios.delta_soiled_area_variance[f] = dsav
 
         self.helios = helios

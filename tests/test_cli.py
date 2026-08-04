@@ -408,3 +408,87 @@ def test_the_model_workflows_keep_their_options_after_the_parent_split(command):
 
     assert (args.model_type, args.model) == ("semi_physical", "gravitational")
     assert (args.k_factor, args.surface) == (2.0, "first")
+
+
+# ---------------------------------------------------------------------------
+# 7. --fit-method / resolve_fit_method
+# ---------------------------------------------------------------------------
+
+
+def test_fit_method_defaults_to_mle_and_reaches_the_config():
+    assert _build_config(build_parser().parse_args(["simulate"])).fit_method == "mle"
+    assert _build_config(build_parser().parse_args(["select", "--fit-method", "ls"])).fit_method == "ls"
+
+
+def test_fit_method_rejects_an_unknown_name():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["simulate", "--fit-method", "bayes"])
+
+
+def test_every_model_type_honours_least_squares():
+    """All three fit their mean by least squares -- the constant-mean pair by a linear solve,
+    semi_physical by a bounded scalar search -- so --fit-method ls compares like with like."""
+    cfg = mp.PipelineConfig(location="yadnarie", fit_method="ls")
+
+    assert [mp.resolve_fit_method(cfg, mt) for mt in mp.MODEL_TYPES] == ["ls"] * len(mp.MODEL_TYPES)
+
+
+def test_resolve_fit_method_falls_back_for_a_model_type_without_a_least_squares_fit():
+    """The capability is read off the model class, not a hardcoded list, so a future model type
+    that cannot do least squares degrades to MLE instead of breaking --model-type all."""
+
+    class NoLeastSquares:
+        pass
+
+    cfg = mp.PipelineConfig(location="yadnarie", fit_method="ls")
+    monkeyed = dict(mp.MODEL_CLASSES, exotic=NoLeastSquares)
+
+    assert not hasattr(NoLeastSquares, "fit_ls")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(mp, "MODEL_CLASSES", monkeyed)
+        assert mp.resolve_fit_method(cfg, "exotic") == "mle"
+        assert mp.resolve_fit_method(cfg, "semi_physical") == "ls"
+
+
+def test_resolve_fit_method_leaves_every_model_type_on_mle_by_default():
+    cfg = mp.PipelineConfig(location="yadnarie")
+
+    assert [mp.resolve_fit_method(cfg, mt) for mt in mp.MODEL_TYPES] == ["mle"] * len(mp.MODEL_TYPES)
+
+
+def test_resolve_fit_method_rejects_an_unknown_method():
+    cfg = mp.PipelineConfig(location="yadnarie", fit_method="ols")
+
+    with pytest.raises(ValueError, match="Unknown fit_method"):
+        mp.resolve_fit_method(cfg, "constant_mean_wind")
+
+
+MIRRORS = ["ON_M1_T00", "OE_M2_T30", "OS_M3_T60", "OW_M4_T90"]
+
+
+def test_least_squares_trains_on_every_mirror():
+    """The single-representative-mirror default guards against over-counting one shared
+    deposition-noise process across correlated mirrors. Least squares fits no noise process at
+    all, so that argument does not apply and every mirror is a genuine design-matrix row --
+    including for a purely gravitational model, which under MLE would be cut to one."""
+    ls = mp.PipelineConfig(location="yadnarie", fit_method="ls")
+    mle = mp.PipelineConfig(location="yadnarie")
+
+    assert mp.resolve_training_mirrors(ls, MIRRORS, "constant_mean_wind", ["gravitational"]) == MIRRORS
+    assert mp.resolve_training_mirrors(mle, MIRRORS, "constant_mean_wind", ["gravitational"]) == ["ON_M1_T00"]
+
+
+def test_least_squares_mirror_default_applies_to_every_model_type():
+    """Every type honours "ls" and so fits no sigma_dep, which is the only reason the default
+    ever cut training down to one mirror. Under MLE semi_physical still does."""
+    ls = mp.PipelineConfig(location="yadnarie", fit_method="ls")
+    mle = mp.PipelineConfig(location="yadnarie")
+
+    assert mp.resolve_training_mirrors(ls, MIRRORS, "semi_physical", None) == MIRRORS
+    assert mp.resolve_training_mirrors(mle, MIRRORS, "semi_physical", None) == ["ON_M1_T00"]
+
+
+def test_explicit_train_mirrors_still_override_every_fit_method():
+    cfg = mp.PipelineConfig(location="yadnarie", fit_method="ls", train_mirrors=["OE_M2_T30"])
+
+    assert mp.resolve_training_mirrors(cfg, MIRRORS, "constant_mean_wind", ["gravitational"]) == ["OE_M2_T30"]

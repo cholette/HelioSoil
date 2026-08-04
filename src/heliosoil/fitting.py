@@ -7,6 +7,7 @@ from heliosoil.utilities import (
     _std_errors_from_cov,
     _nominal_reflectance_series,
     _nominal_reflectance_anchor,
+    gravitational_settling_factor,
 )
 import numpy as np
 from numpy import radians as rad
@@ -14,7 +15,7 @@ from numpy.linalg import inv
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from scipy.optimize import minimize_scalar, minimize
+from scipy.optimize import lsq_linear, minimize_scalar, minimize
 import numdifftools as ndt
 import pickle
 
@@ -94,7 +95,7 @@ class CommonFittingMethods:
             else:
                 meas_sig = reflectance_data.sigma_of_the_mean[f]
 
-            c2t = np.cumsum(alpha**2 * np.cos(rad(self.helios.tilt[f])) ** 2, axis=1).transpose()
+            c2t = np.cumsum(alpha**2 * gravitational_settling_factor(self.helios.tilt[f]) ** 2, axis=1).transpose()
             ind1 = pif[0:-1]
             ind2 = [x - 1 for x in pif[1::]]
             s2total[f] = s2_dep * b**2 * (c2t[ind2, :] - c2t[ind1, :]) + meas_sig[0:-1, :] ** 2 + meas_sig[1::, :] ** 2
@@ -170,6 +171,117 @@ class CommonFittingMethods:
 
         return unnormalized_posterior
 
+    # ------------------------------------------------------------------
+    # Least-squares fitting, shared by every model that opts in.
+    #
+    # A least-squares fit estimates the MEAN parameters only: the sum of squares does not
+    # depend on the noise scales, so a model fitted this way carries no noise process at
+    # all. Opting in means declaring the split below and implementing
+    # _fitted_scale_jacobian; the fit itself is either AffineMeanLeastSquares.fit_ls (one
+    # linear solve, for a model whose prediction is affine in its means) or a model-specific
+    # nonlinear fit (see SemiPhysical.fit_ls).
+    # ------------------------------------------------------------------
+
+    _mean_param_names = ()
+    _sigma_param_names = ()
+    # Search bracket for the single-parameter bounded scalar fits (fit_least_squares, and the
+    # nonlinear SemiPhysical.fit_ls built on it). The lower bound sits just above 1 because
+    # hrz0 is represented as log(log(hrz0)); a fit landing on either end is reported rather
+    # than passed off as converged (see _warn_if_at_scalar_bound).
+    _LS_SCALAR_BOUNDS = (1e-6 + 1.0, 1000.0)
+
+    def _warn_if_at_scalar_bound(self, name, value):
+        """Flag an estimate that stopped on the search bracket instead of at an interior
+        optimum -- the objective was still improving when the search ran out of room, so the
+        value is an artefact of the bracket and its curvature-based standard error is
+        meaningless. The same class of diagnostic fit_mle emits when a parameter overflows.
+
+        The tolerance is a fraction of the bracket width, not of the value: a bounded search
+        converges only to its own xatol (1e-5 by default), so it lands *near* the bound rather
+        than on it -- e.g. 999.99998 against an upper bound of 1000 -- and an exact comparison
+        would never fire."""
+        lower, upper = self._LS_SCALAR_BOUNDS
+        tol = 1e-4 * (upper - lower)
+        if value <= lower + tol or value >= upper - tol:
+            logger.warning(
+                f"Least-squares fit for {name} stopped on its search bound ({value:.4g}, bracket "
+                f"[{lower:.4g}, {upper:.4g}]): the sum of squares was still improving there, so this "
+                "is a bound artefact rather than an optimum and the parameter is not identified by "
+                "this data. Its confidence interval is not meaningful."
+            )
+
+    @property
+    def mean_parameter_names(self):
+        """The mean parameters, in parameter-vector order -- what a least-squares fit
+        estimates, and the ordering of the estimate fit_ls returns."""
+        return list(self._mean_param_names)
+
+    def _fitted_scale_jacobian(self, x):
+        """d(transform_scale(x, "forward")) / dx, elementwise, over the mean parameters.
+
+        Each model transforms its parameters differently (log, log-log, or not at all), and
+        the delta method needs that derivative to carry a least-squares covariance onto the
+        fitted scale. Declared next to each class's own transform_scale so the two cannot
+        disagree."""
+        raise NotImplementedError(f"{type(self).__name__} does not support least-squares fitting.")
+
+    def _fitted_scale_label(self, name, i):
+        """How mean parameter `i` is spelled on the fitted scale, for reporting -- "log(x)",
+        "log(log(x))", or the bare name where the parameter is not transformed."""
+        return f"transformed({name})"
+
+    def _predicted_reflectance(self, simulation_inputs, reflectance_data):
+        """Predicted reflectance at the measurement times, {file: (N_measurements, N_helios)}
+        -- exactly the quantity _sse compares against reflectance_data.average, computed from
+        the parameters currently set on self."""
+        self.predict_soiling_factor(simulation_inputs, reflectance_data=reflectance_data, verbose=False)
+        sf = self.helios.soiling_factor
+        pi = reflectance_data.prediction_indices
+        out = {}
+        for f in sf:
+            r0 = _nominal_reflectance_series(reflectance_data, f, self.helios.nominal_reflectance)
+            out[f] = np.asarray(r0 * sf[f][:, pi[f]].transpose(), dtype=float)
+        return out
+
+    @staticmethod
+    def _ls_stack(per_file, files, residuals):
+        """Flatten a {file: (N_measurements, N_helios)} map into one observation vector.
+
+        residuals="level" keeps the reflectance itself (the objective _sse defines);
+        "increment" differences consecutive measurements, the quantity the likelihood is
+        written on and that the reported daily-soiling-rate errors score."""
+        if residuals not in ("level", "increment"):
+            raise ValueError(f"residuals must be 'level' or 'increment', got {residuals!r}.")
+        parts = [np.diff(per_file[f], axis=0) if residuals == "increment" else per_file[f] for f in files]
+        return np.concatenate([np.asarray(p, dtype=float).ravel() for p in parts])
+
+    def _finish_least_squares(self, theta, cov_theta, transform_to_original_scale, verbose):
+        """Common tail of every fit_ls: adopt the estimate, drop any noise model, and report.
+
+        The sigmas are cleared rather than merely left alone: a stale value (imported from
+        the parameter file, or left by an earlier MLE fit) would otherwise attach a
+        prediction interval to a fit that never estimated one."""
+        self.update_model_parameters(theta)  # zip-truncates to the means for a multi-parameter model
+        for name in self._sigma_param_names:
+            setattr(self, name, None)
+
+        _print_if("========== Least-squares Estimates ======== ", verbose)
+        if transform_to_original_scale:
+            out, out_cov = theta, cov_theta
+        else:
+            out = self.transform_scale(theta, direction="forward")
+            jac = self._fitted_scale_jacobian(theta)
+            out_cov = cov_theta * np.outer(jac, jac)
+
+        s = _std_errors_from_cov(out_cov)
+        x_ci = out + 1.96 * s * np.array([[-1], [1]])
+        for i, name in enumerate(self._mean_param_names):
+            label = name if transform_to_original_scale else self._fitted_scale_label(name, i)
+            _print_if(f"{label} = {out[i]:.3e}", verbose)
+            _print_if(f"95% confidence interval for {label}: [{x_ci[0, i]:.3e}, {x_ci[1, i]:.3e}]", verbose)
+
+        return out, out_cov
+
     def fit_least_squares(self, simulation_inputs, reflectance_data, verbose=True):
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs, reflectance_data)
@@ -178,8 +290,7 @@ class CommonFittingMethods:
             return self._sse(x, simulation_inputs, reflectance_data)
 
         _print_if("Fitting parameters with least squares ...", verbose)
-        xL = 1e-6 + 1.0
-        xU = 1000
+        xL, xU = self._LS_SCALAR_BOUNDS
         res = minimize_scalar(fun, bounds=(xL, xU), method="Bounded")  # use bounded to prevent evaluation at values <=1
         _print_if("... done! \n estimated parameter is = " + str(res.x), verbose)
         return res.x, res.fun
@@ -544,7 +655,139 @@ class CommonFittingMethods:
             return mean_predictions, CI_lower_predictions, CI_upper_predictions
 
 
+class AffineMeanLeastSquares:
+    """Mixin giving fit_ls to a model whose predicted reflectance is AFFINE in its mean
+    parameters -- true of the whole constant-mean family, where delta_soiled_area is
+    sum_k theta_k * basis_k and compute_soiling_factor only accumulates it and adds a
+    theta-independent initial condition.
+
+    That makes least squares a linear problem: one bounded solve, no starting point, no
+    local optima. It does not hold for a model whose parameter enters through the
+    deposition physics (SemiPhysical), which fits its mean by nonlinear least squares
+    instead.
+
+    Mix in alongside CommonFittingMethods, which supplies everything else the fit needs.
+    """
+
+    def mean_design_matrix(self, simulation_inputs, reflectance_data, residuals="level"):
+        """The linear least-squares problem `X @ theta ~= y` for this model's mean
+        parameters theta (self._mean_param_names, in order).
+
+        Because the prediction is affine in theta, the whole forward model is
+
+            offset + sum_k theta_k * (prediction at theta = e_k  -  offset),
+
+        so the design matrix is obtained EXACTLY -- no finite differencing, and no second
+        copy of the reflectance algebra to drift out of sync -- by evaluating the existing
+        forward model once at theta = 0 and once per mean parameter at a unit basis vector.
+
+        Args:
+            residuals: "level" or "increment" (see CommonFittingMethods._ls_stack).
+
+        Returns:
+            (X, y): X has shape (n_observations, n_mean_parameters). Rows carrying a
+            non-finite measurement (a gap in reflectance_data.average) are dropped, so a
+            missing measurement costs that row rather than the whole fit.
+        """
+        _check_keys(simulation_inputs, reflectance_data)
+        files = list(reflectance_data.average.keys())
+        mean_names, sigma_names = list(self._mean_param_names), list(self._sigma_param_names)
+
+        saved = {name: getattr(self, name) for name in mean_names + sigma_names}
+        try:
+            # Sigmas off while probing: the design matrix is a mean-only object, and leaving
+            # them set would make every probe also build the (discarded) variance.
+            for name in sigma_names:
+                setattr(self, name, None)
+            for name in mean_names:
+                setattr(self, name, 0.0)
+            offset = self._predicted_reflectance(simulation_inputs, reflectance_data)
+
+            columns = []
+            for name in mean_names:
+                setattr(self, name, 1.0)
+                probe = self._predicted_reflectance(simulation_inputs, reflectance_data)
+                setattr(self, name, 0.0)
+                columns.append(self._ls_stack({f: probe[f] - offset[f] for f in files}, files, residuals))
+        finally:
+            for name, value in saved.items():
+                setattr(self, name, value)
+
+        X = np.column_stack(columns)
+        y = self._ls_stack({f: np.asarray(reflectance_data.average[f], dtype=float) - offset[f] for f in files}, files, residuals)
+
+        keep = np.isfinite(y) & np.all(np.isfinite(X), axis=1)
+        if not keep.any():
+            raise ValueError("No usable observations for the least-squares fit: every residual row is non-finite.")
+        return X[keep, :], y[keep]
+
+    def fit_ls(self, simulation_inputs, reflectance_data, verbose=True, residuals="level", transform_to_original_scale=False):
+        """Least-squares counterpart of fit_mle: fits the MEAN parameters by one bounded
+        linear solve on mean_design_matrix.
+
+        Parameters the model carries in logs are bounded below at 0 (a negative value has no
+        transformed representation); the rest are left free, since a wind coefficient may
+        legitimately be negative. The estimate minimizes the sum of squared reflectance
+        errors, so every observation is weighted equally rather than down-weighted where the
+        model calls itself noisy.
+
+        No noise parameters are fitted -- see CommonFittingMethods' least-squares section for
+        what that means for the caller.
+
+        Returns:
+            (x_hat, x_hat_cov) over self.mean_parameter_names, on the same scale convention
+            as fit_mle. The covariance is the ordinary least-squares s^2 (X'X)^-1.
+        """
+        _check_keys(simulation_inputs, reflectance_data)
+
+        X, y = self.mean_design_matrix(simulation_inputs, reflectance_data, residuals=residuals)
+        n_obs, n_mean = X.shape
+        is_log_mean = np.asarray(self._ls_lower_bounded(), dtype=bool)
+
+        # Column scaling: a deposition coefficient's basis (accumulated cos(tilt) x dust
+        # loading) and a wind coefficient's (that times wind speed and a geometry factor)
+        # differ by orders of magnitude, and a normal-equation solve inherits the square of
+        # that spread. The bounds scale with the columns, and being 0/+-inf are unchanged.
+        scale = np.linalg.norm(X, axis=0)
+        # An all-zero column is a mechanism this data cannot see at all (e.g.
+        # impaction_retention when every mirror is horizontal): unidentifiable, not a
+        # division by zero. Scaling it by 1 leaves the solver to return 0 for it.
+        scale[scale == 0.0] = 1.0
+        X_scaled = X / scale
+
+        _print_if(f"Fitting {n_mean} mean parameter(s) by linear least squares on {n_obs} observations ...", verbose)
+        ls = lsq_linear(X_scaled, y, bounds=(np.where(is_log_mean, 0.0, -np.inf), np.inf))
+        theta = ls.x / scale
+        # A log-transformed parameter driven onto its lower bound would be log(0) = -inf on
+        # the fitted scale, and an infinite entry in the returned estimate.
+        theta = np.where(is_log_mean & (theta <= 0.0), smb.tol, theta)
+
+        residual_vector = X @ theta - y
+        sse = float(residual_vector @ residual_vector)
+        s2 = sse / max(n_obs - n_mean, 1)
+        # OLS covariance, undone back onto the parameters' own scale. pinv, not inv: a
+        # mechanism the data cannot separate leaves X'X singular, which should surface as a
+        # huge (or NaN once square-rooted) standard error, not a LinAlgError mid-fold.
+        inv_scale = np.diag(1.0 / scale)
+        cov_theta = s2 * (inv_scale @ np.linalg.pinv(X_scaled.T @ X_scaled) @ inv_scale)
+        _print_if(f"... done! SSE = {sse:.4e}", verbose)
+
+        return self._finish_least_squares(theta, cov_theta, transform_to_original_scale, verbose)
+
+    def _ls_lower_bounded(self):
+        """Per-mean-parameter flag: True where the parameter must stay positive because the
+        model represents it in logs. Defaults to every mean parameter (the constant-mean
+        deposition coefficient is a rate and cannot be negative); the wind model overrides it,
+        since its omegas are carried linearly and may fit negative."""
+        return np.ones(len(self._mean_param_names), dtype=bool)
+
+
 class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
+    # hrz0 enters through the deposition-velocity physics, so the prediction is NOT affine in
+    # it and AffineMeanLeastSquares does not apply; fit_ls below is a nonlinear fit instead.
+    _mean_param_names = ("hrz0",)
+    _sigma_param_names = ("sigma_dep",)
+
     def __init__(self, file_params, verbose=True):
         table = pd.read_excel(file_params, index_col="Parameter")
         super().__init__()
@@ -659,12 +902,17 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
     def transform_scale(self, x, likelihood_hessian=None, direction="inverse"):
         # direction is either "forward" (to log-scaled space) or "inverse" (back to original scale)
         x = np.array(x)
+        # A length-1 x is hrz0 alone -- what fit_ls estimates, since least squares fits no
+        # sigma. hrz0 comes first in the parameter vector, so every expression below simply
+        # stops after its first entry; a length-2 x is unchanged.
+        if len(x) not in (1, 2):
+            raise ValueError(f"Cannot transform a vector of {len(x)} parameter(s): expected 1 (hrz0) or 2 (hrz0 and sigma_dep).")
         if direction == "inverse":
             # Double-exp can overflow for large log-params; inf is handled downstream.
             with np.errstate(over="ignore"):
-                z = np.array([np.exp(np.exp(x[0])), np.exp(x[1])])
+                z = np.array([np.exp(np.exp(x[0])), *(np.exp(x[1:]))])
         elif direction == "forward":
-            z = np.array([np.log(np.log(x[0])), np.log(x[1])])
+            z = np.array([np.log(np.log(x[0])), *(np.log(x[1:]))])
         else:
             raise ValueError("Transformation direction not recognized.")
 
@@ -682,6 +930,66 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
                 H = J.transpose() @ likelihood_hessian @ J
 
             return z, H
+
+    def _fitted_scale_jacobian(self, x):
+        # forward transform is log(log(hrz0)), so the derivative is 1 / (hrz0 * log(hrz0))
+        x = np.asarray(x, dtype=float)
+        return 1.0 / (x * np.log(x))
+
+    def _fitted_scale_label(self, name, i):
+        return f"log(log({name}))"
+
+    def fit_ls(self, simulation_inputs, reflectance_data, verbose=True, transform_to_original_scale=False):
+        """Least-squares counterpart of fit_mle: fits hrz0 alone, by NONLINEAR least squares.
+
+        The predicted reflectance is not affine in hrz0 -- it enters through
+        deposition_velocity and the wind profile -- so there is no design matrix to solve in
+        one shot, as there is for the constant-mean family (AffineMeanLeastSquares). With a
+        single parameter, though, the bounded scalar search over _sse that fit_least_squares
+        already performs is the whole fit; what is added here is the covariance and the
+        (estimate, covariance) contract fit_mle follows.
+
+        Fits the reflectance level, the objective _sse defines. No noise parameter is fitted
+        -- see CommonFittingMethods' least-squares section for what that means for callers.
+
+        Returns:
+            (x_hat, x_hat_cov) over ["hrz0"], on the same scale convention as fit_mle.
+        """
+        _check_keys(simulation_inputs, reflectance_data)
+
+        _print_if("Fitting hrz0 by nonlinear least squares (bounded scalar search) ...", verbose)
+        hrz0, _sse_at_optimum = self.fit_least_squares(simulation_inputs, reflectance_data, verbose=False)
+        self._warn_if_at_scalar_bound("hrz0", hrz0)
+
+        # Covariance from the local linearization, s^2 (J'J)^-1 with J = d(prediction)/d(hrz0)
+        # taken by a central difference on the same forward model the objective uses. hrz0
+        # must stay above 1 (the model represents it as log(log(hrz0))), so the backward step
+        # is clipped to stay inside that domain when the fit lands near its lower bound.
+        files = list(reflectance_data.average.keys())
+        step = max(min(1e-4 * hrz0, 0.5 * (hrz0 - 1.0)), 1e-9)
+
+        def level_prediction(value):
+            self.update_model_parameters(value)  # scalar: sets hrz0 and clears sigma_dep
+            return self._ls_stack(self._predicted_reflectance(simulation_inputs, reflectance_data), files, "level")
+
+        jac = (level_prediction(hrz0 + step) - level_prediction(hrz0 - step)) / (2.0 * step)
+        predicted = level_prediction(hrz0)
+        measured = self._ls_stack({f: np.asarray(reflectance_data.average[f], dtype=float) for f in files}, files, "level")
+
+        keep = np.isfinite(predicted) & np.isfinite(measured) & np.isfinite(jac)
+        if not keep.any():
+            raise ValueError("No usable observations for the least-squares fit: every residual row is non-finite.")
+
+        residual = predicted[keep] - measured[keep]
+        sse = float(residual @ residual)
+        s2 = sse / max(int(keep.sum()) - 1, 1)
+        jtj = float(jac[keep] @ jac[keep])
+        # jtj == 0 means the prediction does not respond to hrz0 at all here: unidentifiable,
+        # which an infinite variance (NaN standard error) reports rather than a divide error.
+        cov_theta = np.array([[s2 / jtj if jtj > 0.0 else np.inf]])
+        _print_if(f"... done! SSE = {sse:.4e}", verbose)
+
+        return self._finish_least_squares(np.array([hrz0]), cov_theta, transform_to_original_scale, verbose)
 
     def update_model_parameters(self, x):
         """
@@ -727,9 +1035,14 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
             pickle.dump(save_data, f)
 
 
-class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
+class ConstantMeanDeposition(smb.ConstantMeanBase, AffineMeanLeastSquares, CommonFittingMethods):
     simulation_inputs: smb.SimulationInputs
     reflectance_data: smb.ReflectanceMeasurements
+
+    # delta_soiled_area is alpha * cos(tilt) * mu_tilde -- linear in the one mean parameter --
+    # so AffineMeanLeastSquares' one-shot linear fit_ls applies directly.
+    _mean_param_names = ("mu_tilde",)
+    _sigma_param_names = ("sigma_dep",)
 
     def __init__(self, file_params, verbose=True):
         super().__init__()
@@ -872,13 +1185,25 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
 
         return x_hat, x_hat_cov
 
+    def _fitted_scale_jacobian(self, x):
+        # forward transform is log(mu_tilde), so the derivative is 1 / mu_tilde
+        return 1.0 / np.asarray(x, dtype=float)
+
+    def _fitted_scale_label(self, name, i):
+        return f"log({name})"
+
     def transform_scale(self, x, likelihood_hessian=None, direction="inverse"):
         if isinstance(x, np.ndarray) or isinstance(x, list):
             x = np.array(x)
+            # Both parameters are log-transformed, so one elementwise map covers either the
+            # full [mu_tilde, sigma_dep] vector or mu_tilde alone -- which is what fit_ls
+            # returns, since least squares fits no sigma.
+            if len(x) not in (1, 2):
+                raise ValueError(f"Cannot transform a vector of {len(x)} parameter(s): expected 1 (mu_tilde) or 2 (mu_tilde and sigma_dep).")
             if direction == "inverse":
-                z = np.array([np.exp(x[0]), np.exp(x[1])])
+                z = np.exp(x)
             elif direction == "forward":
-                z = np.array([np.log(x[0]), np.log(x[1])])
+                z = np.log(x)
             else:
                 raise ValueError("Transformation direction not recognized.")
 
@@ -886,7 +1211,7 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
                 return z
             else:
                 # Jacobian for transformation. See Reparameterization at https://en.wikipedia.org/wiki/Fisher_information
-                J = np.array([[np.exp(x[0]), 0], [0, np.exp(x[1])]])
+                J = np.diag(np.exp(x))
 
                 if direction == "inverse":
                     Ji = inv(J)

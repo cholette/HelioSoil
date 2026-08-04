@@ -23,6 +23,26 @@ Model types
     `parameter_names` property rather than hardcoded.
   - "semi_physical"      : SemiPhysical (hrz0, sigma_dep).
 
+Fit method
+----------
+cfg.fit_method picks how a model's parameters are estimated. "mle" (the default) maximizes
+the likelihood over every parameter at once. "ls" fits the mean parameters by least squares,
+and every model type supports it: constant_mean and constant_mean_wind are affine in their
+means, so it is one bounded linear solve with no starting point and no local optima
+(heliosoil.fitting.AffineMeanLeastSquares); semi_physical is not affine in hrz0 -- it enters
+through the deposition-velocity physics -- so it uses a bounded scalar search over the same
+sum of squares instead (SemiPhysical.fit_ls). resolve_fit_method still falls back to MLE for
+any model type whose class lacks fit_ls, so a future one cannot break --model-type all.
+
+"ls" fits no noise parameters, since the sum of squares does not depend on them, and that
+propagates in two places. Training-mirror selection stops restricting to one representative
+mirror -- that rule is about not over-counting a shared deposition-noise process, which an
+"ls" run does not have -- so every common mirror is trained on (see
+resolve_training_mirrors). And the fitted model carries no prediction variance, so the
+reflectance figures draw the mean prediction without a shaded prediction interval
+(heliosoil.paper_specific_utilities._prediction_variance). The reported parameters are
+correspondingly the mean ones only.
+
 Dust channels
 -------------
 A run is defined by (model_type, wind_components, component_dust_types). The last of
@@ -73,6 +93,8 @@ MODEL_CLASSES = {"constant_mean": smf.ConstantMeanDeposition, "constant_mean_win
 # from the fitted model's `parameter_names` property instead of hardcoded here.
 PARAM_NAMES = {"constant_mean": ["mu_tilde", "sigma_dep"], "semi_physical": ["hrz0", "sigma_dep"]}
 MODEL_TYPES = list(MODEL_CLASSES)
+# How a model's parameters are estimated (see resolve_fit_method / fit_and_evaluate).
+FIT_METHODS = ("mle", "ls")
 # Results subdir for runs whose every mechanism names its own dust channel: they do not
 # depend on cfg.dust_type, so they sit outside the per-dust-type subtrees (see
 # is_dust_type_independent).
@@ -96,6 +118,10 @@ class PipelineConfig:
     # cross-validation: `simulate` fits one model per campaign, each trained on every other one.
     train_experiments: list | None = None
     train_mirrors: Any = None  # None -> model-aware default per run; explicit list overrides every run
+    # "mle" maximizes the likelihood over every parameter; "ls" fits the mean parameters by linear
+    # least squares and profiles the likelihood over the noise parameters at that solution. Only
+    # model types whose class provides fit_ls honour it -- see resolve_fit_method.
+    fit_method: str = "mle"
     dust_type: str = "PM10"  # "PM10" or "PM2.5", selects the dust distribution in the parameter file
     k_factor: Any = "import"  # None sets equal to 1.0, "import" imports from the file
     number_of_measurements: float = 9.0
@@ -231,11 +257,34 @@ def run_expression(model_type: str, wind_components: list, component_dust_types:
 
 
 def resolve_training_mirrors(cfg: PipelineConfig, all_mirrors: list, model_type: str, wind_components: list) -> list[str]:
-    """train_mirrors from the config overrides every run; otherwise pick the
-    model-aware default (see smu.default_training_mirrors)."""
+    """train_mirrors from the config overrides every run; otherwise pick the default for this
+    run's fit method and model.
+
+    The single-representative-mirror default exists because a shared sigma_dep is one
+    stochastic process across mirrors, and fitting it on several correlated mirrors overstates
+    the independent information available. A least-squares fit estimates no sigma at all, so
+    that argument does not apply to it: every mirror contributes a genuine row to the design
+    matrix, and all of them are used."""
     if cfg.train_mirrors is not None:
         return cfg.train_mirrors
+    if resolve_fit_method(cfg, model_type) == "ls":
+        return list(all_mirrors)
     return smu.default_training_mirrors(all_mirrors, uses_wind_variance(model_type, wind_components))
+
+
+def resolve_fit_method(cfg: PipelineConfig, model_type: str) -> str:
+    """The fitting routine `model_type` will actually be fitted with under `cfg`.
+
+    The capability is read from the model class rather than hardcoded: a class providing fit_ls
+    supports least squares (all three do today, by two different routes -- see the module
+    docstring), and any other type falls back to fit_mle so that --model-type all still runs
+    end to end. Callers that report the method (simulate's header, model_selection's summary
+    column) go through here too, so what is reported is what was run."""
+    if cfg.fit_method not in FIT_METHODS:
+        raise ValueError(f"Unknown fit_method {cfg.fit_method!r}; choose from {list(FIT_METHODS)}.")
+    if cfg.fit_method == "ls" and hasattr(MODEL_CLASSES[model_type], "fit_ls"):
+        return "ls"
+    return "mle"
 
 
 def prompt_yes_no(question: str) -> bool | None:
@@ -561,6 +610,9 @@ def fit_and_evaluate(
     it against the full evaluation dataset (all campaigns, all common mirrors) for both
     `train_exps` (in-sample) and `test_exps` (out-of-sample).
 
+    The fit is cfg.fit_method, resolved per model type (see resolve_fit_method) and returned
+    as "fit_method" so callers report what was actually run rather than what was asked for.
+
     Returns a dict with the fitted model, parameter names/estimates/CIs (original
     scale), the training data used, and both stats dicts (see
     heliosoil.paper_specific_utilities.regression_performance_stats).
@@ -587,7 +639,17 @@ def fit_and_evaluate(
             )
         ext_weights = model.helios.extinction_weighting[0].copy()
 
-    log_param_hat, log_param_cov = model.fit_mle(sim_train, reflect_train, verbose=verbose, transform_to_original_scale=False)
+    # Both fits return (estimate, covariance) on the model's own fitted scale, so everything
+    # downstream -- the transform back, the CIs, the CSVs -- is identical either way. They
+    # differ in *which* parameters they estimate: least squares fits the means only and leaves
+    # the model with no noise process, so its vector is the shorter mean_parameter_names one.
+    fit_method = resolve_fit_method(cfg, model_type)
+    if fit_method == "ls":
+        log_param_hat, log_param_cov = model.fit_ls(sim_train, reflect_train, verbose=verbose, transform_to_original_scale=False)
+        param_names = model.mean_parameter_names
+    else:
+        log_param_hat, log_param_cov = model.fit_mle(sim_train, reflect_train, verbose=verbose, transform_to_original_scale=False)
+        param_names = getattr(model, "parameter_names", PARAM_NAMES.get(model_type))
     # The parameter transform is model-specific (e.g. constant_mean_wind logs mu_tilde/
     # sigma_dep/sigma_dep_gamma but leaves omega_windward/omega_leeward linear); only
     # model.transform_scale is needed to go from the fitted (possibly log-transformed)
@@ -597,9 +659,10 @@ def fit_and_evaluate(
     lower_ci = model.transform_scale(param_ci[0, :])
     upper_ci = model.transform_scale(param_ci[1, :])
     param_hat = model.transform_scale(log_param_hat)
+    # update_model_parameters zips against the full parameter list, so a mean-only vector sets
+    # exactly the means and leaves fit_ls's sigmas at None -- no prediction variance is
+    # resurrected by writing the estimate back.
     model.update_model_parameters(param_hat)
-
-    param_names = getattr(model, "parameter_names", PARAM_NAMES.get(model_type))
 
     model.helios_angles(data.sim_data_total, data.reflect_data_total, second_surface=cfg.second_surf, verbose=verbose)
     if model_type == "semi_physical":
@@ -611,6 +674,7 @@ def fit_and_evaluate(
 
     return {
         "model": model,
+        "fit_method": fit_method,
         "param_names": param_names,
         "param_hat": param_hat,
         "lower_ci": lower_ci,

@@ -3,14 +3,14 @@ Constant-mean soiling model extended with modular, additive wind-driven soiling
 mechanisms layered on top of the standard gravitational constant-mean term.
 
 The standard constant-mean model (heliosoil.base_models.ConstantMeanBase) accumulates
-soiled area from dust loading and the vertical projection of the mirror only
-(cos(tilt)) -- the "gravitational" mechanism below. This module adds three more
+soiled area from dust loading and the horizontal projection of the mirror only
+(max(0, cos(tilt))) -- the "gravitational" mechanism below. This module adds three more
 mechanisms driven by wind hitting the mirror, and lets a model be built from any
 subset:
 
-  gravitational:    alpha_j * cos(theta_ij) * (mu_tilde + eps_j)
+  gravitational:    alpha_j * max(0, cos(theta_ij)) * (mu_tilde + eps_j)
 
-  turbulant wind:     alpha_j * U_j * (omega_turbulent + eps_turb_j)
+  turbulant wind:     alpha_j * max(0, cos(theta_ij)) * U_j * (omega_turbulent + eps_turb_j)
 
   normal_wind:      alpha_j * U_j * ( p_windward_ij * (omega_windward + eps_gamma_j)
                                      + p_leeward_ij  * (omega_leeward  + eps_gamma_j) )
@@ -28,6 +28,12 @@ subset:
 
 where Delta_gamma = azimuth (mirror normal) - wind_direction (meteorological, "from"),
 and U_j is wind speed. delta_A_ij is the sum of the active mechanisms' contributions.
+
+The settling factor max(0, cos(theta)) is clipped rather than bare cos(theta) because a
+mirror tilted past vertical faces the ground and collects no settled dust; an unclipped
+cos(theta) < 0 would instead make it *gain* reflectance without bound (real data: yadnarie's
+OSW_M1_T180). At tilt > 90 every mechanism here vanishes except tangential_wind, which is
+therefore the only channel able to soil a face-down mirror.
 
 The windward and leeward faces of a tilted mirror are given independent fitted
 impaction coefficients since there is no a priori reason to expect them to be equal;
@@ -69,6 +75,28 @@ fraction tangentially. Such a model is named
 "PM17*gravitational + (PM10-PM2.5)*tangential_wind" (see `component_expression`).
 Concentrations come from `SimulationInputs.dust_concentration_channels` and reference
 masses from `Dust.pm_mass`, so the weather file must carry the PM columns involved.
+
+Fitting
+-------
+ConstantMeanWindDeposition offers two fits, both returning (estimate, covariance) on the
+same scale convention:
+
+  fit_mle: maximizes the likelihood over every parameter at once -- a numerical
+    optimization over n_mean + n_sigma parameters followed by a numerical Hessian.
+
+  fit_ls:  exploits the fact that the predicted reflectance is *affine* in the mean
+    parameters (delta_A is sum_k theta_k * basis_k, and compute_soiling_factor only
+    accumulates it and adds a theta-independent initial condition). The means therefore
+    come from a single bounded LINEAR least-squares solve, whose design matrix is read
+    off the existing forward model rather than re-derived (see mean_design_matrix). It
+    needs no starting point, cannot land in a local optimum, and costs n_mean + 1 forward
+    evaluations instead of the hundreds fit_mle's optimizer and Hessian take.
+
+    It fits the MEAN parameters only. The sum of squares does not depend on the sigmas, so
+    a least-squares model carries no noise process: fit_ls leaves every sigma set to None,
+    predict_soiling_factor then leaves helios.soiling_factor_prediction_variance empty, and
+    the model yields a mean prediction with no prediction interval. Its estimate is ordered
+    as `mean_parameter_names` rather than `parameter_names`.
 """
 
 import pickle
@@ -90,6 +118,7 @@ from heliosoil.utilities import (
     resolve_dust_concentration,
     cosd,
     sind,
+    gravitational_settling_factor,
     cardinal_to_azimuth,
 )
 
@@ -212,19 +241,19 @@ def parse_orientation_names(names):
 
 
 def _gravitational_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
-    return [alpha[None, :] * cosd(tilt)]
+    return [alpha[None, :] * gravitational_settling_factor(tilt)]
 
 
 def _gravitational_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
-    return (alpha[None, :] * cosd(tilt)) ** 2
+    return (alpha[None, :] * gravitational_settling_factor(tilt)) ** 2
 
 
 def _turbulant_wind_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
-    return [alpha[None, :] * cosd(tilt) * wind_speed[None, :]]
+    return [alpha[None, :] * gravitational_settling_factor(tilt) * wind_speed[None, :]]
 
 
 def _turbulant_wind_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
-    return (alpha[None, :] * cosd(tilt) * wind_speed[None, :]) ** 2
+    return (alpha[None, :] * gravitational_settling_factor(tilt) * wind_speed[None, :]) ** 2
 
 
 def _normal_wind_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
@@ -535,6 +564,9 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
     def parameter_names(self):
         return list(self._param_names)
 
+    # mean_parameter_names (the least-squares subset) comes from CommonFittingMethods, off the
+    # _mean_param_names/_sigma_param_names this class sets per active component in __init__.
+
     def _component_alphas(self, simulation_inputs, f):
         """{component key: alpha_j} for file `f`. Components sharing a dust channel --
         by default all of them, on the simulation's own dust_type -- share one array."""
@@ -804,7 +836,17 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
     def transform_scale(self, x, likelihood_hessian=None, direction="inverse"):
         if isinstance(x, (np.ndarray, list)):
             x = np.array(x, dtype=float)
-            mask = self._log_transform
+            # Accepts either a full parameter vector (fit_mle) or the mean parameters alone
+            # (fit_ls, which estimates no sigmas). The means come first in the layout, so
+            # the leading slice of the mask is exactly the mean-only mask; any other length
+            # is a caller error worth catching here rather than in a broadcast further on.
+            if len(x) not in (len(self._mean_param_names), len(self._param_names)):
+                raise ValueError(
+                    f"Cannot transform a vector of {len(x)} parameter(s) for model '{self.model_name}': expected either "
+                    f"{len(self._mean_param_names)} (the mean parameters, {self._mean_param_names}) or "
+                    f"{len(self._param_names)} (every parameter, {self._param_names})."
+                )
+            mask = self._log_transform[: len(x)]
             if direction == "inverse":
                 # np.where evaluates both branches elementwise, so np.exp(x) would
                 # otherwise run (and could overflow) at unmasked entries whose value
@@ -898,6 +940,28 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
             _print_if(f"95% confidence interval for {label}: [{x_ci[0, i]:.3e}, {x_ci[1, i]:.3e}]", verbose)
 
         return x_hat, x_hat_cov
+
+    # ------------------------------------------------------------------
+    # Least-squares fitting: mean_design_matrix and fit_ls are inherited from
+    # heliosoil.fitting.AffineMeanLeastSquares (this model is affine in its mean
+    # parameters); what is model-specific is only how those parameters are transformed
+    # and which of them must stay positive.
+    # ------------------------------------------------------------------
+
+    def _ls_lower_bounded(self):
+        """Only the log-transformed means are bounded below at 0. The omegas are carried
+        linearly and may legitimately fit negative, so they are left free."""
+        return self._log_transform[: len(self._mean_param_names)]
+
+    def _fitted_scale_jacobian(self, x):
+        # 1/x at the log-transformed means, 1 elsewhere. safe_x is 1 at the linear entries,
+        # so no division touches an omega that fitted to 0.
+        mask = self._log_transform[: len(self._mean_param_names)]
+        safe_x = np.where(mask, np.asarray(x, dtype=float), 1.0)
+        return np.where(mask, 1.0 / safe_x, 1.0)
+
+    def _fitted_scale_label(self, name, i):
+        return f"log({name})" if self._log_transform[i] else name
 
     def save(self, file_name, log_p_hat=None, log_p_hat_cov=None, training_simulation_data=None, training_reflectance_data=None):
         with open(file_name, "wb") as f:

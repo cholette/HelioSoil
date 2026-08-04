@@ -20,11 +20,46 @@ from heliosoil.utilities import (
     configure_logging,
     default_training_mirrors,
     dust_cutoff,
+    gravitational_settling_factor,
     logger,
     normalize_dust_name,
     parse_dust_spec,
     resolve_dust_concentration,
 )
+
+# ---------------------------------------------------------------------------
+# Geometry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "tilt,expected",
+    [
+        (0.0, 1.0),
+        (60.0, 0.5),
+        (90.0, 0.0),
+        # Past vertical the face points at the ground: no settled dust, and above all
+        # not a NEGATIVE deposition that would make the mirror clean itself.
+        (90.1, 0.0),
+        (120.0, 0.0),
+        (180.0, 0.0),
+    ],
+)
+def test_gravitational_settling_factor(tilt, expected):
+    np.testing.assert_allclose(gravitational_settling_factor(tilt), expected, atol=1e-12)
+
+
+def test_gravitational_settling_factor_is_never_negative_and_broadcasts():
+    tilt = np.linspace(0.0, 359.5, 720).reshape(2, -1)
+    factor = gravitational_settling_factor(tilt)
+    assert factor.shape == tilt.shape
+    assert (factor >= 0.0).all()
+    # Below vertical it is exactly cos(tilt); strictly past vertical, exactly 0. (At exactly
+    # 90 deg cosd returns +6e-17 rather than 0, so the clip leaves that float alone -- the
+    # long-standing behaviour of cosd, and negligible against any real deposition.)
+    upward = tilt < 90.0
+    np.testing.assert_allclose(factor[upward], np.cos(np.radians(tilt[upward])), rtol=1e-12)
+    assert (factor[(tilt > 90.0) & (tilt < 270.0)] == 0.0).all()
 
 
 @pytest.mark.parametrize("dust_type,expected", [("TSP", "TSP"), ("PM17", "PM17"), ("PM10", "PM10"), ("PM18", "PM18"), ("PM2.5", "PM2_5")])

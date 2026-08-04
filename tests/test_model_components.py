@@ -158,8 +158,9 @@ def test_constant_mean_delta_soiled_area():
     mu_tilde = 0.65
     density = 35.0  # PM10 reference value [arbitrary, consistent units]
 
-    # tilt deliberately includes 0 deg (cos=1) and 90 deg (cos=0) limits.
-    tilt = np.array([[0.0, 30.0, 60.0, 90.0], [10.0, 45.0, 80.0, 15.0]])
+    # tilt deliberately includes 0 deg (cos=1), 90 deg (cos=0) and 180 deg (past vertical,
+    # where a bare cos=-1 would predict the mirror cleaning itself) limits.
+    tilt = np.array([[0.0, 30.0, 60.0, 90.0], [10.0, 45.0, 80.0, 180.0]])
     dust_conc = np.array([20.0, 50.0, 80.0, 110.0])
 
     model = ConstantMeanBase()
@@ -177,12 +178,15 @@ def test_constant_mean_delta_soiled_area():
     model.calculate_delta_soiled_area(sim_in, verbose=False)
 
     alpha = dust_conc / density  # shape (N_times,)
-    expected = alpha[None, :] * np.cos(np.radians(tilt)) * mu_tilde
+    expected = alpha[None, :] * np.maximum(0.0, np.cos(np.radians(tilt))) * mu_tilde
     np.testing.assert_allclose(model.helios.delta_soiled_area[f], expected, rtol=RTOL, atol=ATOL)
 
-    # Explicit limit checks: tilt=0 -> alpha*mu_tilde; tilt=90 -> 0.
+    # Explicit limit checks: tilt=0 -> alpha*mu_tilde; tilt=90 -> 0; tilt=180 -> 0, not
+    # negative (a downward-facing mirror collects no settled dust, it does not shed it).
     np.testing.assert_allclose(model.helios.delta_soiled_area[f][0, 0], alpha[0] * mu_tilde, rtol=RTOL)
     assert abs(model.helios.delta_soiled_area[f][0, 3]) < 1e-12
+    assert model.helios.delta_soiled_area[f][1, 3] == 0.0
+    assert (model.helios.delta_soiled_area[f] >= 0.0).all()
 
 
 def test_constant_mean_delta_soiled_area_variance():
@@ -192,8 +196,8 @@ def test_constant_mean_delta_soiled_area_variance():
     sigma_dep = 0.12
     density = 40.0
 
-    tilt = np.array([[5.0, 25.0, 55.0]])
-    dust_conc = np.array([30.0, 60.0, 90.0])
+    tilt = np.array([[5.0, 25.0, 55.0, 180.0]])
+    dust_conc = np.array([30.0, 60.0, 90.0, 45.0])
 
     model = ConstantMeanBase()
     model.mu_tilde = mu_tilde
@@ -207,8 +211,11 @@ def test_constant_mean_delta_soiled_area_variance():
     model.calculate_delta_soiled_area(sim_in, verbose=False)
 
     alpha = dust_conc / density
-    expected_var = sigma_dep**2 * (alpha**2 * np.cos(np.radians(tilt)) ** 2)
+    # Clipped, matching the mean: a face-down mirror with zero predicted deposition must
+    # not carry full deposition noise.
+    expected_var = sigma_dep**2 * (alpha**2 * np.maximum(0.0, np.cos(np.radians(tilt))) ** 2)
     np.testing.assert_allclose(model.helios.delta_soiled_area_variance[f], expected_var, rtol=RTOL, atol=ATOL)
+    assert model.helios.delta_soiled_area_variance[f][0, 3] == 0.0
 
 
 # ---------------------------------------------------------------------------

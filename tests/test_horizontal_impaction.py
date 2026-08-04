@@ -7,11 +7,13 @@ independently re-derived reference values, tight tolerances for deterministic
 formulas, and a looser end-to-end smoke test for the stochastic MLE fit.
 """
 
+import logging
 import types
 import numpy as np
 import pytest
 
 import heliosoil.base_models as smb
+import heliosoil.fitting as smf
 from heliosoil.horizontal_impaction import (
     ConstantMeanWindBase,
     ConstantMeanWindDeposition,
@@ -19,6 +21,10 @@ from heliosoil.horizontal_impaction import (
     wind_tangential_factor,
     wind_retention_factors,
     parse_orientation_names,
+    _gravitational_mean_bases,
+    _gravitational_variance_basis,
+    _turbulant_wind_mean_bases,
+    _turbulant_wind_variance_basis,
 )
 
 RTOL = 1e-10
@@ -108,11 +114,13 @@ def test_constant_mean_wind_reduces_to_base_when_omega_zero():
     f = 0
     mu_tilde = 0.6
     density = 40.0
-    tilt = np.array([[10.0, 45.0, 70.0]])
-    azimuth = np.array([[0.0, 0.0, 0.0]])
-    dust_conc = np.array([30.0, 55.0, 90.0])
-    wind_dir = np.array([0.0, 90.0, 180.0])
-    wind_speed = np.array([3.0, 4.0, 5.0])
+    # 180 deg is a real mirror (yadnarie's OSW_M1_T180), where an unclipped cos(tilt) = -1
+    # would make the model predict the mirror CLEANING itself.
+    tilt = np.array([[10.0, 45.0, 70.0, 180.0]])
+    azimuth = np.array([[0.0, 0.0, 0.0, 0.0]])
+    dust_conc = np.array([30.0, 55.0, 90.0, 70.0])
+    wind_dir = np.array([0.0, 90.0, 180.0, 45.0])
+    wind_speed = np.array([3.0, 4.0, 5.0, 3.5])
 
     model = ConstantMeanWindBase()
     model.mu_tilde = mu_tilde
@@ -134,8 +142,20 @@ def test_constant_mean_wind_reduces_to_base_when_omega_zero():
     model.calculate_delta_soiled_area(sim_in, verbose=False)
 
     alpha = dust_conc / density
-    expected = alpha[None, :] * np.cos(np.radians(tilt)) * mu_tilde
+    expected = alpha[None, :] * np.maximum(0.0, np.cos(np.radians(tilt))) * mu_tilde
     np.testing.assert_allclose(model.helios.delta_soiled_area[f], expected, rtol=RTOL, atol=ATOL)
+
+    # The same numbers out of ConstantMeanBase itself, so the two implementations of the
+    # settling term cannot drift apart at past-vertical tilts.
+    plain = smb.ConstantMeanBase()
+    plain.mu_tilde = mu_tilde
+    plain.sigma_dep = None
+    plain.helios = _wind_helios_stub(tilt={f: tilt})
+    plain.calculate_delta_soiled_area(sim_in, verbose=False)
+    np.testing.assert_allclose(model.helios.delta_soiled_area[f], plain.helios.delta_soiled_area[f], rtol=RTOL, atol=ATOL)
+
+    # And the face-down mirror specifically: zero, not negative.
+    assert model.helios.delta_soiled_area[f][0, -1] == 0.0
 
 
 def test_constant_mean_wind_delta_soiled_area_windward_and_leeward():
@@ -731,8 +751,8 @@ def test_gravitational_only_reproduces_constant_mean_base_and_skips_wind_require
     f = 0
     mu_tilde = 0.6
     density = 40.0
-    tilt = np.array([[10.0, 45.0, 70.0]])
-    dust_conc = np.array([30.0, 55.0, 90.0])
+    tilt = np.array([[10.0, 45.0, 70.0, 180.0]])
+    dust_conc = np.array([30.0, 55.0, 90.0, 70.0])
 
     model = ConstantMeanWindBase(components=["gravitational"])
     model.mu_tilde = mu_tilde
@@ -750,8 +770,134 @@ def test_gravitational_only_reproduces_constant_mean_base_and_skips_wind_require
     model.calculate_delta_soiled_area(sim_in, verbose=False)  # must not raise
 
     alpha = dust_conc / density
-    expected = alpha[None, :] * np.cos(np.radians(tilt)) * mu_tilde
+    expected = alpha[None, :] * np.maximum(0.0, np.cos(np.radians(tilt))) * mu_tilde
     np.testing.assert_allclose(model.helios.delta_soiled_area[f], expected, rtol=RTOL, atol=ATOL)
+
+
+# ---------------------------------------------------------------------------
+# Past-vertical (face-down) mirrors: the settling factor must be clipped, not signed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("tilt_deg", [90.1, 120.0, 180.0, 265.0])
+def test_settling_driven_bases_vanish_past_vertical(tilt_deg):
+    """A mirror tilted past vertical faces the ground and collects no settled dust.
+
+    With a bare cos(tilt) these bases went NEGATIVE past 90 deg, so the model predicted the
+    mirror gaining reflectance without bound -- the failure seen on yadnarie's OSW_M1_T180.
+    Both the mean and its variance must vanish together.
+    """
+    alpha = np.array([1.5, 2.0, 2.5])
+    wind_speed = np.array([3.0, 4.0, 5.0])
+    tilt = np.full((1, 3), tilt_deg)
+
+    assert _gravitational_mean_bases(alpha, tilt, None, None, wind_speed)[0].tolist() == [[0.0, 0.0, 0.0]]
+    assert _gravitational_variance_basis(alpha, tilt, None, None, wind_speed).tolist() == [[0.0, 0.0, 0.0]]
+    assert _turbulant_wind_mean_bases(alpha, tilt, None, None, wind_speed)[0].tolist() == [[0.0, 0.0, 0.0]]
+    assert _turbulant_wind_variance_basis(alpha, tilt, None, None, wind_speed).tolist() == [[0.0, 0.0, 0.0]]
+
+
+def test_settling_driven_bases_negligible_at_exactly_vertical():
+    """At exactly 90 deg cosd returns +6e-17 rather than 0, so the clip passes that float
+    through untouched. It is positive (never the inverted sign this fix is about) and
+    negligible, matching how the rest of the suite treats the tilt=90 limit."""
+    alpha = np.array([1.5, 2.0, 2.5])
+    wind_speed = np.array([3.0, 4.0, 5.0])
+    tilt = np.full((1, 3), 90.0)
+
+    mean = _gravitational_mean_bases(alpha, tilt, None, None, wind_speed)[0]
+    assert (mean >= 0.0).all()
+    np.testing.assert_allclose(mean, 0.0, atol=1e-12)
+    np.testing.assert_allclose(_turbulant_wind_mean_bases(alpha, tilt, None, None, wind_speed)[0], 0.0, atol=1e-12)
+
+
+@pytest.mark.parametrize("tilt_deg", [0.0, 30.0, 89.0])
+def test_settling_driven_bases_unchanged_below_vertical(tilt_deg):
+    """The clip must not perturb the upward-facing range the model was fitted on."""
+    alpha = np.array([1.5, 2.0, 2.5])
+    wind_speed = np.array([3.0, 4.0, 5.0])
+    tilt = np.full((1, 3), tilt_deg)
+    c = np.cos(np.radians(tilt_deg))
+
+    np.testing.assert_allclose(_gravitational_mean_bases(alpha, tilt, None, None, wind_speed)[0], alpha[None, :] * c, rtol=RTOL)
+    np.testing.assert_allclose(_gravitational_variance_basis(alpha, tilt, None, None, wind_speed), (alpha[None, :] * c) ** 2, rtol=RTOL)
+    np.testing.assert_allclose(
+        _turbulant_wind_mean_bases(alpha, tilt, None, None, wind_speed)[0], alpha[None, :] * c * wind_speed[None, :], rtol=RTOL
+    )
+    np.testing.assert_allclose(
+        _turbulant_wind_variance_basis(alpha, tilt, None, None, wind_speed), (alpha[None, :] * c * wind_speed[None, :]) ** 2, rtol=RTOL
+    )
+
+
+def test_settling_driven_variance_shares_the_mean_support():
+    """Variance must be zero exactly where the mean is.
+
+    cos^2 is sign-blind, so clipping only the mean would leave a face-down mirror with zero
+    predicted deposition but FULL deposition noise -- an inconsistency that feeds the MLE
+    likelihood weights and the prediction interval.
+    """
+    alpha = np.ones(1)
+    wind_speed = np.full(1, 4.0)
+    tilt = np.linspace(0.0, 180.0, 181).reshape(-1, 1)
+
+    for mean_fn, var_fn in ((_gravitational_mean_bases, _gravitational_variance_basis), (_turbulant_wind_mean_bases, _turbulant_wind_variance_basis)):
+        mean = mean_fn(alpha, tilt, None, None, wind_speed)[0]
+        var = var_fn(alpha, tilt, None, None, wind_speed)
+        assert (mean >= 0.0).all()
+        assert (var >= 0.0).all()
+        np.testing.assert_array_equal(mean == 0.0, var == 0.0)
+
+
+def _tilt_sweep_model(components):
+    """A three-mirror model at tilt 0 / 90 / 180 sharing one weather series."""
+    f = 0
+    density = 40.0
+    tilt = np.tile(np.array([[0.0], [90.0], [180.0]]), (1, 4))
+    azimuth = np.full((3, 4), 90.0)
+    dust_conc = np.array([30.0, 40.0, 50.0, 60.0])
+
+    model = ConstantMeanWindBase(components=components)
+    model.mu_tilde = 0.5
+    model.omega_tangential = 0.01
+    model.omega_windward = 0.02
+    model.omega_leeward = 0.005
+    for name in ("sigma_dep", "sigma_dep_tan", "sigma_dep_gamma"):
+        setattr(model, name, None)
+    model.helios = _wind_helios_stub(tilt={f: tilt}, azimuth={f: azimuth})
+
+    sim_in = types.SimpleNamespace(
+        time={f: None},
+        dust=types.SimpleNamespace(TSP={f: density}),
+        dust_concentration={f: dust_conc},
+        dust_type={f: "TSP"},
+        wind_direction={f: np.array([90.0, 120.0, 200.0, 300.0])},
+        wind_speed={f: np.array([3.0, 4.0, 5.0, 3.5])},
+    )
+    model.calculate_delta_soiled_area(sim_in, verbose=False)
+    return model.helios.delta_soiled_area[f]
+
+
+def test_face_down_mirror_accumulates_soiling_never_cleans_itself():
+    """The end-to-end property the fix exists for: soiling accumulates monotonically at
+    every tilt, and a face-down mirror soils LESS than an upward-facing one (yadnarie
+    Feb 2025: -2.2 pp at 180 deg against -21.4 pp at 0 deg) rather than gaining reflectance."""
+    delta = _tilt_sweep_model(["gravitational", "tangential_wind"])
+    assert (delta >= 0.0).all()
+
+    face_up, vertical, face_down = delta.sum(axis=1)
+    assert face_down > 0.0  # tangential_wind is the one channel that still reaches it
+    assert face_down < face_up
+    assert vertical > 0.0
+
+
+def test_default_components_leave_a_face_down_mirror_flat():
+    """Documents the accepted consequence of the clip: with the default
+    ["gravitational", "normal_wind"] set, EVERY factor is zero at tilt=180 (cos is clipped,
+    sin(180)=0), so the mirror is predicted flat rather than inverted. tangential_wind must
+    be in the component set for that mirror to be predicted at all."""
+    delta = _tilt_sweep_model(["gravitational", "normal_wind"])
+    np.testing.assert_allclose(delta[2, :], 0.0, atol=1e-15)
+    assert delta[0, :].sum() > 0.0
 
 
 def test_tangential_wind_delta_soiled_area_mean_and_variance():
@@ -1317,3 +1463,374 @@ def test_fit_mle_recovers_parameters_with_per_component_dust_channels():
     assert abs(mu_hat - true_mu_tilde) / true_mu_tilde < 0.4
     assert omega_tan_hat > 0
     assert abs(omega_tan_hat - true_omega_tangential) / true_omega_tangential < 0.6
+
+
+# ---------------------------------------------------------------------------
+# Least-squares fitting (mean_design_matrix / fit_ls)
+# ---------------------------------------------------------------------------
+
+
+def _synthetic_normal_wind_case(seed=7, meas_noise_std=5e-4):
+    """A synthetic gravitational + normal_wind dataset and an unfitted model wired to it.
+
+    Same construction as test_fit_mle_recovers_parameters_on_synthetic_data: known parameters
+    generate the reflectance exactly, i.i.d. measurement noise is added on top, and the returned
+    model carries only the geometry (every parameter still None). meas_noise_std=0 gives the
+    noise-free case, where least squares should recover the generating parameters exactly; the
+    reported sigma_of_the_mean is floored above zero regardless, since a zero measurement
+    variance makes the likelihood the sigma profile uses undefined.
+
+    Returns (model, sim_in, ref_dat, true_mean_parameters).
+    """
+    rng = np.random.default_rng(seed)
+    f = 0
+    N_helios, N_times = 4, 240  # 10 days, hourly
+    truth_values = {"mu_tilde": 4.0e-4, "omega_windward": 6.0e-5, "omega_leeward": 2.0e-5}
+    density, nominal_reflectance, incidence_angle = 40.0, 0.95, 15.0
+    inc_ref_factor = np.float64(2.0 / np.cos(np.radians(incidence_angle)))
+
+    tilt = np.tile(np.full(N_helios, 45.0)[:, None], (1, N_times))
+    azimuth = np.tile(np.array([0.0, 90.0, 180.0, 270.0])[:, None], (1, N_times))  # N, E, S, W
+
+    sim_in = types.SimpleNamespace(
+        time={f: np.arange(N_times)},
+        files=[f],
+        dust=types.SimpleNamespace(TSP={f: density}),
+        dust_concentration={f: rng.uniform(20.0, 80.0, size=N_times)},
+        dust_type={f: "TSP"},
+        wind_direction={f: rng.uniform(0.0, 360.0, size=N_times)},
+        wind_speed={f: rng.uniform(1.0, 6.0, size=N_times)},
+    )
+
+    truth = ConstantMeanWindBase()
+    for name, value in truth_values.items():
+        setattr(truth, name, value)
+    truth.sigma_dep = truth.sigma_dep_gamma = None
+    truth.helios = _wind_helios_stub(tilt={f: tilt}, azimuth={f: azimuth})
+    truth.calculate_delta_soiled_area(sim_in, verbose=False)
+    soiling_factor_true = 1 - np.cumsum(truth.helios.delta_soiled_area[f], axis=1) * inc_ref_factor  # clean start
+
+    pred_idx = np.arange(23, N_times, 24)  # daily measurements
+    rho_true_at_meas = nominal_reflectance * soiling_factor_true[:, pred_idx]
+    average = (rho_true_at_meas + rng.normal(0.0, meas_noise_std, size=rho_true_at_meas.shape)).T
+
+    ref_dat = types.SimpleNamespace(
+        files=[f],
+        times={f: pred_idx},
+        prediction_indices={f: list(pred_idx)},
+        average={f: average},
+        sigma_of_the_mean={f: np.full(average.shape, max(meas_noise_std, 1e-6))},
+        rho0={f: np.full(N_helios, nominal_reflectance)},
+    )
+
+    model = ConstantMeanWindDeposition.__new__(ConstantMeanWindDeposition)
+    ConstantMeanWindBase.__init__(model)  # default components=[gravitational, normal_wind]
+    model.helios = _wind_helios_stub(
+        tilt={f: tilt},
+        azimuth={f: azimuth},
+        inc_ref_factor={f: inc_ref_factor},
+        nominal_reflectance=nominal_reflectance,
+        soiling_factor={},
+        soiling_factor_prediction_variance={},
+    )
+    return model, sim_in, ref_dat, truth_values
+
+
+def test_mean_design_matrix_reproduces_the_sum_of_squares():
+    """The whole least-squares fit rests on the prediction being affine in the mean parameters,
+    so the design matrix must reproduce CommonFittingMethods._sse exactly -- not approximately --
+    at arbitrary parameter values, not just near the ones it was built at."""
+    model, sim_in, ref_dat, _truth = _synthetic_normal_wind_case()
+
+    X, y = model.mean_design_matrix(sim_in, ref_dat)
+    assert X.shape == (ref_dat.average[0].size, 3)  # mu_tilde, omega_windward, omega_leeward
+
+    rng = np.random.default_rng(3)
+    for _ in range(4):
+        theta = rng.uniform(-1e-3, 1e-3, size=3)
+        theta[0] = abs(theta[0])  # mu_tilde is a positive (log-transformed) parameter
+        residual = X @ theta - y
+        sse_forward = model._sse(np.concatenate([theta, [1e-4, 1e-4]]), sim_in, ref_dat)
+        np.testing.assert_allclose(residual @ residual, sse_forward, rtol=1e-9)
+
+
+def test_mean_design_matrix_leaves_the_model_parameters_untouched():
+    """Building the design matrix probes the forward model by overwriting the parameters; it has
+    to put them back, or a subsequent fit silently starts from the last probe."""
+    model, sim_in, ref_dat, _truth = _synthetic_normal_wind_case()
+    model.update_model_parameters(np.array([1e-4, 2e-5, 3e-5, 4e-5, 5e-5]))
+    before = [getattr(model, name) for name in model.parameter_names]
+
+    model.mean_design_matrix(sim_in, ref_dat)
+
+    assert [getattr(model, name) for name in model.parameter_names] == before
+
+
+def test_mean_design_matrix_increment_residuals_difference_consecutive_measurements():
+    """residuals="increment" fits the change in reflectance between measurements, so it has one
+    row per interval rather than per measurement, and its rows are the level rows differenced."""
+    model, sim_in, ref_dat, _truth = _synthetic_normal_wind_case()
+    n_times, n_helios = ref_dat.average[0].shape
+
+    _X_level, y_level = model.mean_design_matrix(sim_in, ref_dat, residuals="level")
+    X_inc, y_inc = model.mean_design_matrix(sim_in, ref_dat, residuals="increment")
+
+    assert X_inc.shape == ((n_times - 1) * n_helios, 3)
+    expected = np.diff(y_level.reshape(n_times, n_helios), axis=0).ravel()
+    np.testing.assert_allclose(y_inc, expected, rtol=1e-10, atol=1e-15)
+
+
+def test_mean_design_matrix_rejects_an_unknown_residual_kind():
+    model, sim_in, ref_dat, _truth = _synthetic_normal_wind_case()
+    with pytest.raises(ValueError, match="residuals"):
+        model.mean_design_matrix(sim_in, ref_dat, residuals="daily")
+
+
+def test_fit_ls_is_exact_without_measurement_noise():
+    """With noise-free measurements the least-squares problem is consistent, so the linear solve
+    must return the generating parameters -- no starting point, no tolerance to tune."""
+    model, sim_in, ref_dat, truth = _synthetic_normal_wind_case(meas_noise_std=0.0)
+
+    x_hat, _x_cov = model.fit_ls(sim_in, ref_dat, verbose=False, transform_to_original_scale=True)
+
+    np.testing.assert_allclose(x_hat, [truth["mu_tilde"], truth["omega_windward"], truth["omega_leeward"]], rtol=1e-6)
+
+
+def test_fit_ls_recovers_parameters_on_synthetic_data():
+    """Counterpart of test_fit_mle_recovers_parameters_on_synthetic_data: the same data, fitted
+    by least squares instead of a joint MLE. The estimate covers the mean parameters only, and
+    the fit leaves the model holding it."""
+    model, sim_in, ref_dat, truth = _synthetic_normal_wind_case()
+
+    x_hat, x_cov = model.fit_ls(sim_in, ref_dat, verbose=False, transform_to_original_scale=True)
+    mu_hat, omega_w_hat, omega_l_hat = x_hat
+
+    assert np.all(np.isfinite(x_hat))
+    assert x_cov.shape == (3, 3)
+    assert model.mean_parameter_names == ["mu_tilde", "omega_windward", "omega_leeward"]
+    assert abs(mu_hat - truth["mu_tilde"]) / truth["mu_tilde"] < 0.2
+    assert abs(omega_w_hat - truth["omega_windward"]) / truth["omega_windward"] < 0.4
+    assert abs(omega_l_hat - truth["omega_leeward"]) / truth["omega_leeward"] < 0.6
+
+    np.testing.assert_allclose([getattr(model, n) for n in model.mean_parameter_names], x_hat, rtol=1e-12)
+
+
+def test_fit_ls_leaves_no_noise_model_and_no_prediction_variance():
+    """Least squares says nothing about the sigmas, so the fit must clear them rather than leave
+    a stale value behind -- that is what makes predict_soiling_factor produce a mean prediction
+    with no prediction interval for the figures to draw."""
+    model, sim_in, ref_dat, _truth = _synthetic_normal_wind_case()
+    model.update_model_parameters(np.array([1e-4, 2e-5, 3e-5, 4e-5, 5e-5]))  # a stale MLE-style fit
+
+    model.fit_ls(sim_in, ref_dat, verbose=False)
+
+    assert [getattr(model, name) for name in model._sigma_param_names] == [None, None]
+    model.predict_soiling_factor(sim_in, reflectance_data=ref_dat, verbose=False)
+    assert model.helios.soiling_factor_prediction_variance == {}
+
+
+def test_fit_ls_fitted_scale_matches_the_original_scale_estimate():
+    """fit_ls follows fit_mle's convention: transform_to_original_scale=False returns the
+    estimate on the model's own (partially log) scale, which transform_scale maps back."""
+    model, sim_in, ref_dat, _truth = _synthetic_normal_wind_case()
+
+    y_hat, y_cov = model.fit_ls(sim_in, ref_dat, verbose=False, transform_to_original_scale=False)
+    x_hat, _x_cov = model.fit_ls(sim_in, ref_dat, verbose=False, transform_to_original_scale=True)
+
+    np.testing.assert_allclose(model.transform_scale(y_hat), x_hat, rtol=1e-6)
+    assert y_cov.shape == (3, 3)
+    # The log-transformed entry (mu_tilde) differs from its original; the linear omegas are
+    # carried through untouched.
+    np.testing.assert_allclose(y_hat[1:], x_hat[1:], rtol=1e-12)
+
+
+def test_transform_scale_rejects_a_vector_that_is_neither_mean_only_nor_complete():
+    """transform_scale now takes either length, so a wrong one must fail loudly instead of
+    silently broadcasting against a mismatched log mask."""
+    model, _sim_in, _ref_dat, _truth = _synthetic_normal_wind_case()
+
+    with pytest.raises(ValueError, match="Cannot transform a vector of 4 parameter"):
+        model.transform_scale(np.ones(4), direction="forward")
+
+
+def test_fit_ls_handles_a_component_the_data_cannot_see():
+    """A mechanism whose geometry basis is identically zero (impaction_retention with every
+    mirror horizontal) makes the design matrix singular. The fit must still return finite
+    estimates for the parameters the data does identify rather than dying in the linear solve."""
+    model, sim_in, ref_dat, _truth = _synthetic_normal_wind_case()
+    f = 0
+    helios = model.helios
+    helios.tilt[f] = np.zeros_like(helios.tilt[f])  # flat: sin(tilt)*cos(tilt) == 0
+    # Re-initialising the base rebuilds helios from scratch, so the (now flat) stub goes back
+    # afterwards rather than before.
+    ConstantMeanWindBase.__init__(model, components=["gravitational", "impaction_retention"])
+    model.helios = helios
+
+    x_hat, _x_cov = model.fit_ls(sim_in, ref_dat, verbose=False, transform_to_original_scale=True)
+
+    assert np.all(np.isfinite(x_hat))
+    np.testing.assert_allclose(x_hat[1:3], 0.0, atol=1e-30)  # the unidentifiable omegas stay at 0
+    assert x_hat[0] > 0  # mu_tilde is still identified by the cos(tilt) term
+
+
+def _constant_mean_model(model, sim_in, ref_dat):
+    """A ConstantMeanDeposition wired to the same synthetic case, bypassing the Excel-reading
+    __init__ exactly as the ConstantMeanWindDeposition models above do."""
+    plain = smf.ConstantMeanDeposition.__new__(smf.ConstantMeanDeposition)
+    smb.ConstantMeanBase.__init__(plain)
+    plain.helios = _wind_helios_stub(
+        tilt=dict(model.helios.tilt),
+        inc_ref_factor=dict(model.helios.inc_ref_factor),
+        nominal_reflectance=model.helios.nominal_reflectance,
+        soiling_factor={},
+        soiling_factor_prediction_variance={},
+    )
+    return plain
+
+
+def test_constant_mean_least_squares_matches_the_gravitational_only_wind_model():
+    """ConstantMeanDeposition is affine in mu_tilde, so it takes the same one-shot linear fit
+    as the wind family. The two are the same model (see
+    test_gravitational_only_reproduces_constant_mean_base_and_skips_wind_requirement), so
+    fitting the same data must give the same answer -- to solver precision, not loosely."""
+    model, sim_in, ref_dat, _truth = _synthetic_normal_wind_case()
+    helios = model.helios
+    ConstantMeanWindBase.__init__(model, components=["gravitational"])
+    model.helios = helios
+
+    plain = _constant_mean_model(model, sim_in, ref_dat)
+
+    wind_hat, wind_cov = model.fit_ls(sim_in, ref_dat, verbose=False, transform_to_original_scale=True)
+    plain_hat, plain_cov = plain.fit_ls(sim_in, ref_dat, verbose=False, transform_to_original_scale=True)
+
+    assert plain.mean_parameter_names == ["mu_tilde"] == model.mean_parameter_names
+    np.testing.assert_allclose(plain_hat, wind_hat, rtol=1e-12)
+    np.testing.assert_allclose(plain_cov, wind_cov, rtol=1e-10)
+
+
+def test_constant_mean_least_squares_leaves_no_noise_model():
+    """Same contract as the wind model: no sigma is fitted, a stale one is cleared, and the
+    prediction therefore carries no variance for the figures to shade."""
+    model, sim_in, ref_dat, _truth = _synthetic_normal_wind_case()
+    plain = _constant_mean_model(model, sim_in, ref_dat)
+    plain.update_model_parameters(np.array([1e-4, 5e-5]))  # a stale MLE-style fit
+
+    x_hat, _cov = plain.fit_ls(sim_in, ref_dat, verbose=False, transform_to_original_scale=True)
+
+    assert plain.sigma_dep is None
+    assert plain.mu_tilde == x_hat[0] > 0
+    plain.predict_soiling_factor(sim_in, reflectance_data=ref_dat, verbose=False)
+    assert plain.helios.soiling_factor_prediction_variance == {}
+
+
+def test_constant_mean_least_squares_beats_the_mle_on_its_own_objective():
+    """The point of offering least squares: on the sum of squares it minimizes, it must do at
+    least as well as the likelihood fit, which optimizes something else."""
+    model, sim_in, ref_dat, _truth = _synthetic_normal_wind_case()
+    ls_model = _constant_mean_model(model, sim_in, ref_dat)
+    mle_model = _constant_mean_model(model, sim_in, ref_dat)
+
+    ls_hat, _cov = ls_model.fit_ls(sim_in, ref_dat, verbose=False, transform_to_original_scale=True)
+    mle_hat, _mle_cov = mle_model.fit_mle(sim_in, ref_dat, verbose=False, x0=np.array([1e-3, 1e-4]), transform_to_original_scale=True)
+
+    sse_ls = ls_model._sse(np.array([ls_hat[0], 1e-4]), sim_in, ref_dat)
+    sse_mle = mle_model._sse(np.array([mle_hat[0], 1e-4]), sim_in, ref_dat)
+
+    assert sse_ls <= sse_mle
+
+
+def test_constant_mean_transform_scale_takes_either_length():
+    """fit_ls returns mu_tilde alone, so transform_scale must accept a length-1 vector while
+    leaving the two-parameter behaviour fit_mle relies on untouched."""
+    model, sim_in, ref_dat, _truth = _synthetic_normal_wind_case()
+    plain = _constant_mean_model(model, sim_in, ref_dat)
+
+    np.testing.assert_allclose(plain.transform_scale([np.e], direction="forward"), [1.0], rtol=1e-12)
+    np.testing.assert_allclose(plain.transform_scale([np.e, np.e**2], direction="forward"), [1.0, 2.0], rtol=1e-12)
+    with pytest.raises(ValueError, match="Cannot transform a vector of 3 parameter"):
+        plain.transform_scale([1.0, 2.0, 3.0], direction="forward")
+
+
+# ---------------------------------------------------------------------------
+# Shared least-squares machinery (heliosoil.fitting), across all three model classes
+# ---------------------------------------------------------------------------
+
+
+def _bare_wind_model(components=None):
+    """A ConstantMeanWindDeposition carrying only its parameter layout -- enough for the
+    scale-transform hooks, which touch no data."""
+    model = ConstantMeanWindDeposition.__new__(ConstantMeanWindDeposition)
+    ConstantMeanWindBase.__init__(model, components=components)
+    return model
+
+
+@pytest.mark.parametrize(
+    "make_model, point",
+    [
+        (lambda: smf.ConstantMeanDeposition.__new__(smf.ConstantMeanDeposition), np.array([3.0e-5])),
+        (lambda: smf.SemiPhysical.__new__(smf.SemiPhysical), np.array([250.0])),
+        (_bare_wind_model, np.array([3.0e-5, 7.0e-7, -2.0e-7])),  # a negative omega is legal
+    ],
+    ids=["constant_mean", "semi_physical", "constant_mean_wind"],
+)
+def test_fitted_scale_jacobian_matches_the_forward_transform(make_model, point):
+    """The delta method carries a least-squares covariance onto the fitted scale using this
+    derivative. Each class states it analytically next to its own transform_scale, so a hook
+    that disagreed would silently corrupt every reported confidence interval -- nothing else
+    would fail. Checked against a central difference of the transform itself."""
+    model = make_model()
+    analytic = np.atleast_1d(model._fitted_scale_jacobian(point))
+
+    numeric = np.empty(len(point), dtype=float)
+    for i in range(len(point)):
+        step = 1e-6 * abs(point[i])
+        up, down = point.astype(float).copy(), point.astype(float).copy()
+        up[i] += step
+        down[i] -= step
+        numeric[i] = (model.transform_scale(up, direction="forward")[i] - model.transform_scale(down, direction="forward")[i]) / (2 * step)
+
+    np.testing.assert_allclose(analytic, numeric, rtol=1e-5)
+
+
+def test_least_squares_reports_an_estimate_pinned_to_its_search_bound(caplog):
+    """A bounded scalar fit that stops on its bracket has not found an optimum -- the objective
+    was still improving. That is a real diagnostic about identifiability, so it must be said
+    out loud rather than returned as if it were a converged estimate."""
+    model = smf.SemiPhysical.__new__(smf.SemiPhysical)
+    lower, upper = model._LS_SCALAR_BOUNDS
+
+    with caplog.at_level(logging.WARNING, logger="heliosoil"):
+        # A bounded search converges only to its own xatol, so it stops just short of the
+        # bound -- 999.99998 for yadnarie's semi-physical fit. That must still be flagged.
+        model._warn_if_at_scalar_bound("hrz0", upper - 2.1e-5)
+        assert "search bound" in caplog.text
+
+        caplog.clear()
+        model._warn_if_at_scalar_bound("hrz0", lower + 1e-6)
+        assert "search bound" in caplog.text
+
+        caplog.clear()
+        model._warn_if_at_scalar_bound("hrz0", 0.5 * upper)
+        assert caplog.text == ""
+
+
+def test_semi_physical_transform_scale_takes_either_length():
+    """fit_ls returns hrz0 alone, so the log-log transform must accept a length-1 vector while
+    leaving the two-parameter behaviour fit_mle relies on untouched."""
+    model = smf.SemiPhysical.__new__(smf.SemiPhysical)
+
+    full = model.transform_scale([np.exp(np.e), np.e], direction="forward")
+    mean_only = model.transform_scale([np.exp(np.e)], direction="forward")
+
+    np.testing.assert_allclose(full, [1.0, 1.0], rtol=1e-12)
+    np.testing.assert_allclose(mean_only, full[:1], rtol=1e-12)
+    with pytest.raises(ValueError, match="Cannot transform a vector of 3 parameter"):
+        model.transform_scale([1.0, 2.0, 3.0], direction="forward")
+
+
+def test_mean_parameter_names_cover_every_model_class():
+    """The pipeline reads a least-squares run's reported parameters off this property, so each
+    class must declare its mean/noise split rather than inherit an empty default."""
+    assert smf.ConstantMeanDeposition.__new__(smf.ConstantMeanDeposition).mean_parameter_names == ["mu_tilde"]
+    assert smf.SemiPhysical.__new__(smf.SemiPhysical).mean_parameter_names == ["hrz0"]
+    assert _bare_wind_model(["gravitational", "tangential_wind"]).mean_parameter_names == ["mu_tilde", "omega_tangential"]

@@ -465,7 +465,11 @@ def _report_cross_validation(
         # Copied, not referenced: the template fold's own arrays would otherwise alias the stitched
         # dict, and any later prediction on that model would silently rewrite this fold's result.
         stitched_soiling_factor[e_test] = model.helios.soiling_factor[e_test].copy()
-        stitched_variance[e_test] = model.helios.soiling_factor_prediction_variance[e_test].copy()
+        # A least-squares fit carries no noise process, so there is no prediction variance to
+        # stitch; the stitched model then simply has no interval to draw, as each fold had none.
+        fold_variance = model.helios.soiling_factor_prediction_variance.get(e_test)
+        if fold_variance is not None:
+            stitched_variance[e_test] = fold_variance.copy()
         template = model
 
     # Every campaign was held out by exactly one fold, so the stitched model predicts the whole
@@ -541,7 +545,11 @@ def report_run(cfg: mp.PipelineConfig, data: mp.LoadedData, model_type: str, win
     cfg.train_experiments, or leave-one-campaign-out when it is None -- and write its fitted
     parameters, performance stats, and plots."""
     expression = mp.run_expression(model_type, wind_components, component_dust_types)
-    print(f"\n{'=' * 80}\nmodel_type={model_type!r}  {expression}\n{'=' * 80}")
+    # The method actually used, not the one requested: a model type without a least-squares fit
+    # falls back to MLE, and the header is where that has to be visible.
+    fit_method = mp.resolve_fit_method(cfg, model_type)
+    fallback = "" if fit_method == cfg.fit_method else f" (fit_method={cfg.fit_method!r} unavailable for this model type)"
+    print(f"\n{'=' * 80}\nmodel_type={model_type!r}  fit={fit_method}{fallback}  {expression}\n{'=' * 80}")
 
     train_mirrors_run = mp.resolve_training_mirrors(cfg, data.all_mirrors, model_type, wind_components)
     results_dir, _label = mp.results_dir_and_label(cfg, model_type, wind_components, component_dust_types, WORKFLOW, run_name)

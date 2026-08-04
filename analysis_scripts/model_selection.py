@@ -93,8 +93,9 @@ def cross_validate_run(
     ever a way to trade away comparability for speed, and the campaign counts here (C <= 4)
     make the full schedule cheap."""
     expression = mp.run_expression(model_type, wind_components, component_dust_types)
+    fit_method = mp.resolve_fit_method(cfg, model_type)
     log.info("=" * 80)
-    log.info(f"dust={subdir!r}  model_type={model_type!r}  {expression}")
+    log.info(f"dust={subdir!r}  model_type={model_type!r}  fit={fit_method}  {expression}")
 
     train_mirrors_run = mp.resolve_training_mirrors(cfg, data.all_mirrors, model_type, wind_components)
     results_dir, label = mp.results_dir_and_label(cfg, model_type, wind_components, component_dust_types, "model_select", run_name, subdir=subdir)
@@ -170,8 +171,10 @@ def cross_validate_run(
         .reset_index(drop=True)
     )
     # Carried into the compiled all-models table: which mechanisms were fitted and, when they
-    # differ, the dust channel driving each.
+    # differ, the dust channel driving each -- plus how they were fitted, since a run where
+    # semi_physical fell back to MLE is not comparing like with like on that column alone.
     summary_df.insert(1, "model_expression", expression)
+    summary_df.insert(2, "fit_method", fit_method)
     summary_df.to_csv(f"{results_dir}/cross_validation_summary.csv", index=False, float_format="%.3g")
 
     fig_cv, (ax_rmse, ax_r2) = plt.subplots(1, 2, figsize=(11, 4.5))
