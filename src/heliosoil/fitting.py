@@ -23,10 +23,8 @@ class CommonFittingMethods:
     variance_model = "scalar"
     _endpoint_correction = None
 
-    # Variance split, populated by update_model_parameters for the components model.
-    common_variance_fraction = 0.0
-    sigma_c = None
-    sigma_m = None
+    # The variance split (common_variance_fraction, sigma_c, sigma_m) is declared on
+    # SoilingBase, next to sigma_dep; update_model_parameters populates it here.
 
     # Mean parameter: how it is transformed for fitting, and what to call it. Set by
     # each model class.

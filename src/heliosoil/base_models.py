@@ -34,6 +34,16 @@ _CM3_TO_M3 = 1e6  # number-concentration conversion: cm^-3 -> m^-3
 
 
 class SoilingBase:
+
+    # Split of the deposition variance into a part common to every mirror at the site
+    # during an interval and a mirror-specific part. Declared at class level so that
+    # models restored from pickles predating the option still resolve them, and defined
+    # here rather than on the fitting mixin because the split describes the deposition
+    # process; fitting only estimates it.
+    common_variance_fraction = 0.0
+    sigma_c = None
+    sigma_m = None
+
     def __init__(self):
         """
         Initializes the base model class with parameters from a file.
@@ -59,6 +69,82 @@ class SoilingBase:
         self.helios = Heliostats()  # a subclass containing information about the heliostats
         self.sigma_dep = None  # standard deviation for deposition velocity
         self.loss_model = None  # either "geometry" or "mie"
+
+    def random_delta_soiled_area(
+        self, simulation_inputs, kappa=None, rng=None, verbose=True
+    ):
+        """
+        Simulates the soiled area deposited in each timestep, with random deposition.
+
+        The deposition noise is split into a component common to every mirror at the site
+        during an interval and a mirror-specific component. Writing ``kappa`` for the
+        common fraction of the deposition variance,
+
+            delta[p, j] = mean[p, j]
+                        + sqrt(var[p, j]) * ( sqrt(kappa) * eta[j]
+                                              + sqrt(1 - kappa) * xi[p, j] )
+
+        where ``eta[j]`` is one standard normal per interval, shared across mirrors, and
+        ``xi[p, j]`` is independent across both. Because
+        ``var[p, j] = sigma_dep**2 alpha_j**2 cos(tilt)**2``, each mirror's noise is
+        scaled by its own dust loading, as in the deposition model. ``kappa = 0`` gives
+        every mirror independent noise.
+
+        Args:
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            kappa (float, optional): Common fraction of the deposition variance, in
+                [0, 1]. Defaults to the model's ``common_variance_fraction``, which is
+                zero unless a variance-components fit has set it.
+            rng (numpy.random.Generator, optional): Source of randomness. Defaults to
+                ``numpy.random.default_rng()``.
+            verbose (bool): Passed to ``calculate_delta_soiled_area``.
+
+        Returns:
+            dict: Simulated ``delta_soiled_area`` per experiment, each of shape
+            (n_mirrors, n_times).
+
+        Raises:
+            ValueError: If ``kappa`` is outside [0, 1], or if ``sigma_dep`` is unset, or
+                if the model has not been prepared far enough to give a deposition
+                variance.
+        """
+        if kappa is None:
+            kappa = self.common_variance_fraction
+        kappa = float(kappa)
+        if not 0.0 <= kappa <= 1.0:
+            raise ValueError(f"The common variance fraction must be in [0, 1], got {kappa}.")
+        if self.sigma_dep is None:
+            raise ValueError(
+                "sigma_dep must be set before simulating deposition; there is no noise "
+                "scale otherwise."
+            )
+        if rng is None:
+            rng = np.random.default_rng()
+
+        self.calculate_delta_soiled_area(simulation_inputs, verbose=verbose)
+
+        mean_area_loss = self.helios.delta_soiled_area
+        var_area_loss = self.helios.delta_soiled_area_variance
+        if not var_area_loss:
+            # PhysicalBase needs deposition_flux and adhesion_removal first, which
+            # predict_soiling_factor performs; ConstantMeanBase does not.
+            raise ValueError(
+                "No deposition variance is available. Prepare the model first, for "
+                "example with predict_soiling_factor, so that "
+                "delta_soiled_area_variance is populated."
+            )
+
+        simulated = {}
+        for f in mean_area_loss.keys():
+            mean = mean_area_loss[f]
+            scale = np.sqrt(var_area_loss[f])
+            common = rng.standard_normal(size=(1, mean.shape[1]))  # one draw per interval
+            mirror = rng.standard_normal(size=mean.shape)
+            simulated[f] = mean + scale * (
+                np.sqrt(kappa) * common + np.sqrt(1.0 - kappa) * mirror
+            )
+
+        return simulated
 
     def import_site_data_and_constants(self, file_params, verbose=True):
 
@@ -599,24 +685,6 @@ class ConstantMeanBase(SoilingBase):
                 helios.delta_soiled_area_variance[f] = dsav
 
         self.helios = helios
-
-    def random_delta_soiled_area(self, simulation_inputs, mu_tilde=None, sigma_dep=None, verbose=True):
-        """
-            Simulates the delta soiled area with randomness in the deposition velocity. The airborne dust loading
-            is treated as a constant. 
-        """
-        self.calculate_delta_soiled_area(simulation_inputs,mu_tilde,sigma_dep,verbose)
-        mean_area_loss = self.helios.delta_soiled_area
-        var_area_loss = self.helios.delta_soiled_area_variance
-        files = list(mean_area_loss.keys())
-        sim = {f:[] for f in files}
-        for f in files:
-            μ = mean_area_loss[f]
-            σ = np.sqrt(var_area_loss[f])
-            sim[f] = μ + σ*np.random.standard_normal(size=μ.shape)
-
-        return sim
-            
 
 
 @dataclass
