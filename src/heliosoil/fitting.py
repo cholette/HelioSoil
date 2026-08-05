@@ -50,57 +50,200 @@ class CommonFittingMethods:
 
         self.helios = helios
 
-    def _compute_variance_of_measurements(self, sigma_dep, simulation_inputs, reflectance_data=None):
-        """ "
-        Computes the total variance of the reflectance measurements, including both the measurement error and the variance due to the soiling model parameters.
+    # ------------------------------------------------------------------
+    # Measurement covariance.
+    #
+    # The deposition fluctuation eps_t is ONE draw per timestep for the whole site --
+    # every mirror sees the same dust and the same weather -- so mirror j gains
+    # noise_basis[j, t] * eps_t of soiled area in timestep t. Summing over the timesteps
+    # of a measurement interval, the covariance of the reflectance increments ACROSS
+    # MIRRORS is therefore
+    #
+    #     Sigma_i = b b^T * sum_k sigma_k^2 B_i^(k) B_i^(k)T + D_i
+    #
+    # with B_i^(k) the (N_helios, n_timesteps_in_interval) noise basis of mechanism k and
+    # D_i = diag(meas_sig_i^2 + meas_sig_{i+1}^2) the (known) measurement noise. The
+    # Gram matrix B B^T is the object; its DIAGONAL is what this code used to compute and
+    # feed to the likelihood as if the mirrors were independent. For a tilt-only model
+    # B_i factorizes as cos(tilt) x alpha, so Sigma_i's deposition part is exactly rank 1:
+    # every pair of mirrors is perfectly correlated, and treating them as independent
+    # overstates the information about every parameter by roughly a factor of N_helios.
+    # ------------------------------------------------------------------
 
-        The function takes in the standard deviation of the model parameters (`sigma_dep`), the simulation inputs (`simulation_inputs`), and optionally
-        the reflectance data (`reflectance_data`). It first checks that the keys in the simulation inputs and reflectance data match. Then, it computes
-        the total variance for each file, taking into account the measurement error and the variance due to the soiling model parameters.
+    # Sigma parameter driving the single deposition process of a tilt-only model. Models with
+    # several independent noise mechanisms override _noise_bases and _sigma_param_names.
+    _noise_param_name = "sigma_dep"
 
-        The function returns a dictionary `s2total` that contains the total variance for each file.
+    def _noise_bases(self, simulation_inputs, f):
+        """{sigma parameter name: (N_helios, N_times) array} -- the coefficient multiplying
+        each mechanism's shared per-timestep fluctuation. One entry here for a tilt-only
+        model; heliosoil.horizontal_impaction overrides it with one entry per active
+        mechanism."""
+        sim_in = simulation_inputs
+        try:
+            attr = _parse_dust_str(sim_in.dust_type[f])
+            den = getattr(sim_in.dust, attr)  # dust.(sim_in.dust_type[f])
+        except Exception:
+            raise ValueError(
+                "Dust measurement "
+                + sim_in.dust_type[f]
+                + " not present in dust class. Use dust_type="
+                + sim_in.dust_type[f]
+                + " option when initializing the model"
+            )
+        alpha = sim_in.dust_concentration[f] / den[f]
+        return {self._noise_param_name: alpha[None, :] * gravitational_settling_factor(self.helios.tilt[f])}
+
+    def _current_sigmas(self, sigma_dep=None):
+        """{sigma parameter name: value} for the noise mechanisms _noise_bases declares.
+        Read off self, which update_model_parameters keeps in sync with the parameter
+        vector; `sigma_dep` overrides it for callers holding a value in hand."""
+        return {self._noise_param_name: self.sigma_dep if sigma_dep is None else sigma_dep}
+
+    def _reflectance_scale(self, reflectance_data, f, n_helios):
+        """Per-mirror b = nominal_reflectance * inc_ref_factor, the factor converting a
+        soiled-area increment into a reflectance increment. Scalar or per-mirror
+        (_nominal_reflectance_anchor returns either), always returned as (N_helios,) so it
+        can enter the covariance as the outer product b b^T."""
+        anchor = _nominal_reflectance_anchor(reflectance_data, f, self.helios.nominal_reflectance)
+        b = np.asarray(anchor * self.helios.inc_ref_factor[f], dtype=float).ravel()
+        if b.size == 1:
+            return np.full(n_helios, b.item())
+        if b.size != n_helios:
+            raise ValueError(f"Reflectance scale for file {f!r} has {b.size} entries but the model carries {n_helios} mirrors.")
+        return b
+
+    @staticmethod
+    def _interval_slices(prediction_indices):
+        """Timesteps belonging to each measurement interval, as slices.
+
+        Preserves the convention the cumsum-difference form used: interval i covers
+        timesteps prediction_indices[i]+1 .. prediction_indices[i+1]-1. NOTE this is one
+        timestep short of the range the MEAN increment covers (compute_soiling_factor
+        accumulates through prediction_indices[i+1] inclusive) -- a pre-existing off-by-one
+        of ~1 timestep in ~250, kept here deliberately so that switching to the full
+        covariance changes only the off-diagonal. Worth fixing, but as its own change.
         """
-        # check to ensure that reflectance_data and simulation_input keys correspond to the same files
+        pif = list(prediction_indices)
+        return [slice(pif[i] + 1, pif[i + 1]) for i in range(len(pif) - 1)]
+
+    def _covariance_parts(self, simulation_inputs, reflectance_data, sigmas):
+        """The two pieces of the measurement covariance, kept apart.
+
+        Returns {file: (deposition, measurement_variance)} with shapes
+        (N_intervals, N_helios, N_helios) and (N_intervals, N_helios). Sigma is their sum,
+        deposition + diag(measurement_variance), but the likelihood wants them separate:
+        the deposition part is rank-deficient and can be enormous while the measurement
+        part is tiny and strictly positive, so forming the sum loses the small part to
+        rounding. See _gaussian_loglike.
+
+        `sigmas` maps sigma parameter name -> value; entries that are None contribute
+        nothing (an un-estimated noise mechanism), exactly as the old diagonal form skipped
+        them.
+        """
         _check_keys(simulation_inputs, reflectance_data)
+        if reflectance_data is None:
+            raise ValueError("The measurement covariance is defined between measurement times, so reflectance_data is required.")
 
         sim_in = simulation_inputs
         files = list(sim_in.time.keys())
 
-        s2_dep = sigma_dep**2
-        s2total = dict.fromkeys(files)
+        out = dict.fromkeys(files)
         for f in files:
-            if reflectance_data is None:
-                pif = range(0, len(sim_in.time[f]))
-            else:
-                pif = reflectance_data.prediction_indices[f]
+            bases = self._noise_bases(sim_in, f)
+            n_helios = self.helios.tilt[f].shape[0]
+            b = self._reflectance_scale(reflectance_data, f, n_helios)
+            bbT = np.outer(b, b)
+            meas_sig = np.asarray(reflectance_data.sigma_of_the_mean[f], dtype=float)
+            slices = self._interval_slices(reflectance_data.prediction_indices[f])
 
-            nom_ref_anchor = _nominal_reflectance_anchor(reflectance_data, f, self.helios.nominal_reflectance)
-            b = nom_ref_anchor * self.helios.inc_ref_factor[f]  # fixed for fitting experiments at reflectometer incidence angle
-            try:
-                attr = _parse_dust_str(sim_in.dust_type[f])
-                den = getattr(sim_in.dust, attr)  # dust.(sim_in.dust_type[f])
-            except Exception:
-                raise ValueError(
-                    "Dust measurement "
-                    + sim_in.dust_type[f]
-                    + " not present in dust class. Use dust_type="
-                    + sim_in.dust_type[f]
-                    + " option when initializing the model"
+            deposition = np.zeros((len(slices), n_helios, n_helios))
+            for i, sl in enumerate(slices):
+                gram = np.zeros((n_helios, n_helios))
+                for name, basis in bases.items():
+                    sigma = sigmas.get(name)
+                    if sigma is None:
+                        continue
+                    bi = np.asarray(basis, dtype=float)[:, sl]
+                    gram += sigma**2 * (bi @ bi.T)
+                deposition[i] = bbT * gram
+
+            # measurement error is independent between mirrors and between times, so it is
+            # purely diagonal -- and being strictly positive it is what keeps Sigma
+            # invertible when the deposition part is rank-deficient (which, for a tilt-only
+            # model, it always is).
+            measurement_variance = meas_sig[0:-1, :] ** 2 + meas_sig[1::, :] ** 2
+            out[f] = (deposition, measurement_variance)
+        return out
+
+    def _covariance_of_measurements(self, simulation_inputs, reflectance_data, sigmas):
+        """Per-interval covariance of the reflectance increments across mirrors,
+        {file: (N_intervals, N_helios, N_helios)}.
+
+        The assembled matrix, for inspection and testing. The likelihood itself works from
+        _covariance_parts instead, which is numerically better conditioned.
+        """
+        out = {}
+        for f, (deposition, measurement_variance) in self._covariance_parts(simulation_inputs, reflectance_data, sigmas).items():
+            cov = deposition.copy()
+            idx = np.arange(cov.shape[1])
+            cov[:, idx, idx] += measurement_variance
+            out[f] = cov
+        return out
+
+    def _compute_variance_of_measurements(self, sigma_dep, simulation_inputs, reflectance_data=None):
+        """Marginal (per-mirror) variance of the reflectance increments,
+        {file: (N_intervals, N_helios)} -- the diagonal of _covariance_of_measurements.
+
+        Correct for a single mirror's own prediction interval. It is NOT sufficient for a
+        likelihood, which sums over mirrors and so needs the off-diagonal too; see
+        _negative_log_likelihood.
+        """
+        cov = self._covariance_of_measurements(simulation_inputs, reflectance_data, self._current_sigmas(sigma_dep))
+        return {f: np.diagonal(c, axis1=1, axis2=2) for f, c in cov.items()}
+
+    @staticmethod
+    def _gaussian_loglike(residuals, deposition, measurement_variance):
+        """sum_i log N(residuals[i]; 0, deposition[i] + diag(measurement_variance[i])) over
+        intervals, less the -0.5 * n * log(2*pi) constant the caller adds once.
+
+        Never assembles Sigma. The deposition part is rank-deficient (rank 1 for a tilt-only
+        model) and ranges over many orders of magnitude as the optimizer explores sigma, while
+        the measurement part is tiny and strictly positive; adding them loses the measurement
+        part to rounding, and a Cholesky of the sum then fails on a matrix that is
+        mathematically positive definite. Whitening by the measurement error first removes the
+        problem entirely:
+
+            Sigma = D^(1/2) (I + K) D^(1/2),   K = D^(-1/2) deposition D^(-1/2)
+
+        K is symmetric positive semi-definite, so eigh gives eigenvalues mu_j >= 0 and the
+        eigenvalues of (I + K) are exactly 1 + mu_j >= 1. Both the log-determinant and the
+        quadratic form are then sums over well-conditioned terms:
+
+            log|Sigma| = sum_j log D_jj + sum_j log(1 + mu_j)
+            r' Sigma^-1 r = sum_j (v_j' z)^2 / (1 + mu_j),   z = D^(-1/2) r
+
+        No factorization can fail here, so there is no infeasible region for the optimizer to
+        get stuck against. The one genuine error is a mirror with zero measurement variance,
+        which makes D singular -- that is a configuration problem no parameter value fixes.
+        """
+        total = 0.0
+        for r, dep, dvar in zip(residuals, deposition, measurement_variance):
+            if np.any(dvar <= 0.0):
+                raise np.linalg.LinAlgError(
+                    "A mirror has zero measurement variance (reflectance_data.sigma_of_the_mean), so the measurement "
+                    "covariance is singular. Mirrors share one deposition process, so the measurement error is what keeps "
+                    "the covariance invertible; it must be strictly positive. This bites hardest on a mirror whose "
+                    "deposition basis is also zero, e.g. tilt >= 90 under a settling-only model."
                 )
-
-            alpha = sim_in.dust_concentration[f] / den[f]
-
-            if reflectance_data is None:
-                meas_sig = np.zeros(self.helios.tilt[f].shape).transpose()
-            else:
-                meas_sig = reflectance_data.sigma_of_the_mean[f]
-
-            c2t = np.cumsum(alpha**2 * gravitational_settling_factor(self.helios.tilt[f]) ** 2, axis=1).transpose()
-            ind1 = pif[0:-1]
-            ind2 = [x - 1 for x in pif[1::]]
-            s2total[f] = s2_dep * b**2 * (c2t[ind2, :] - c2t[ind1, :]) + meas_sig[0:-1, :] ** 2 + meas_sig[1::, :] ** 2
-
-        return s2total
+            inv_sqrt_d = 1.0 / np.sqrt(dvar)
+            k = dep * np.outer(inv_sqrt_d, inv_sqrt_d)
+            eigenvalues, vectors = np.linalg.eigh(0.5 * (k + k.T))
+            # deposition is a Gram matrix, hence PSD: any negative eigenvalue is rounding.
+            denominator = 1.0 + np.clip(eigenvalues, 0.0, None)
+            u = vectors.T @ (r * inv_sqrt_d)
+            total += -0.5 * (np.sum(np.log(dvar)) + np.sum(np.log(denominator)) + np.sum(u**2 / denominator))
+        return total
 
     def _sse(self, params, simulation_inputs, reflectance_data):
         # Computes the sum of squared errors between a soiling model and
@@ -138,21 +281,23 @@ class CommonFittingMethods:
         NL = [reflectance_data.average[f].shape[0] for f in files]
 
         # define optimization objective function (negative log likelihood)
-        sigma_dep = params[1]
         loglike = -0.5 * np.sum(NL) * np.log(2 * np.pi)
-        self.update_model_parameters(params)
+        self.update_model_parameters(params)  # sigmas are read off self below, via _current_sigmas
         self.predict_soiling_factor(simulation_inputs, reflectance_data=reflectance_data, verbose=False)
         sf = self.helios.soiling_factor  # soiling factor to be multiplied by clean reflectance
 
-        # Compute variance in reflectance, not soiling factor
-        s2total = self._compute_variance_of_measurements(sigma_dep, sim_in, reflectance_data=reflectance_data)
+        # Covariance in reflectance, not soiling factor. Full across-mirror covariance, not
+        # its diagonal: the mirrors share one deposition process, so their increments are
+        # correlated and a diagonal form would count N_helios independent observations
+        # where the data carry roughly one.
+        parts = self._covariance_parts(sim_in, reflectance_data, self._current_sigmas())
 
         for f in files:
             delta_r = np.diff(meas[f], axis=0)
             r0 = _nominal_reflectance_series(reflectance_data, f, self.helios.nominal_reflectance)  # nominal clean reflectance
             rho_prediction = r0 * sf[f][:, pi[f]].transpose()
             mu_delta_r = np.diff(rho_prediction, axis=0)
-            loglike += np.sum(-0.5 * np.log(s2total[f]) - (delta_r - mu_delta_r) ** 2 / (2 * s2total[f]))
+            loglike += self._gaussian_loglike(delta_r - mu_delta_r, *parts[f])
 
         return -loglike
 
@@ -282,6 +427,31 @@ class CommonFittingMethods:
 
         return out, out_cov
 
+    def _covariance_from_information(self, information):
+        """Parameter covariance from an observed-information (Hessian) matrix.
+
+        A singular Hessian means the likelihood is flat in some direction: at least one
+        parameter is not identified by this data. The commonest cause is a variance component
+        estimated at zero -- on the log scale that optimum sits at -inf, so the curvature
+        there vanishes. That is a real finding about the data, not a crash, so it is reported
+        and the pseudo-inverse returned (which gives such a direction zero variance, i.e. no
+        confidence interval, rather than a fabricated one).
+        """
+        try:
+            return np.linalg.inv(information)
+        except np.linalg.LinAlgError:
+            pass
+
+        eigenvalues = np.linalg.eigvalsh(information)
+        names = list(getattr(self, "_param_names", [])) or list(self._mean_param_names) + list(self._sigma_param_names)
+        logger.warning(
+            "Parameter covariance is singular: the likelihood is flat in at least one direction, so that combination of "
+            f"parameters is not identified by this data (Hessian eigenvalues {np.array2string(eigenvalues, precision=3)}, "
+            f"parameters {names}). A variance parameter estimated at ~0 does this -- its log-scale optimum is at -inf. "
+            "Reporting the pseudo-inverse; the flat directions carry no meaningful confidence interval."
+        )
+        return np.linalg.pinv(information)
+
     def fit_least_squares(self, simulation_inputs, reflectance_data, verbose=True):
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs, reflectance_data)
@@ -323,17 +493,22 @@ class CommonFittingMethods:
         sim_in = simulation_inputs
 
         if np.all(x0 is None):  # intialize using least squares and 1D MLE
-            _print_if("Getting initial deposition parameter guess via least squares", verbose)
-            p0, sse = self.fit_least_squares(simulation_inputs, reflectance_data, verbose=False)
+            if isinstance(self, AffineMeanLeastSquares):
+                # Means are exactly solvable for this model, so use that rather than the
+                # scalar bracket below, which is sized for SemiPhysical's hrz0.
+                x0 = self.default_mle_start(simulation_inputs, reflectance_data, verbose=verbose)
+            else:
+                _print_if("Getting initial deposition parameter guess via least squares", verbose)
+                p0, sse = self.fit_least_squares(simulation_inputs, reflectance_data, verbose=False)
 
-            _print_if("Getting initial sigma_dep guess via MLE (at least-squares value for deposition parameters)", verbose)
+                _print_if("Getting initial sigma_dep guess via MLE (at least-squares value for deposition parameters)", verbose)
 
-            def nloglike1D(y):
-                return self._negative_log_likelihood([p0, y], sim_in, ref_dat)
+                def nloglike1D(y):
+                    return self._negative_log_likelihood([p0, y], sim_in, ref_dat)
 
-            s0 = minimize_scalar(nloglike1D, bounds=(smb.tol, sse), method="Bounded")  # use bounded to prevent evaluation at values <=1
-            x0 = np.array([p0, s0.x])
-            _print_if("x0 = [" + str(x0[0]) + ", " + str(x0[1]) + "]", verbose)
+                s0 = minimize_scalar(nloglike1D, bounds=(smb.tol, sse), method="Bounded")  # use bounded to prevent evaluation at values <=1
+                x0 = np.array([p0, s0.x])
+            _print_if("x0 = " + np.array2string(np.asarray(x0), precision=4), verbose)
 
         # MLE. Transform to logs to ensure parameters are positive
         _print_if("Maximizing likelihood ...", verbose)
@@ -342,7 +517,28 @@ class CommonFittingMethods:
         def nloglike(y):
             return self._negative_log_likelihood(self.transform_scale(y), sim_in, ref_dat)
 
+        # Derivative-free by default. scipy's default (BFGS with finite-difference gradients)
+        # stalls on this likelihood -- the parameters sit on a log scale with wildly different
+        # curvature (a sigma direction can be thousands of times sharper than a mean one), and
+        # the one-size step of a numerical gradient cannot serve both, so BFGS reports failure
+        # after a single iteration well short of the optimum. Nelder-Mead needs no gradient and
+        # is indifferent to that scaling. Callers can still pass method=... to override.
+        optim_kwargs.setdefault("method", "Nelder-Mead")
+        if optim_kwargs["method"] == "Nelder-Mead":
+            options = dict(optim_kwargs.get("options") or {})
+            options.setdefault("maxiter", 20000)
+            options.setdefault("maxfev", 20000)
+            options.setdefault("xatol", 1e-10)
+            options.setdefault("fatol", 1e-10)
+            optim_kwargs["options"] = options
+
         res = minimize(nloglike, y0, **optim_kwargs)
+        # One restart from the solution: a Nelder-Mead simplex can collapse prematurely, and
+        # re-forming it around the current point either confirms the optimum cheaply or steps
+        # off a false one.
+        restarted = minimize(nloglike, res.x, **optim_kwargs)
+        if restarted.fun < res.fun:
+            res = restarted
         y = res.x
         _print_if("  " + res.message, verbose)
 
@@ -368,20 +564,14 @@ class CommonFittingMethods:
         if transform_to_original_scale:
             # Get standard errors using observed information
             x_hat, H = self.transform_scale(y, likelihood_hessian=H_log)
-            x_cov = np.linalg.inv(H)
+            x_cov = self._covariance_from_information(H)
 
             p_hat = x_hat
             p_cov = x_cov
 
         else:
             y_hat = y
-            try:
-                y_cov = np.linalg.inv(H_log)  # Parameter covariance in the log space
-            except np.linalg.LinAlgError:
-                if np.linalg.det(H_log) == 0:
-                    y_cov = np.linalg.pinv(H_log)  # Use pseudoinverse if determinant is zero
-                else:
-                    raise  # Re-raise the exception if it's not due to zero determinant
+            y_cov = self._covariance_from_information(H_log)  # Parameter covariance in the log space
 
             # print estimates
             fmt = "log(log(hrz0)) = {0:.2e}, log(sigma_dep) = {1:.2e}"
@@ -668,6 +858,54 @@ class AffineMeanLeastSquares:
 
     Mix in alongside CommonFittingMethods, which supplies everything else the fit needs.
     """
+
+    def default_mle_start(self, simulation_inputs, reflectance_data, verbose=True):
+        """Warm start for fit_mle: [mean parameters, sigmas].
+
+        The means come from fit_ls -- an exact linear solve for a model affine in them, with
+        no bracket to get wrong. This matters: CommonFittingMethods.fit_mle's generic warm
+        start calls fit_least_squares, whose search bracket (_LS_SCALAR_BOUNDS, lower bound
+        just above 1) exists for SemiPhysical's hrz0 and is meaningless for a mu_tilde of
+        order 1e-5 -- it returns 1.0, five orders of magnitude out.
+
+        The sigmas then get the method-of-moments estimate at those means: the value making
+        the model's total deposition variance match the observed residual scale,
+
+            sigma^2 = sum(residual^2) / sum(deposition variance at sigma = 1),
+
+        refined by a bounded 1-D profile of the actual likelihood around it. Starting the
+        optimizer near the right magnitude matters more than it used to -- with mirrors
+        correlated, a wildly inflated sigma flattens the likelihood in the mean directions
+        (the shared-noise term swamps them), so a bad sigma start can strand the search.
+        """
+        sigma_names = list(self._sigma_param_names)
+
+        means = np.atleast_1d(
+            np.asarray(self.fit_ls(simulation_inputs, reflectance_data, verbose=False, transform_to_original_scale=True)[0], dtype=float)
+        )
+        _print_if(f"Warm start: mean parameters by least squares = {np.array2string(means, precision=3)}", verbose)
+
+        # fit_ls leaves every sigma None, so the model currently predicts the mean alone.
+        predicted = self._predicted_reflectance(simulation_inputs, reflectance_data)
+        unit = self._covariance_parts(simulation_inputs, reflectance_data, dict.fromkeys(sigma_names, 1.0))
+
+        residual_sq = deposition_var = 0.0
+        for f, pred in predicted.items():
+            resid = np.diff(np.asarray(reflectance_data.average[f], dtype=float), axis=0) - np.diff(pred, axis=0)
+            deposition, _measurement = unit[f]
+            finite = np.isfinite(resid)
+            residual_sq += float(np.sum(resid[finite] ** 2))
+            deposition_var += float(np.sum(np.diagonal(deposition, axis1=1, axis2=2)[finite]))
+
+        sigma0 = np.sqrt(residual_sq / deposition_var) if deposition_var > 0 else 1e-4
+
+        def nloglike1d(s):
+            return self._negative_log_likelihood(list(means) + [s] * len(sigma_names), simulation_inputs, reflectance_data)
+
+        refined = minimize_scalar(nloglike1d, bounds=(smb.tol, 20.0 * sigma0), method="Bounded")
+        _print_if(f"Warm start: sigma from moments = {sigma0:.3e}, refined by 1-D profile to {refined.x:.3e}", verbose)
+
+        return np.array(list(means) + [refined.x] * len(sigma_names))
 
     def mean_design_matrix(self, simulation_inputs, reflectance_data, residuals="level"):
         """The linear least-squares problem `X @ theta ~= y` for this model's mean

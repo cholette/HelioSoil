@@ -22,10 +22,14 @@ from heliosoil.horizontal_impaction import (
     wind_retention_factors,
     parse_orientation_names,
     _gravitational_mean_bases,
-    _gravitational_variance_basis,
     _turbulant_wind_mean_bases,
-    _turbulant_wind_variance_basis,
+    _COMPONENTS,
 )
+
+# variance_basis is derived from noise_basis on the component descriptor rather than
+# existing as a free function, so these exercise the same path production code takes.
+_gravitational_variance_basis = _COMPONENTS["gravitational"].variance_basis
+_turbulant_wind_variance_basis = _COMPONENTS["turbulent_wind"].variance_basis
 
 RTOL = 1e-10
 ATOL = 0.0

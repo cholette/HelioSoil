@@ -53,14 +53,12 @@ size band tangentially. It defaults to None, meaning every mechanism uses cfg.du
 and the dust axis is the workflow's outer dust-type sweep. See build_runs,
 available_dust_specs and component_dust_assignments.
 
-Training-mirror selection is model-aware (see smu.default_training_mirrors): a
-purely gravitational/constant-mean model shares one deposition-noise process across
-mirrors and trains on a single representative (lowest-tilt) mirror; a model with an
-active normal_wind/tangential_wind/impaction_retention component ties its noise to
-wind direction x each mirror's tilt/azimuth, so every common mirror contributes
-independent information and all are used. Evaluation always scores every common
-mirror, regardless of what was used for training, so results are comparable across
-model types.
+Every model trains on every common mirror (see resolve_training_mirrors), and --train-mirrors
+overrides that. Mirrors share one deposition-noise process per timestep, so their measurements
+are correlated rather than independent; the likelihood carries that covariance across mirrors
+(heliosoil.fitting.CommonFittingMethods._covariance_parts) instead of holding mirrors back to
+avoid over-counting, which is what earlier versions did. Evaluation likewise scores every common
+mirror, so results are comparable across model types.
 """
 
 import os
@@ -213,21 +211,6 @@ def extract(x, ind):
     return [x[ii] for ii in ind]
 
 
-def uses_wind_variance(model_type, wind_components):
-    """Only "constant_mean_wind" with an active wind-driven noise term ties sigma to
-    wind direction x mirror orientation; every other configuration (constant_mean,
-    semi_physical, or constant_mean_wind with only "gravitational") shares a single
-    sigma_dep process across mirrors and must train on one representative mirror.
-
-    wind_components is resolved rather than read directly, so None -- the library's default
-    gravitational + normal_wind, which is what a run with no --model expression fits -- is
-    judged on the components the model will actually be built with."""
-    if model_type != "constant_mean_wind":
-        return False
-    keys = resolve_component_keys(wind_components)
-    return any(c in keys for c in ("normal_wind", "tangential_wind", "impaction_retention"))
-
-
 def build_model(
     parameter_file: str, model_type: str, wind_components: list, component_dust_types: Any = None, verbose: bool = False
 ) -> tuple[ConstantMeanWindDeposition | smf.ConstantMeanDeposition | smf.SemiPhysical, str]:
@@ -295,19 +278,17 @@ def run_expression(model_type: str, wind_components: list, component_dust_types:
 
 
 def resolve_training_mirrors(cfg: PipelineConfig, all_mirrors: list, model_type: str, wind_components: list) -> list[str]:
-    """train_mirrors from the config overrides every run; otherwise pick the default for this
-    run's fit method and model.
+    """train_mirrors from the config overrides every run; otherwise every common mirror trains.
 
-    The single-representative-mirror default exists because a shared sigma_dep is one
-    stochastic process across mirrors, and fitting it on several correlated mirrors overstates
-    the independent information available. A least-squares fit estimates no sigma at all, so
-    that argument does not apply to it: every mirror contributes a genuine row to the design
-    matrix, and all of them are used."""
+    Earlier versions trained a shared-sigma model on ONE representative mirror, because the
+    likelihood summed over mirrors as if independent and several correlated mirrors overstated
+    the information available. The likelihood now carries the full across-mirror covariance
+    (heliosoil.fitting.CommonFittingMethods._covariance_parts), which counts correlated mirrors
+    correctly, so there is no longer anything to protect against -- and holding mirrors back
+    only discards the orientation contrast that identifies the wind mechanisms."""
     if cfg.train_mirrors is not None:
         return cfg.train_mirrors
-    if resolve_fit_method(cfg, model_type) == "ls":
-        return list(all_mirrors)
-    return smu.default_training_mirrors(all_mirrors, uses_wind_variance(model_type, wind_components))
+    return list(all_mirrors)
 
 
 def resolve_fit_method(cfg: PipelineConfig, model_type: str) -> str:

@@ -873,46 +873,14 @@ def get_training_data(
     return files, training_intervals, mirror_names, common
 
 
-def default_training_mirrors(all_mirrors: list[str], uses_wind_variance: bool) -> list[str]:
-    """
-    Pick the training-mirror subset for a soiling model.
-
-    If `uses_wind_variance` is True (the model has an active wind-driven noise term,
-    e.g. normal_wind or tangential_wind in heliosoil.horizontal_impaction), every
-    mirror's tilt/azimuth combination contributes independent information to that
-    variance, so all mirrors can be used for training.
-
-    Otherwise (a purely gravitational/constant-mean model), the deposition noise
-    sigma_dep is a single stochastic process shared across all mirrors: fitting it
-    on multiple correlated mirrors overstates the independent information actually
-    available. In that case, return a single representative mirror -- the one with
-    the smallest tilt parsed from its name's "T<deg>" token (typically the 0-deg
-    mirror); ties are broken by input order.
-
-    Args:
-        all_mirrors (list[str]): mirror column names, e.g. ["ON_M1_T00", "OE_M2_T85"].
-        uses_wind_variance (bool): whether the model's stochastic term depends on
-            wind direction/mirror orientation (True) or is a single shared
-            deposition process (False).
-
-    Returns:
-        list[str]: `all_mirrors` unchanged, or a single-element list.
-    """
-    if uses_wind_variance:
-        return list(all_mirrors)
-
-    def parsed_tilt(name):
-        match = re.search(r"_T0*([0-9]+)", name)
-        return int(match.group(1)) if match else None
-
-    parseable = [(name, parsed_tilt(name)) for name in all_mirrors]
-    parseable = [(name, tilt) for name, tilt in parseable if tilt is not None]
-    if not parseable:
-        logger.warning(f"default_training_mirrors: could not parse a tilt from any mirror name in {all_mirrors}; falling back to the first mirror.")
-        return [all_mirrors[0]]
-
-    best_name, _ = min(parseable, key=lambda item: item[1])
-    return [best_name]
+# default_training_mirrors was removed here. It picked ONE representative (lowest-tilt)
+# mirror for any model whose deposition noise was a single shared process, because the
+# likelihood then summed over mirrors as if they were independent and several correlated
+# mirrors overstated the information available. The likelihood now carries the full
+# across-mirror covariance (heliosoil.fitting.CommonFittingMethods._covariance_parts), so
+# correlated mirrors are counted correctly and dropping them only discards the orientation
+# contrast that identifies the wind mechanisms. Every model trains on every common mirror;
+# see analysis_scripts.model_pipeline.resolve_training_mirrors.
 
 
 # ------------------------------ dust types and specs ------------------------------

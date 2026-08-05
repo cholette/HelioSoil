@@ -530,20 +530,30 @@ class ConstantMeanBase(SoilingBase):
 
         self.helios = helios
 
-    def random_delta_soiled_area(self, simulation_inputs, mu_tilde=None, sigma_dep=None, verbose=True):
+    def random_delta_soiled_area(self, simulation_inputs, mu_tilde=None, sigma_dep=None, verbose=True, rng=None):
         """
         Simulates the delta soiled area with randomness in the deposition velocity. The airborne dust loading
         is treated as a constant.
+
+        The deposition fluctuation is ONE draw per timestep shared by every mirror -- the
+        whole site sees the same dust and the same weather in a given timestep, and each
+        mirror's share of it is set by its own geometry through
+        sqrt(delta_soiled_area_variance). Drawing independently per mirror instead would make
+        the field's average loss converge as 1/sqrt(N_mirrors), which is the error this
+        matches the likelihood in avoiding (see
+        heliosoil.fitting.CommonFittingMethods._covariance_parts).
         """
         self.calculate_delta_soiled_area(simulation_inputs, mu_tilde, sigma_dep, verbose)
         mean_area_loss = self.helios.delta_soiled_area
         var_area_loss = self.helios.delta_soiled_area_variance
+        draw = np.random.default_rng() if rng is None else rng
         files = list(mean_area_loss.keys())
         sim = {f: [] for f in files}
         for f in files:
             μ = mean_area_loss[f]
             σ = np.sqrt(var_area_loss[f])
-            sim[f] = μ + σ * np.random.standard_normal(size=μ.shape)
+            ε = draw.standard_normal(size=(1, μ.shape[1]))  # per timestep, broadcast across mirrors
+            sim[f] = μ + σ * ε
 
         return sim
 

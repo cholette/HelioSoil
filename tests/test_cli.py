@@ -466,26 +466,30 @@ def test_resolve_fit_method_rejects_an_unknown_method():
 MIRRORS = ["ON_M1_T00", "OE_M2_T30", "OS_M3_T60", "OW_M4_T90"]
 
 
-def test_least_squares_trains_on_every_mirror():
-    """The single-representative-mirror default guards against over-counting one shared
-    deposition-noise process across correlated mirrors. Least squares fits no noise process at
-    all, so that argument does not apply and every mirror is a genuine design-matrix row --
-    including for a purely gravitational model, which under MLE would be cut to one."""
-    ls = mp.PipelineConfig(location="yadnarie", fit_method="ls")
-    mle = mp.PipelineConfig(location="yadnarie")
+@pytest.mark.parametrize("fit_method", ["mle", "ls"])
+@pytest.mark.parametrize(
+    "model_type, components",
+    [
+        ("constant_mean", None),
+        ("semi_physical", None),
+        ("constant_mean_wind", ["gravitational"]),
+        ("constant_mean_wind", ["gravitational", "impaction_retention"]),
+    ],
+)
+def test_every_model_and_fit_method_trains_on_every_mirror(model_type, components, fit_method):
+    """Training-mirror selection no longer depends on the model or the fit method.
 
-    assert mp.resolve_training_mirrors(ls, MIRRORS, "constant_mean_wind", ["gravitational"]) == MIRRORS
-    assert mp.resolve_training_mirrors(mle, MIRRORS, "constant_mean_wind", ["gravitational"]) == ["ON_M1_T00"]
+    It used to: a model with one shared deposition-noise process was cut to a single
+    representative (lowest-tilt) mirror, because the likelihood summed over mirrors as if they
+    were independent and several correlated mirrors overstated the information available. The
+    likelihood now carries the across-mirror covariance
+    (heliosoil.fitting.CommonFittingMethods._covariance_parts), so correlated mirrors are counted
+    correctly -- and holding them back only discarded the orientation contrast that identifies the
+    wind mechanisms. Least squares always used every mirror (it fits no sigma at all); now
+    everything does."""
+    cfg = mp.PipelineConfig(location="yadnarie", fit_method=fit_method)
 
-
-def test_least_squares_mirror_default_applies_to_every_model_type():
-    """Every type honours "ls" and so fits no sigma_dep, which is the only reason the default
-    ever cut training down to one mirror. Under MLE semi_physical still does."""
-    ls = mp.PipelineConfig(location="yadnarie", fit_method="ls")
-    mle = mp.PipelineConfig(location="yadnarie")
-
-    assert mp.resolve_training_mirrors(ls, MIRRORS, "semi_physical", None) == MIRRORS
-    assert mp.resolve_training_mirrors(mle, MIRRORS, "semi_physical", None) == ["ON_M1_T00"]
+    assert mp.resolve_training_mirrors(cfg, MIRRORS, model_type, components) == MIRRORS
 
 
 def test_explicit_train_mirrors_still_override_every_fit_method():

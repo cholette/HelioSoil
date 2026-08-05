@@ -103,7 +103,6 @@ import pickle
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize_scalar
 
 import heliosoil.base_models as smb
 from heliosoil.fitting import ConstantMeanDeposition, CommonFittingMethods
@@ -112,8 +111,6 @@ from heliosoil.utilities import (
     _check_keys,
     _parse_dust_str,
     _std_errors_from_cov,
-    _nominal_reflectance_series,
-    _nominal_reflectance_anchor,
     canonical_dust_spec,
     resolve_dust_concentration,
     cosd,
@@ -235,8 +232,23 @@ def parse_orientation_names(names):
 
 # ---------------------------------------------------------------------------
 # Wind-component registry: each component is a pure geometry descriptor (no
-# parameter values). mean_bases()/variance_basis() take a common signature so
+# parameter values). mean_bases()/noise_basis() take a common signature so
 # callers don't need to special-case components that ignore wind.
+#
+# noise_basis is the per-timestep coefficient multiplying that mechanism's shared
+# fluctuation eps_t: mirror j's noise contribution in timestep t is
+# noise_basis[j, t] * eps_t. The fluctuation is indexed by TIME ALONE -- one
+# deposition draw for the whole site per timestep, not one per mirror -- so the
+# covariance between two mirrors over an interval is the Gram matrix
+# B B^T of this basis, of which the old variance_basis was only the diagonal
+# (see _covariance_of_measurements). variance_basis is therefore derived from
+# noise_basis rather than written out separately, so the two cannot disagree.
+#
+# Every noise basis here is non-negative (alpha, wind_speed, the max(0, .) clipped
+# projections and sin(tilt) on [0, 180] all are), but the sign is carried through
+# the Gram product rather than discarded: a basis that could change sign would
+# make two mirrors anti-correlated, which is a real modelling possibility and
+# must not be silently squared away.
 # ---------------------------------------------------------------------------
 
 
@@ -244,16 +256,16 @@ def _gravitational_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
     return [alpha[None, :] * gravitational_settling_factor(tilt)]
 
 
-def _gravitational_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
-    return (alpha[None, :] * gravitational_settling_factor(tilt)) ** 2
+def _gravitational_noise_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
+    return alpha[None, :] * gravitational_settling_factor(tilt)
 
 
 def _turbulant_wind_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
     return [alpha[None, :] * gravitational_settling_factor(tilt) * wind_speed[None, :]]
 
 
-def _turbulant_wind_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
-    return (alpha[None, :] * gravitational_settling_factor(tilt) * wind_speed[None, :]) ** 2
+def _turbulant_wind_noise_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
+    return alpha[None, :] * gravitational_settling_factor(tilt) * wind_speed[None, :]
 
 
 def _normal_wind_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
@@ -262,9 +274,11 @@ def _normal_wind_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
     return [u * p_windward, u * p_leeward]
 
 
-def _normal_wind_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
+def _normal_wind_noise_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
+    # One shared eps_gamma drives both faces (only one is nonzero at a time), so the
+    # noise coefficient is the sum of the two projections -- see the module docstring.
     p_windward, p_leeward = wind_projection_factors(tilt, azimuth, wind_dir)
-    return (alpha[None, :] * wind_speed[None, :]) ** 2 * (p_windward + p_leeward) ** 2
+    return alpha[None, :] * wind_speed[None, :] * (p_windward + p_leeward)
 
 
 def _tangential_wind_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
@@ -272,9 +286,9 @@ def _tangential_wind_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
     return [alpha[None, :] * wind_speed[None, :] * t]
 
 
-def _tangential_wind_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
+def _tangential_wind_noise_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
     t = wind_tangential_factor(tilt, azimuth, wind_dir)
-    return (alpha[None, :] * wind_speed[None, :] * t) ** 2
+    return alpha[None, :] * wind_speed[None, :] * t
 
 
 def _impaction_retention_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
@@ -283,50 +297,61 @@ def _impaction_retention_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
     return [u * p_windward, u * p_leeward]
 
 
-def _impaction_retention_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
+def _impaction_retention_noise_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
     p_windward, p_leeward = wind_retention_factors(tilt, azimuth, wind_dir)
-    return (alpha[None, :] * wind_speed[None, :]) ** 2 * (p_windward + p_leeward) ** 2
+    return alpha[None, :] * wind_speed[None, :] * (p_windward + p_leeward)
 
 
 class _WindComponent:
     """Pure-geometry descriptor for one additive constant-mean-wind soiling mechanism.
 
-    mean_bases()/variance_basis() always take (alpha, tilt, azimuth, wind_dir,
+    mean_bases()/noise_basis() always take (alpha, tilt, azimuth, wind_dir,
     wind_speed): alpha has shape (N_times,); tilt/azimuth/wind_dir/wind_speed
     broadcast to (N_helios, N_times). Components that ignore wind (gravitational)
     simply don't use the azimuth/wind_dir/wind_speed arguments.
     """
 
-    def __init__(self, key, name_fragment, mean_param_names, sigma_param_name, requires_wind, mean_bases_fn, variance_basis_fn):
+    def __init__(self, key, name_fragment, mean_param_names, sigma_param_name, requires_wind, mean_bases_fn, noise_basis_fn):
         self.key = key
         self.name_fragment = name_fragment
         self.mean_param_names = mean_param_names
         self.sigma_param_name = sigma_param_name
         self.requires_wind = requires_wind
         self._mean_bases_fn = mean_bases_fn
-        self._variance_basis_fn = variance_basis_fn
+        self._noise_basis_fn = noise_basis_fn
 
     def mean_bases(self, alpha, tilt, azimuth, wind_dir, wind_speed):
         """List of arrays (N_helios, N_times), one per entry of mean_param_names."""
         return self._mean_bases_fn(alpha, tilt, azimuth, wind_dir, wind_speed)
 
+    def noise_basis(self, alpha, tilt, azimuth, wind_dir, wind_speed):
+        """Array (N_helios, N_times): the coefficient multiplying this mechanism's
+        shared per-timestep fluctuation, i.e. mirror j gains
+        noise_basis[j, t] * eps_t of soiled area in timestep t."""
+        return self._noise_basis_fn(alpha, tilt, azimuth, wind_dir, wind_speed)
+
     def variance_basis(self, alpha, tilt, azimuth, wind_dir, wind_speed):
-        """Array (N_helios, N_times); this component's variance contribution is
-        sigma**2 * variance_basis(...)."""
-        return self._variance_basis_fn(alpha, tilt, azimuth, wind_dir, wind_speed)
+        """Array (N_helios, N_times); this component's MARGINAL (per-mirror) variance
+        contribution in one timestep is sigma**2 * variance_basis(...).
+
+        This is the diagonal of the covariance across mirrors -- correct for a single
+        mirror's own prediction interval, but it is not the whole covariance: mirrors
+        share eps_t, so their soiling is correlated. Anything summing over mirrors
+        (a likelihood, a field average) must use _covariance_of_measurements instead."""
+        return self.noise_basis(alpha, tilt, azimuth, wind_dir, wind_speed) ** 2
 
 
 _GRAVITATIONAL = _WindComponent(
-    "gravitational", "gravitational", ("mu_tilde",), "sigma_dep", False, _gravitational_mean_bases, _gravitational_variance_basis
+    "gravitational", "gravitational", ("mu_tilde",), "sigma_dep", False, _gravitational_mean_bases, _gravitational_noise_basis
 )
 _TURBULENT = _WindComponent(
-    "turbulent_wind", "turbulent-wind", ("omega_turbulent",), "sigma_dep_turb", True, _turbulant_wind_mean_bases, _turbulant_wind_variance_basis
+    "turbulent_wind", "turbulent-wind", ("omega_turbulent",), "sigma_dep_turb", True, _turbulant_wind_mean_bases, _turbulant_wind_noise_basis
 )
 _NORMAL_WIND = _WindComponent(
-    "normal_wind", "normal-wind", ("omega_windward", "omega_leeward"), "sigma_dep_gamma", True, _normal_wind_mean_bases, _normal_wind_variance_basis
+    "normal_wind", "normal-wind", ("omega_windward", "omega_leeward"), "sigma_dep_gamma", True, _normal_wind_mean_bases, _normal_wind_noise_basis
 )
 _TANGENTIAL_WIND = _WindComponent(
-    "tangential_wind", "tangential-wind", ("omega_tangential",), "sigma_dep_tan", True, _tangential_wind_mean_bases, _tangential_wind_variance_basis
+    "tangential_wind", "tangential-wind", ("omega_tangential",), "sigma_dep_tan", True, _tangential_wind_mean_bases, _tangential_wind_noise_basis
 )
 _IMPACTION_RETENTION = _WindComponent(
     "impaction_retention",
@@ -335,7 +360,7 @@ _IMPACTION_RETENTION = _WindComponent(
     "sigma_dep_ret",
     True,
     _impaction_retention_mean_bases,
-    _impaction_retention_variance_basis,
+    _impaction_retention_noise_basis,
 )
 
 # Order here is the canonical order: it fixes the parameter-vector layout and the
@@ -655,24 +680,63 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
 
         self.helios = helios
 
-    def random_delta_soiled_area(self, simulation_inputs, verbose=True, **param_overrides):
+    def _noise_bases(self, simulation_inputs, f):
+        """One noise basis per active component, keyed by that component's sigma parameter.
+
+        Each mechanism has its own shared per-timestep fluctuation, independent of the other
+        mechanisms', so each contributes separately (to the sum of Gram matrices in the
+        likelihood's covariance, and to an independent draw in random_delta_soiled_area).
         """
-        Simulates the delta soiled area with randomness from all active mechanisms'
-        variance. The airborne dust loading is treated as a constant.
+        sim_in = simulation_inputs
+        alphas = self._component_alphas(sim_in, f)
+        tilt = self.helios.tilt[f]
+        # calculate_delta_soiled_area (called just before this, whether from
+        # predict_soiling_factor or random_delta_soiled_area) already validated
+        # azimuth/wind data when any component needs wind, so it's safe to index here.
+        azimuth = self.helios.azimuth[f] if self._needs_wind else None
+        wind_dir = sim_in.wind_direction[f] if self._needs_wind else None
+        wind_speed = sim_in.wind_speed[f] if self._needs_wind else None
+
+        return {
+            component.sigma_param_name: component.noise_basis(alphas[component.key], tilt, azimuth, wind_dir, wind_speed)
+            for component in self.components
+        }
+
+    def _current_sigmas(self, sigma_dep=None):
+        # Every active component's sigma, read from self (kept in sync by
+        # update_model_parameters). `sigma_dep` is accepted for signature compatibility with
+        # the base class but ignored -- this model has no single deposition sigma.
+        return {name: getattr(self, name) for name in self._sigma_param_names}
+
+    def random_delta_soiled_area(self, simulation_inputs, verbose=True, rng=None, **param_overrides):
+        """
+        Simulates the delta soiled area with randomness from all active mechanisms.
+        The airborne dust loading is treated as a constant.
+
+        Each mechanism's fluctuation is ONE draw per timestep shared by every mirror, applied
+        through that mechanism's own noise basis -- the process the likelihood is written on
+        (see heliosoil.fitting.CommonFittingMethods._covariance_parts). Mechanisms are
+        independent of one another, so each gets its own draw.
 
         Overrides ConstantMeanBase.random_delta_soiled_area, which calls
         calculate_delta_soiled_area positionally as (sim_in, mu_tilde, sigma_dep,
         verbose) -- incompatible with this class's **param_overrides signature.
         """
         self.calculate_delta_soiled_area(simulation_inputs, verbose=verbose, **param_overrides)
-        mean_area_loss = self.helios.delta_soiled_area
-        var_area_loss = self.helios.delta_soiled_area_variance
-        files = list(mean_area_loss.keys())
-        sim = {f: [] for f in files}
-        for f in files:
-            mu = mean_area_loss[f]
-            sigma = np.sqrt(var_area_loss[f])
-            sim[f] = mu + sigma * np.random.standard_normal(size=mu.shape)
+        draw = np.random.default_rng() if rng is None else rng
+        sigmas = self._current_sigmas()
+
+        sim = {}
+        for f, mu in self.helios.delta_soiled_area.items():
+            bases = self._noise_bases(simulation_inputs, f)
+            total = np.array(mu, dtype=float)
+            for name, basis in bases.items():
+                sigma = sigmas.get(name)
+                if sigma is None:
+                    continue
+                epsilon = draw.standard_normal(size=(1, total.shape[1]))  # one per timestep, shared across mirrors
+                total = total + sigma * np.asarray(basis, dtype=float) * epsilon
+            sim[f] = total
 
         return sim
 
@@ -752,86 +816,9 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
             # gravitational component is active -- it is always first in canonical order).
             setattr(self, self._mean_param_names[0], x)
 
-    def _negative_log_likelihood(self, params, simulation_inputs, reflectance_data):
-        # Structurally identical to CommonFittingMethods._negative_log_likelihood,
-        # except sigma is not extracted positionally from `params` -- every active
-        # component's sigma is read from self by _compute_variance_of_measurements,
-        # which update_model_parameters keeps in sync immediately below.
-        _check_keys(simulation_inputs, reflectance_data)
-
-        sim_in = simulation_inputs
-        files = list(reflectance_data.times.keys())
-        pi = reflectance_data.prediction_indices
-        meas = reflectance_data.average
-        NL = [reflectance_data.average[f].shape[0] for f in files]
-
-        loglike = -0.5 * np.sum(NL) * np.log(2 * np.pi)
-        self.update_model_parameters(params)
-        self.predict_soiling_factor(simulation_inputs, reflectance_data=reflectance_data, verbose=False)
-        sf = self.helios.soiling_factor
-
-        s2total = self._compute_variance_of_measurements(None, sim_in, reflectance_data=reflectance_data)
-
-        for f in files:
-            delta_r = np.diff(meas[f], axis=0)
-            r0 = _nominal_reflectance_series(reflectance_data, f, self.helios.nominal_reflectance)
-            rho_prediction = r0 * sf[f][:, pi[f]].transpose()
-            mu_delta_r = np.diff(rho_prediction, axis=0)
-            loglike += np.sum(-0.5 * np.log(s2total[f]) - (delta_r - mu_delta_r) ** 2 / (2 * s2total[f]))
-
-        return -loglike
-
-    def _compute_variance_of_measurements(self, sigma_dep, simulation_inputs, reflectance_data=None):
-        # `sigma_dep` is kept as the first positional argument for signature
-        # compatibility with CommonFittingMethods' calling convention, but ignored:
-        # every active component's sigma is read from self (kept in sync by
-        # update_model_parameters immediately before this is called).
-        _check_keys(simulation_inputs, reflectance_data)
-
-        sim_in = simulation_inputs
-        files = list(sim_in.time.keys())
-        sigmas = {name: getattr(self, name) for name in self._sigma_param_names}
-
-        s2total = dict.fromkeys(files)
-        for f in files:
-            if reflectance_data is None:
-                pif = range(0, len(sim_in.time[f]))
-            else:
-                pif = reflectance_data.prediction_indices[f]
-
-            nom_ref_anchor = _nominal_reflectance_anchor(reflectance_data, f, self.helios.nominal_reflectance)
-            b = nom_ref_anchor * self.helios.inc_ref_factor[f]
-
-            alphas = self._component_alphas(sim_in, f)
-
-            if reflectance_data is None:
-                meas_sig = np.zeros(self.helios.tilt[f].shape).transpose()
-            else:
-                meas_sig = reflectance_data.sigma_of_the_mean[f]
-
-            tilt = self.helios.tilt[f]
-            # calculate_delta_soiled_area (called via predict_soiling_factor just
-            # before this) already validated azimuth/wind data when any component
-            # needs wind, so it's safe to index directly here.
-            azimuth = self.helios.azimuth[f] if self._needs_wind else None
-            wind_dir = sim_in.wind_direction[f] if self._needs_wind else None
-            wind_speed = sim_in.wind_speed[f] if self._needs_wind else None
-
-            ind1 = pif[0:-1]
-            ind2 = [x - 1 for x in pif[1::]]
-
-            total_delta = np.zeros((len(ind1), tilt.shape[0]))
-            for component in self.components:
-                sigma = sigmas[component.sigma_param_name]
-                if sigma is None:
-                    continue
-                basis = component.variance_basis(alphas[component.key], tilt, azimuth, wind_dir, wind_speed)
-                c2t = np.cumsum(basis, axis=1).transpose()
-                total_delta = total_delta + sigma**2 * (c2t[ind2, :] - c2t[ind1, :])
-
-            s2total[f] = b**2 * total_delta + meas_sig[0:-1, :] ** 2 + meas_sig[1::, :] ** 2
-
-        return s2total
+    # _negative_log_likelihood and _covariance_of_measurements are inherited unchanged from
+    # CommonFittingMethods: this class differs only in HOW MANY independent noise mechanisms
+    # it carries, which _noise_bases/_current_sigmas declare on ConstantMeanWindBase.
 
     def transform_scale(self, x, likelihood_hessian=None, direction="inverse"):
         if isinstance(x, (np.ndarray, list)):
@@ -891,43 +878,29 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
     def fit_mle(self, simulation_inputs, reflectance_data, verbose=True, x0=None, transform_to_original_scale=False, save_file=None, **optim_kwargs):
         _check_keys(simulation_inputs, reflectance_data)
 
-        n_mean = len(self._mean_param_names)
-        n_sigma = len(self._sigma_param_names)
-
         if x0 is None:
-            if "gravitational" in self._component_keys:
-                _print_if("Getting initial mean-parameter guess via a plain least-squares fit (all wind coefficients set to 0) ...", verbose)
-                other_means = self._mean_param_names[1:]
-                saved = {name: getattr(self, name) for name in other_means}
-                for name in other_means:
-                    setattr(self, name, 0.0)
-                p0, sse = self.fit_least_squares(simulation_inputs, reflectance_data, verbose=False)
-                for name, value in saved.items():
-                    setattr(self, name, value)
-
-                mean_inits = [0.0] * n_mean
-                mean_inits[0] = p0
-
-                def nloglike1d(s):
-                    return self._negative_log_likelihood(mean_inits + [s] * n_sigma, simulation_inputs, reflectance_data)
-
-                s0 = minimize_scalar(nloglike1d, bounds=(smb.tol, sse), method="Bounded")
-                x0 = np.array(mean_inits + [s0.x] * n_sigma)
-            else:
-                _print_if("No gravitational component active; warm-starting all means at 0 and all sigmas at a small default (1e-4).", verbose)
-                x0 = np.array([0.0] * n_mean + [1e-4] * n_sigma)
-            _print_if("x0 = " + str(x0), verbose)
+            # Every mean parameter here is solvable exactly (the prediction is affine in all
+            # of them), so warm-start from that solve rather than from a bounded scalar search
+            # on mu_tilde alone with every wind coefficient pinned at 0.
+            x0 = self.default_mle_start(simulation_inputs, reflectance_data, verbose=verbose)
+            _print_if("x0 = " + np.array2string(x0, precision=4), verbose)
 
         _print_if("Getting MLE estimates ... ", verbose)
         y, y_cov = CommonFittingMethods.fit_mle(
             self, simulation_inputs, reflectance_data, verbose=False, x0=x0, transform_to_original_scale=False, **optim_kwargs
         )
-        H_log = np.linalg.inv(y_cov)
 
         _print_if("========== MLE Estimates ======== ", verbose)
         if transform_to_original_scale:
-            x_hat, H = self.transform_scale(y, H_log)
-            x_hat_cov = np.linalg.inv(H)
+            # Delta method directly on the covariance: cov_x = J cov_y J^T with J the diagonal
+            # Jacobian of the (partially log) reparameterization. Going via the Hessian instead
+            # -- inverting y_cov back to information, transforming, then inverting again --
+            # round-trips through two more inversions and breaks outright when y_cov is
+            # rank-deficient, which is exactly what an unidentified sigma produces.
+            x_hat = self.transform_scale(y)
+            mask = self._log_transform[: len(y)]
+            jac = np.where(mask, np.exp(np.where(mask, y, 0.0)), 1.0)
+            x_hat_cov = y_cov * np.outer(jac, jac)
         else:
             x_hat = y
             x_hat_cov = y_cov

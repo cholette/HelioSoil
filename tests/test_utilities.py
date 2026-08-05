@@ -18,7 +18,6 @@ from heliosoil.utilities import (
     _std_errors_from_cov,
     canonical_dust_spec,
     configure_logging,
-    default_training_mirrors,
     dust_cutoff,
     gravitational_settling_factor,
     logger,
@@ -165,34 +164,12 @@ def test_resolve_dust_concentration_warns_on_negative_band(caplog):
     assert "1 of 2 samples are negative" in caplog.text
 
 
-def test_default_training_mirrors_wind_variance_uses_all_mirrors():
-    mirrors = ["ON_M1_T00", "OE_M2_T85", "OS_M2_T30", "OW_M4_T05"]
-    assert default_training_mirrors(mirrors, uses_wind_variance=True) == mirrors
-
-
-def test_default_training_mirrors_no_wind_variance_picks_zero_tilt():
-    mirrors = ["OE_M4_T30", "ON_M1_T00", "OS_M2_T60"]
-    assert default_training_mirrors(mirrors, uses_wind_variance=False) == ["ON_M1_T00"]
-
-
-def test_default_training_mirrors_picks_minimum_tilt_when_no_zero_present():
-    mirrors = ["OE_M4_T30", "ON_M3_T85", "OS_M2_T60"]
-    assert default_training_mirrors(mirrors, uses_wind_variance=False) == ["OE_M4_T30"]
-
-
-def test_default_training_mirrors_handles_single_digit_tilt_token():
-    # Some datasets use "_T0" instead of "_T00" for the zero-tilt mirror, and may
-    # have more than one mirror at the minimum tilt.
-    mirrors = ["ON_M1_T0", "ON_M2_T30", "OS_M1_T0", "OS_M4_T90"]
-    assert default_training_mirrors(mirrors, uses_wind_variance=False) == ["ON_M1_T0"]
-
-
-def test_default_training_mirrors_falls_back_to_first_when_unparseable(caplog):
-    mirrors = ["mirror_A", "mirror_B"]
-    with caplog.at_level(logging.WARNING, logger="heliosoil"):
-        result = default_training_mirrors(mirrors, uses_wind_variance=False)
-    assert result == ["mirror_A"]
-    assert "could not parse a tilt" in caplog.text
+# The default_training_mirrors tests were removed with the function. It held a shared-sigma
+# model back to one representative mirror because the likelihood counted correlated mirrors as
+# independent; the likelihood now carries the across-mirror covariance, so every model trains on
+# every common mirror. The replacement coverage lives in
+# tests/test_measurement_covariance.py (the covariance itself) and
+# test_resolve_training_mirrors_uses_every_common_mirror in tests/test_simulate.py.
 
 
 # --------------------------------------------------------------------------- #

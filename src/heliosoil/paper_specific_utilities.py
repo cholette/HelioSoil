@@ -830,10 +830,10 @@ def fit_quality_panels(train_experiments, train_mirrors, test_mirrors, test_expe
     One definition, used both by the panelled summarize_fit_quality and by the standalone-figure
     writer, so the two can never drift apart on what a panel means.
 
-    The held-out-mirror split exists only when mirrors were actually held out. A model whose noise
-    process is orientation-dependent, and any least-squares fit, trains on every common mirror (see
-    heliosoil.utilities.default_training_mirrors), so a fixed three-way split would carry an empty
-    one.
+    The held-out-mirror split exists only when mirrors were actually held out, which now happens
+    only when --train-mirrors names a subset: every model otherwise trains on every common mirror
+    (see analysis_scripts.model_pipeline.resolve_training_mirrors). A fixed three-way split would
+    therefore usually carry an empty one.
     """
     train_mirrors = list(train_mirrors)
     test_mirrors = list(test_mirrors) if test_mirrors is not None else []
@@ -961,11 +961,11 @@ def summarize_fit_quality(
     2. Fit quality on the test mirror(s), training interval -- ONLY when mirrors were held out
     3. Fit quality on the test experiments (using all tilts)
 
-    Panel 2 is omitted when `test_mirrors` is empty. A model whose noise process is
-    orientation-dependent, and any least-squares fit, trains on every common mirror (see
-    heliosoil.utilities.default_training_mirrors), so there are no held-out mirrors to plot and
-    a fixed three-panel layout would leave a blank axes. The panel count therefore follows the
-    split that actually exists.
+    Panel 2 is omitted when `test_mirrors` is empty, which is the usual case: every model trains
+    on every common mirror unless --train-mirrors names a subset (see
+    analysis_scripts.model_pipeline.resolve_training_mirrors), so there are no held-out mirrors to
+    plot and a fixed three-panel layout would leave a blank axes. The panel count therefore
+    follows the split that actually exists.
 
     Args:
         model (object): The trained model to evaluate.
@@ -1424,6 +1424,15 @@ def virtual_mirror_daily_loss(model, sim_dat, model_save_file, grid, M=1000, tri
         alone -- which is what belongs in a band beside a mean curve. Dropping the noise also
         means two virtual mirrors that are genuinely identical (every orientation at tilt 0, say)
         land on exactly the same line rather than differing by the Monte Carlo's own error.
+
+    Read `sims` ONE VIRTUAL MIRROR AT A TIME. Its noise term is drawn independently per virtual
+    mirror, which is right for each mirror's own marginal distribution -- every consumer here
+    slices a single mirror out -- but wrong jointly: real mirrors share one deposition
+    fluctuation per timestep (see heliosoil.base_models.ConstantMeanBase.random_delta_soiled_area),
+    so their daily losses are strongly correlated. Averaging `sims` across the virtual-mirror axis
+    would therefore shrink the noise by ~1/sqrt(n_virtual) when a real field's would barely shrink
+    at all. For a field aggregate, draw one shared noise series and apply it through each mirror's
+    own basis instead.
     """
     rng = np.random.default_rng() if rng is None else rng
     with open(model_save_file, "rb") as f:
