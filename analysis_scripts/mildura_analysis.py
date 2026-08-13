@@ -1,4 +1,5 @@
-"""Analysis of Mount Isa data"""
+# %% 
+"""Analysis of Mildura data"""
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -15,22 +16,23 @@ from heliosoil.paper_specific_utilities import (
 
 main_directory = smu.get_project_root()
 pad = 0.05
-sp_save_file = f"{main_directory}/results/sp_fitting_results_mount_isa"
-cm_save_file = f"{main_directory}/results/cm_fitting_results_mount_isa"
+sp_save_file = f"{main_directory}/results/sp_fitting_results_mildura"
+cm_save_file = f"{main_directory}/results/cm_fitting_results_mildura"
 reflectometer_incidence_angle = 15  # [deg] angle of incidence of reflectometer
 reflectometer_acceptance_angle = 12.5e-3  # [rad] half acceptance angle of reflectance measurements
 second_surf = True  # True if using the second-surface model. Otherwise, use first-surface
-d = f"{main_directory}/data/mount_isa/"
+d = f"{main_directory}/data/mildura/"
 time_to_remove_at_end = [0, 0, 0, 0, 0, 0]
 train_experiments = [0]  # indices for training experiments from 0 to len(files)-1
-train_mirrors = ["ON_M1_T00"]  # which mirrors within the experiments are used for
+train_mirrors = [ "ON_M1_T00", "ON_M2_T30", "ON_M3_T60",
+                  "OS_M4_T90", "OS_M3_T60", "OS_M2_T30", "OS_M1_T00" ]  # which mirrors within the experiments are used for
 k_factor = "import"  # None sets equal to 1.0, "import" imports from the file
-dust_type = "TSP"
+dust_type = "PM10"
 
 # %% Get file list and time intervals. Import training data.
 parameter_file = d + "parameters_mildura_experiments.xlsx"
 files, training_intervals, mirror_name_list, all_mirrors = smu.get_training_data(
-    d, "Mildura_Data_", time_to_remove_at_end=time_to_remove_at_end
+    d, "experiment_", time_to_remove_at_end=time_to_remove_at_end
 )
 orientation = [[s[1] for s in mirrors] for mirrors in mirror_name_list]
 
@@ -48,7 +50,9 @@ plot_title = "Training: " + str(train_mirrors) + ", Exp: " + str(t)
 
 # %% Import & plot training data
 imodel = smf.SemiPhysical(parameter_file)
+imodel.set_variance_model("components")
 imodel_constant = smf.ConstantMeanDeposition(parameter_file)
+imodel_constant.set_variance_model("components")
 sim_data_train = smb.SimulationInputs(files_train, k_factors=k_factor, dust_type=dust_type)
 reflect_data_train = smb.ReflectanceMeasurements(
     files_train,
@@ -93,9 +97,13 @@ param_ci = log_param_hat + 1.96 * s * np.array([[-1], [1]])
 lower_ci = imodel.transform_scale(param_ci[0, :])
 upper_ci = imodel.transform_scale(param_ci[1, :])
 param_hat = imodel.transform_scale(log_param_hat)
-hrz0_mle, sigma_dep_mle = param_hat
+# Indexed rather than unpacked so this works under either variance model: the
+# variance-components model carries a third parameter, kappa.
+hrz0_mle, sigma_dep_mle = param_hat[0], param_hat[1]
 print(f"hrz0: {hrz0_mle:.2e} [{lower_ci[0]:.2e},{upper_ci[0]:.2e}]")
 print(f"sigma_dep: {sigma_dep_mle:.2e} [{lower_ci[1]:.2e},{upper_ci[1]:.2e}] [p.p./day]")
+if imodel.variance_model == "components":
+    print(f"kappa: {param_hat[2]:.2e} [{lower_ci[2]:.2e},{upper_ci[2]:.2e}]")
 
 imodel.update_model_parameters(param_hat)
 imodel.save(
@@ -124,11 +132,14 @@ param_ci_con = log_param_hat_con + 1.96 * s_con * np.array([[-1], [1]])
 lower_ci_con = imodel_constant.transform_scale(param_ci_con[0, :])
 upper_ci_con = imodel_constant.transform_scale(param_ci_con[1, :])
 param_hat_con = imodel_constant.transform_scale(log_param_hat_con)
-mu_tilde, sigma_dep_con = param_hat_con
+mu_tilde, sigma_dep_con = param_hat_con[0], param_hat_con[1]
 print(f"mu_tilde: {mu_tilde:.2e} [{lower_ci_con[0]:.2e},{upper_ci_con[0]:.2e}] [p.p./day]")
 print(
     f"sigma_dep (constant mean model): {sigma_dep_con:.2e} [{lower_ci_con[1]:.2e},{upper_ci_con[1]:.2e}] [p.p./day]"
 )
+if imodel_constant.variance_model == "components":
+    print(f"kappa (constant mean model): {param_hat_con[2]:.2e} "
+          f"[{lower_ci_con[2]:.2e},{upper_ci_con[2]:.2e}]")
 
 imodel_constant.update_model_parameters(param_hat_con)
 imodel_constant.save(
@@ -175,9 +186,10 @@ for ii, experiment in enumerate(sim_data_total.dt.keys()):
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total, reflect_data_total, second_surface=second_surf)
 file_inds = np.arange(len(files))
-imodel = smu.set_extinction_coefficients(imodel, ext_weights, file_inds)
+# imodel = smu.set_extinction_coefficients(imodel, ext_weights, file_inds)
+imodel.helios.compute_extinction_weights(sim_data_total, imodel.loss_model, verbose=True)
 
-fig, ax = plot_for_paper(
+fig, ax, ref = plot_for_paper(
     imodel,
     reflect_data_total,
     sim_data_total,
@@ -193,7 +205,7 @@ fig.savefig(sp_save_file + ".pdf", bbox_inches="tight")
 # %% Performance of constant-mean model on total data
 imodel_constant.helios_angles(sim_data_total, reflect_data_total, second_surface=second_surf)
 
-fig, ax = plot_for_paper(
+fig, ax, ref_output = plot_for_paper(
     imodel_constant,
     reflect_data_total,
     sim_data_total,

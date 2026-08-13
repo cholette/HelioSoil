@@ -530,7 +530,6 @@ def soiling_rate(alphas: np.ndarray, alphas2: np.ndarray, save_file: str, M: int
         imodel = data["model"]
         log_param_hat = data["transformed_parameters"]
         log_param_hat_cov = data["transformed_parameter_covariance"]
-        mu_tilde, sigma_dep = np.exp(log_param_hat)
 
     assert isinstance(
         imodel, smf.ConstantMeanDeposition
@@ -542,7 +541,14 @@ def soiling_rate(alphas: np.ndarray, alphas2: np.ndarray, save_file: str, M: int
     for m in range(M):
 
         log_param = np.random.multivariate_normal(mean=log_param_hat, cov=log_param_hat_cov)
-        mut, sigt = imodel.transform_scale(log_param)
+
+        # Index rather than unpack: the variance-components model carries a third
+        # parameter, kappa. It is not needed here because sigma_dep remains the total
+        # per-mirror deposition standard deviation, which is what a single mirror's
+        # soiling rate depends on. The split would matter only for an aggregate over
+        # several mirrors, whose losses are correlated through the common component.
+        natural_param = imodel.transform_scale(log_param)
+        mut, sigt = natural_param[0], natural_param[1]
 
         mean_loss_rate = inc_factor * mut * alphas  # loss rate in one timestep
         var_loss_rate = (inc_factor * sigt) ** 2 * alphas2  # loss variance in one timestep

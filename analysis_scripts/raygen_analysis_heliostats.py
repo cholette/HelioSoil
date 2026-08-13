@@ -296,9 +296,13 @@ param_ci = log_param_hat + 1.96 * s * np.array([[-1], [1]])
 lower_ci = imodel.transform_scale(param_ci[0, :])
 upper_ci = imodel.transform_scale(param_ci[1, :])
 param_hat = imodel.transform_scale(log_param_hat)
-hrz0_mle, sigma_dep_mle = param_hat
+# Indexed rather than unpacked so this works under either variance model: the
+# variance-components model carries a third parameter, kappa.
+hrz0_mle, sigma_dep_mle = param_hat[0], param_hat[1]
 print(f"hrz0: {hrz0_mle:.2e} [{lower_ci[0]:.2e},{upper_ci[0]:.2e}]")
 print(f"sigma_dep: {sigma_dep_mle:.2e} [{lower_ci[1]:.2e},{upper_ci[1]:.2e}] [p.p./day]")
+if imodel.variance_model == "components":
+    print(f"kappa: {param_hat[2]:.2e} [{lower_ci[2]:.2e},{upper_ci[2]:.2e}]")
 
 imodel.update_model_parameters(param_hat)
 imodel.save(
@@ -330,11 +334,14 @@ param_ci_con = log_param_hat_con + 1.96 * s_con * np.array([[-1], [1]])
 lower_ci_con = imodel_constant.transform_scale(param_ci_con[0, :])
 upper_ci_con = imodel_constant.transform_scale(param_ci_con[1, :])
 param_hat_con = imodel_constant.transform_scale(log_param_hat_con)
-mu_tilde, sigma_dep_con = param_hat_con
+mu_tilde, sigma_dep_con = param_hat_con[0], param_hat_con[1]
 print(f"mu_tilde: {mu_tilde:.2e} [{lower_ci_con[0]:.2e},{upper_ci_con[0]:.2e}] [p.p./day]")
 print(
     f"sigma_dep (constant mean model): {sigma_dep_con:.2e} [{lower_ci_con[1]:.2e},{upper_ci_con[1]:.2e}] [p.p./day]"
 )
+if imodel_constant.variance_model == "components":
+    print(f"kappa (constant mean model): {param_hat_con[2]:.2e} "
+          f"[{lower_ci_con[2]:.2e},{upper_ci_con[2]:.2e}]")
 
 imodel_constant.update_model_parameters(param_hat_con)
 imodel_constant.save(

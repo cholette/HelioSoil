@@ -361,7 +361,7 @@ class PhysicalBase(SoilingBase):
 
         self.helios = helios
 
-    def adhesion_removal(self, simulation_inputs, verbose=True):
+    def adhesion_removal(self, simulation_inputs, verbose=False):
         _print_if("Calculating adhesion/removal balance", verbose)
         helios = self.helios
         dust = simulation_inputs.dust
@@ -414,9 +414,6 @@ class PhysicalBase(SoilingBase):
 
                         # ALL dust desposited at this diameter up to this point falls off
                         helios.pdfqN[f][h, k:, mom_adhesion < mom_removal] = 0  
-
-                        if any(mom_adhesion<mom_removal):
-                            _print_if("Some dust is removed",verbose)
 
                 # Take derivative so that pdfqN is the rate at which dust is deposited at each diameter
                 helios.pdfqN[f] = np.gradient(helios.pdfqN[f], dt[f], axis=1)  

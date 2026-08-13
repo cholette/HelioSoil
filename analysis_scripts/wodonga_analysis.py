@@ -26,14 +26,8 @@ second_surf = True  # True if using the second-surface model. Otherwise, use fir
 d = f"{main_directory}/data/wodonga/"
 time_to_remove_at_end = [0, 0, 0, 0, 0, 0]
 train_experiments = [0]  # indices for training experiments from 0 to len(files)-1
-train_mirrors = ["OE_M1_T00"]  # which mirrors within the experiments are used for
-test_mirrors = [
-    "OE_M1_T00",
-    "OE_M2_T05",
-    "OE_M3_T30",
-    "OW_M4_T30",
-    "OW_M5_T60",
-]  # ["ON_M1_T00","ON_M3_T30","OE_M4_T30","OS_M2_T30","ON_M5_T85","OE_M2_T85"] # None will paradoxially yield all mirrors for testing
+train_mirrors = ["OE_M1_T00","OE_M2_T05","OE_M3_T30","OW_M4_T30","OW_M5_T60"]  # which mirrors within the experiments are used for
+test_mirrors = None # ["ON_M1_T00","ON_M3_T30","OE_M4_T30","OS_M2_T30","ON_M5_T85","OE_M2_T85"] # None will paradoxially yield all mirrors for testing
 k_factor = None  # None sets equal to 1.0, "import" imports from the file
 dust_type = "PM10"
 use_fitted_dust_distributions = False
@@ -84,7 +78,9 @@ plot_title = "Training: " + str(train_mirrors) + ", Exp: " + str(t)
 
 # %% Import & plot training data
 imodel = smf.SemiPhysical(parameter_file)
+imodel.set_variance_model("components")
 imodel_constant = smf.ConstantMeanDeposition(parameter_file)
+imodel_constant.set_variance_model("components")
 sim_data_train = smb.SimulationInputs(files_train, k_factors=k_factor, dust_type=dust_type)
 reflect_data_train = smb.ReflectanceMeasurements(
     files_train,
@@ -132,9 +128,10 @@ param_ci = log_param_hat + 1.96 * s * np.array([[-1], [1]])
 lower_ci = imodel.transform_scale(param_ci[0, :])
 upper_ci = imodel.transform_scale(param_ci[1, :])
 param_hat = imodel.transform_scale(log_param_hat)
-hrz0_mle, sigma_dep_mle = param_hat
+hrz0_mle, sigma_dep_mle,kappa_mle = param_hat
 print(f"hrz0: {hrz0_mle:.2e} [{lower_ci[0]:.2e}, {upper_ci[0]:.2e}]")
 print(f"sigma_dep: {sigma_dep_mle:.2e} [{lower_ci[1]:.2e},{upper_ci[1]:.2e}] [p.p./day]")
+print(f"kappa: {kappa_mle:.2e} [{lower_ci[2]:.2e},{upper_ci[2]:.2e}]")
 
 imodel.update_model_parameters(param_hat)
 imodel.save(
@@ -165,11 +162,12 @@ param_ci_con = log_param_hat_con + 1.96 * s_con * np.array([[-1], [1]])
 lower_ci_con = imodel_constant.transform_scale(param_ci_con[0, :])
 upper_ci_con = imodel_constant.transform_scale(param_ci_con[1, :])
 param_hat_con = imodel_constant.transform_scale(log_param_hat_con)
-mu_tilde, sigma_dep_con = param_hat_con
+mu_tilde, sigma_dep_con,kappa_con = param_hat_con
 print(f"mu_tilde: {mu_tilde:.2e} [{lower_ci_con[0]:.2e}, {upper_ci_con[0]:.2e}] [p.p./day]")
 print(
     f"sigma_dep (constant mean model): {sigma_dep_con:.2e} [{lower_ci_con[1]:.2e},{upper_ci_con[1]:.2e}] [p.p./day]"
 )
+print(f"kappa (constant mean model): {kappa_con:.2e} [{lower_ci_con[2]:.2e},{upper_ci_con[2]:.2e}]")
 
 imodel_constant.update_model_parameters(param_hat_con)
 imodel_constant.save(
