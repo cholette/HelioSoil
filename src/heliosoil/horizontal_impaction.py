@@ -206,6 +206,49 @@ def wind_retention_factors(tilt_deg, azimuth_deg, wind_dir_deg):
     return p_windward, p_leeward
 
 
+_TILT_ATOL_DEG = 1e-9  # absorbs float noise on values meant to be exactly 0 or 180
+
+
+def check_tilt_range(tilt, f=None):
+    """
+    Raise if any mirror tilt lies outside [0, 180] deg.
+
+    Tilt is measured from horizontal, so the physical range is a half turn. The wind
+    mechanisms depend on that: `wind_projection_factors` clips cos(Delta_gamma) but NOT
+    sin(tilt), so a tilt outside the range makes the windward/leeward projections -- and
+    hence the normal_wind and impaction_retention noise loadings -- negative. Nothing
+    downstream would raise: it would quietly subtract deposition from the mean, and once
+    the multi-mirror covariance weights products of loadings across mirror pairs it would
+    flip the sign of a cross-mirror covariance term. Cheaper to refuse the input here.
+
+    Non-finite entries are ignored: real campaign files carry NaN tilts for mirrors not yet
+    in service (728 of them in the first yadnarie campaign), and those columns are trimmed
+    or masked downstream rather than being an error.
+
+    Args:
+        tilt: array of mirror tilts [deg], any shape.
+        f: optional experiment (file) key, used only in the error message.
+
+    Raises:
+        ValueError: If any finite tilt is below 0 or above 180 deg.
+    """
+    tilt = np.asarray(tilt, dtype=float)
+    finite = np.isfinite(tilt)
+    if not finite.any():
+        return
+    low, high = float(tilt[finite].min()), float(tilt[finite].max())
+    if low < -_TILT_ATOL_DEG or high > 180.0 + _TILT_ATOL_DEG:
+        where = "" if f is None else f" for file {f}"
+        raise ValueError(
+            f"Mirror tilts{where} lie outside [0, 180] deg (found [{low:g}, {high:g}]). Tilt is "
+            "measured from horizontal, and the wind mechanisms rely on that range: sin(tilt) is "
+            "not clipped, so a tilt outside it makes the windward/leeward projections and the "
+            "normal_wind / impaction_retention noise loadings negative, which would corrupt both "
+            "the mean deposition and the sign of cross-mirror covariance terms without raising. "
+            "Check the 'Tilts' sheet of the campaign file."
+        )
+
+
 def parse_orientation_names(names):
     """
     Parse mirror-normal azimuths [deg] from mirror column names of the form
@@ -235,8 +278,10 @@ def parse_orientation_names(names):
 
 # ---------------------------------------------------------------------------
 # Wind-component registry: each component is a pure geometry descriptor (no
-# parameter values). mean_bases()/variance_basis() take a common signature so
-# callers don't need to special-case components that ignore wind.
+# parameter values). A component defines only its MEAN bases; its noise loading and
+# variance basis are derived from them (see _WindComponent), so a mechanism added here
+# cannot end up with a variance that disagrees with its mean. mean_bases() takes a common
+# signature so callers don't need to special-case components that ignore wind.
 # ---------------------------------------------------------------------------
 
 
@@ -244,16 +289,8 @@ def _gravitational_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
     return [alpha[None, :] * gravitational_settling_factor(tilt)]
 
 
-def _gravitational_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
-    return (alpha[None, :] * gravitational_settling_factor(tilt)) ** 2
-
-
 def _turbulant_wind_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
     return [alpha[None, :] * gravitational_settling_factor(tilt) * wind_speed[None, :]]
-
-
-def _turbulant_wind_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
-    return (alpha[None, :] * gravitational_settling_factor(tilt) * wind_speed[None, :]) ** 2
 
 
 def _normal_wind_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
@@ -262,19 +299,9 @@ def _normal_wind_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
     return [u * p_windward, u * p_leeward]
 
 
-def _normal_wind_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
-    p_windward, p_leeward = wind_projection_factors(tilt, azimuth, wind_dir)
-    return (alpha[None, :] * wind_speed[None, :]) ** 2 * (p_windward + p_leeward) ** 2
-
-
 def _tangential_wind_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
     t = wind_tangential_factor(tilt, azimuth, wind_dir)
     return [alpha[None, :] * wind_speed[None, :] * t]
-
-
-def _tangential_wind_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
-    t = wind_tangential_factor(tilt, azimuth, wind_dir)
-    return (alpha[None, :] * wind_speed[None, :] * t) ** 2
 
 
 def _impaction_retention_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
@@ -283,50 +310,71 @@ def _impaction_retention_mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed):
     return [u * p_windward, u * p_leeward]
 
 
-def _impaction_retention_variance_basis(alpha, tilt, azimuth, wind_dir, wind_speed):
-    p_windward, p_leeward = wind_retention_factors(tilt, azimuth, wind_dir)
-    return (alpha[None, :] * wind_speed[None, :]) ** 2 * (p_windward + p_leeward) ** 2
-
-
 class _WindComponent:
     """Pure-geometry descriptor for one additive constant-mean-wind soiling mechanism.
 
-    mean_bases()/variance_basis() always take (alpha, tilt, azimuth, wind_dir,
-    wind_speed): alpha has shape (N_times,); tilt/azimuth/wind_dir/wind_speed
+    A component supplies only its MEAN bases; the loading of its noise term and its
+    variance basis are derived from those, so the three can never disagree.
+
+    mean_bases()/noise_loading()/variance_basis() always take (alpha, tilt, azimuth,
+    wind_dir, wind_speed): alpha has shape (N_times,); tilt/azimuth/wind_dir/wind_speed
     broadcast to (N_helios, N_times). Components that ignore wind (gravitational)
     simply don't use the azimuth/wind_dir/wind_speed arguments.
     """
 
-    def __init__(self, key, name_fragment, mean_param_names, sigma_param_name, requires_wind, mean_bases_fn, variance_basis_fn):
+    def __init__(self, key, name_fragment, mean_param_names, sigma_param_name, requires_wind, mean_bases_fn):
         self.key = key
         self.name_fragment = name_fragment
         self.mean_param_names = mean_param_names
         self.sigma_param_name = sigma_param_name
         self.requires_wind = requires_wind
         self._mean_bases_fn = mean_bases_fn
-        self._variance_basis_fn = variance_basis_fn
 
     def mean_bases(self, alpha, tilt, azimuth, wind_dir, wind_speed):
         """List of arrays (N_helios, N_times), one per entry of mean_param_names."""
         return self._mean_bases_fn(alpha, tilt, azimuth, wind_dir, wind_speed)
 
+    def noise_loading(self, alpha, tilt, azimuth, wind_dir, wind_speed):
+        """Array (N_helios, N_times) multiplying this mechanism's single noise term.
+
+        A mechanism carries one noise term regardless of how many mean coefficients it
+        has, so the loading is the sum of its mean bases. For the two-face mechanisms
+        (normal_wind, impaction_retention) at most one face is nonzero at a time, so that
+        sum is just whichever face is active -- see the module docstring.
+
+        This is the quantity the multi-mirror covariance is assembled from: the deposition
+        covariance between two mirrors in one interval is weighted by the PRODUCT of their
+        loadings, which is why the bases are kept nonnegative.
+
+        Precondition: tilt in [0, 180] deg. wind_projection_factors clips cos(Delta_gamma)
+        but not sin(tilt), so a tilt outside that range makes the windward/leeward
+        projections -- and hence this loading -- negative, which would flip the sign of a
+        cross-mirror covariance term rather than raise. Physical tilts are measured from
+        horizontal and never leave the range; nothing here enforces it.
+        """
+        bases = self.mean_bases(alpha, tilt, azimuth, wind_dir, wind_speed)
+        total = bases[0]
+        for basis in bases[1:]:
+            total = total + basis
+        return total
+
     def variance_basis(self, alpha, tilt, azimuth, wind_dir, wind_speed):
         """Array (N_helios, N_times); this component's variance contribution is
-        sigma**2 * variance_basis(...)."""
-        return self._variance_basis_fn(alpha, tilt, azimuth, wind_dir, wind_speed)
+        sigma**2 * variance_basis(...), i.e. the square of its noise loading."""
+        return self.noise_loading(alpha, tilt, azimuth, wind_dir, wind_speed) ** 2
 
 
 _GRAVITATIONAL = _WindComponent(
-    "gravitational", "gravitational", ("mu_tilde",), "sigma_dep", False, _gravitational_mean_bases, _gravitational_variance_basis
+    "gravitational", "gravitational", ("mu_tilde",), "sigma_dep", False, _gravitational_mean_bases
 )
 _TURBULENT = _WindComponent(
-    "turbulent_wind", "turbulent-wind", ("omega_turbulent",), "sigma_dep_turb", True, _turbulant_wind_mean_bases, _turbulant_wind_variance_basis
+    "turbulent_wind", "turbulent-wind", ("omega_turbulent",), "sigma_dep_turb", True, _turbulant_wind_mean_bases
 )
 _NORMAL_WIND = _WindComponent(
-    "normal_wind", "normal-wind", ("omega_windward", "omega_leeward"), "sigma_dep_gamma", True, _normal_wind_mean_bases, _normal_wind_variance_basis
+    "normal_wind", "normal-wind", ("omega_windward", "omega_leeward"), "sigma_dep_gamma", True, _normal_wind_mean_bases
 )
 _TANGENTIAL_WIND = _WindComponent(
-    "tangential_wind", "tangential-wind", ("omega_tangential",), "sigma_dep_tan", True, _tangential_wind_mean_bases, _tangential_wind_variance_basis
+    "tangential_wind", "tangential-wind", ("omega_tangential",), "sigma_dep_tan", True, _tangential_wind_mean_bases
 )
 _IMPACTION_RETENTION = _WindComponent(
     "impaction_retention",
@@ -335,7 +383,6 @@ _IMPACTION_RETENTION = _WindComponent(
     "sigma_dep_ret",
     True,
     _impaction_retention_mean_bases,
-    _impaction_retention_variance_basis,
 )
 
 # Order here is the canonical order: it fixes the parameter-vector layout and the
@@ -612,6 +659,9 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
         files = list(sim_in.time.keys())
         for f in files:
             tilt = helios.tilt[f]
+            # Single funnel for this model's geometry, so the check covers tilts set by
+            # helios_angles and any assigned directly. See check_tilt_range for why.
+            check_tilt_range(tilt, f)
 
             azimuth = wind_dir = wind_speed = None
             if self._needs_wind:

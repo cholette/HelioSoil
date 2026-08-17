@@ -22,9 +22,9 @@ from heliosoil.horizontal_impaction import (
     wind_retention_factors,
     parse_orientation_names,
     _gravitational_mean_bases,
-    _gravitational_variance_basis,
     _turbulant_wind_mean_bases,
-    _turbulant_wind_variance_basis,
+    _GRAVITATIONAL,
+    _TURBULENT,
 )
 
 RTOL = 1e-10
@@ -792,9 +792,9 @@ def test_settling_driven_bases_vanish_past_vertical(tilt_deg):
     tilt = np.full((1, 3), tilt_deg)
 
     assert _gravitational_mean_bases(alpha, tilt, None, None, wind_speed)[0].tolist() == [[0.0, 0.0, 0.0]]
-    assert _gravitational_variance_basis(alpha, tilt, None, None, wind_speed).tolist() == [[0.0, 0.0, 0.0]]
+    assert _GRAVITATIONAL.variance_basis(alpha, tilt, None, None, wind_speed).tolist() == [[0.0, 0.0, 0.0]]
     assert _turbulant_wind_mean_bases(alpha, tilt, None, None, wind_speed)[0].tolist() == [[0.0, 0.0, 0.0]]
-    assert _turbulant_wind_variance_basis(alpha, tilt, None, None, wind_speed).tolist() == [[0.0, 0.0, 0.0]]
+    assert _TURBULENT.variance_basis(alpha, tilt, None, None, wind_speed).tolist() == [[0.0, 0.0, 0.0]]
 
 
 def test_settling_driven_bases_negligible_at_exactly_vertical():
@@ -820,12 +820,12 @@ def test_settling_driven_bases_unchanged_below_vertical(tilt_deg):
     c = np.cos(np.radians(tilt_deg))
 
     np.testing.assert_allclose(_gravitational_mean_bases(alpha, tilt, None, None, wind_speed)[0], alpha[None, :] * c, rtol=RTOL)
-    np.testing.assert_allclose(_gravitational_variance_basis(alpha, tilt, None, None, wind_speed), (alpha[None, :] * c) ** 2, rtol=RTOL)
+    np.testing.assert_allclose(_GRAVITATIONAL.variance_basis(alpha, tilt, None, None, wind_speed), (alpha[None, :] * c) ** 2, rtol=RTOL)
     np.testing.assert_allclose(
         _turbulant_wind_mean_bases(alpha, tilt, None, None, wind_speed)[0], alpha[None, :] * c * wind_speed[None, :], rtol=RTOL
     )
     np.testing.assert_allclose(
-        _turbulant_wind_variance_basis(alpha, tilt, None, None, wind_speed), (alpha[None, :] * c * wind_speed[None, :]) ** 2, rtol=RTOL
+        _TURBULENT.variance_basis(alpha, tilt, None, None, wind_speed), (alpha[None, :] * c * wind_speed[None, :]) ** 2, rtol=RTOL
     )
 
 
@@ -840,7 +840,7 @@ def test_settling_driven_variance_shares_the_mean_support():
     wind_speed = np.full(1, 4.0)
     tilt = np.linspace(0.0, 180.0, 181).reshape(-1, 1)
 
-    for mean_fn, var_fn in ((_gravitational_mean_bases, _gravitational_variance_basis), (_turbulant_wind_mean_bases, _turbulant_wind_variance_basis)):
+    for mean_fn, var_fn in ((_gravitational_mean_bases, _GRAVITATIONAL.variance_basis), (_turbulant_wind_mean_bases, _TURBULENT.variance_basis)):
         mean = mean_fn(alpha, tilt, None, None, wind_speed)[0]
         var = var_fn(alpha, tilt, None, None, wind_speed)
         assert (mean >= 0.0).all()
