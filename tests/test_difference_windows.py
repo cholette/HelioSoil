@@ -21,6 +21,13 @@ The window is pinned two ways, both independent of the implementation:
 Both the plain constant-mean model (heliosoil.fitting) and the wind model
 (heliosoil.horizontal_impaction) are covered, since each carries its own copy of the
 variance assembly.
+
+The last two sections cover the mechanism-independent pieces the multi-mirror covariance
+is later assembled from: ``_difference_windows`` (the same window, now returned explicitly
+rather than implied by an index arithmetic), ``_reflectance_loss_factor`` (per mirror,
+because the drift correction gives each its own nominal reflectance) and
+``_differenced_measurement_covariance`` (R = Delta Sigma_r Delta', tridiagonal because
+consecutive differences share an endpoint measurement).
 """
 
 import types
@@ -31,7 +38,7 @@ import pytest
 from heliosoil.base_models import ConstantMeanBase
 from heliosoil.fitting import ConstantMeanDeposition
 from heliosoil.horizontal_impaction import ConstantMeanWindDeposition
-from heliosoil.utilities import gravitational_settling_factor, cosd, sind
+from heliosoil.utilities import gravitational_settling_factor, cosd, sind, _nominal_reflectance_anchor
 
 RTOL = 1e-12
 ATOL = 0.0
@@ -290,3 +297,183 @@ def test_windows_partition_the_measured_span():
     expected = SIGMA_DEP**2 * b**2 * basis[span].sum()
 
     np.testing.assert_allclose(total, expected, rtol=RTOL, atol=ATOL)
+
+
+# ---------------------------------------------------------------------------
+# 4. _difference_windows and _reflectance_loss_factor
+# ---------------------------------------------------------------------------
+
+
+def test_difference_windows_are_the_intervals_the_mean_accumulates():
+    """The returned slices are exactly k_{i-1}+1 ... k_i, disjoint and gap-free."""
+    model = _constant_mean_model(np.full((1, T_GRID), 20.0))
+    windows = model._difference_windows(F, _ref_dat(1))
+
+    assert len(windows) == N_DIFF
+    pi = PREDICTION_INDICES
+    covered = []
+    for i, window in enumerate(windows):
+        indices = list(range(*window.indices(T_GRID)))
+        assert indices == list(range(pi[i] + 1, pi[i + 1] + 1))
+        covered.extend(indices)
+
+    assert len(covered) == len(set(covered)), "windows overlap"
+    assert covered == list(range(pi[0] + 1, pi[-1] + 1)), "windows leave a gap"
+
+
+def test_difference_windows_agree_with_the_variance_they_weight():
+    """Summing a basis over the returned windows reproduces the variance's own windowing.
+
+    Ties the explicit helper to the arithmetic in _compute_variance_of_measurements, so the
+    two cannot drift apart when the covariance assembly starts using the helper instead.
+    """
+    rng = np.random.default_rng(3)
+    tilt = rng.uniform(0.0, 60.0, size=(2, T_GRID))
+    concentration = np.linspace(25.0, 85.0, T_GRID)
+
+    model = _constant_mean_model(tilt)
+    sim_in, ref_dat = _sim_in(concentration), _ref_dat(2, 0.0)
+    model.predict_soiling_factor(sim_in, reflectance_data=ref_dat, verbose=False)
+
+    got = model._compute_variance_of_measurements(SIGMA_DEP, sim_in, reflectance_data=ref_dat)[F]
+
+    alpha = concentration / DENSITY
+    basis = (alpha[None, :] * gravitational_settling_factor(tilt)) ** 2
+    b = model._reflectance_loss_factor(F, ref_dat)
+    windows = model._difference_windows(F, ref_dat)
+    expected = np.stack([SIGMA_DEP**2 * b**2 * basis[:, w].sum(axis=1) for w in windows])
+
+    np.testing.assert_allclose(got, expected, rtol=RTOL, atol=ATOL)
+
+
+def test_reflectance_loss_factor_is_per_mirror_and_constant_without_drift():
+    """Without a reference mirror every entry is the same fixed constant."""
+    model = _constant_mean_model(np.full((4, T_GRID), 30.0))
+    b = model._reflectance_loss_factor(F, _ref_dat(4))
+
+    assert b.shape == (4,)
+    np.testing.assert_allclose(b, NOMINAL_REFLECTANCE * INC_REF_FACTOR, rtol=RTOL)
+
+
+def test_reflectance_loss_factor_follows_the_drift_corrected_anchor():
+    """With a reference mirror each mirror gets its own nominal reflectance.
+
+    b must use the nominal reflectance at the moment that mirror's rho0 was recorded --
+    the same _nominal_reflectance_anchor the rest of the fitting code uses -- or the
+    covariance would be scaled by a different b than the mean is.
+    """
+    n_mirrors = 3
+    model = _constant_mean_model(np.full((n_mirrors, T_GRID), 30.0))
+    ref_dat = _ref_dat(n_mirrors)
+
+    nominal = np.tile(np.linspace(0.95, 0.90, len(PREDICTION_INDICES))[:, None], (1, n_mirrors))
+    nominal *= np.array([1.00, 1.01, 0.99])[None, :]
+    ref_dat.nominal_reflectance = {F: nominal}
+    ref_dat.rho0_index = {F: np.array([0, 2, 1])}
+
+    b = model._reflectance_loss_factor(F, ref_dat)
+    anchor = _nominal_reflectance_anchor(ref_dat, F, NOMINAL_REFLECTANCE)
+
+    assert b.shape == (n_mirrors,)
+    np.testing.assert_allclose(b, anchor * INC_REF_FACTOR, rtol=RTOL)
+    assert len(set(np.round(b, 12))) == n_mirrors, "drift should make the mirrors differ"
+
+
+def test_reflectance_loss_factor_rejects_a_varying_incidence_angle():
+    model = _constant_mean_model(np.full((2, T_GRID), 30.0))
+    model.helios.inc_ref_factor = {F: np.array([2.0, 2.1])}
+    with pytest.raises(ValueError, match="fixed reflectometer"):
+        model._reflectance_loss_factor(F, _ref_dat(2))
+
+
+# ---------------------------------------------------------------------------
+# 5. _differenced_measurement_covariance
+# ---------------------------------------------------------------------------
+
+
+def _difference_operator(n_meas):
+    """The (n_meas-1, n_meas) first-difference operator, built explicitly."""
+    delta = np.zeros((n_meas - 1, n_meas))
+    for i in range(n_meas - 1):
+        delta[i, i] = -1.0
+        delta[i, i + 1] = 1.0
+    return delta
+
+
+def test_measurement_covariance_matches_delta_sigma_delta():
+    """R = Delta Sigma_r Delta', against the operator written out in full."""
+    rng = np.random.default_rng(11)
+    n_mirrors = 3
+    sigma = rng.uniform(5e-4, 2e-3, size=(len(PREDICTION_INDICES), n_mirrors))
+
+    model = _constant_mean_model(np.full((n_mirrors, T_GRID), 30.0))
+    ref_dat = _ref_dat(n_mirrors)
+    ref_dat.sigma_of_the_mean = {F: sigma}
+
+    got = model._differenced_measurement_covariance(F, ref_dat, endpoint_correction=True)
+    delta = _difference_operator(len(PREDICTION_INDICES))
+
+    assert got.shape == (n_mirrors, N_DIFF, N_DIFF)
+    for p in range(n_mirrors):
+        expected = delta @ np.diag(sigma[:, p] ** 2) @ delta.transpose()
+        np.testing.assert_allclose(got[p], expected, rtol=RTOL, atol=ATOL)
+
+
+def test_measurement_covariance_is_tridiagonal_and_symmetric():
+    rng = np.random.default_rng(12)
+    n_mirrors = 2
+    sigma = rng.uniform(5e-4, 2e-3, size=(len(PREDICTION_INDICES), n_mirrors))
+    model = _constant_mean_model(np.full((n_mirrors, T_GRID), 30.0))
+    ref_dat = _ref_dat(n_mirrors)
+    ref_dat.sigma_of_the_mean = {F: sigma}
+
+    cov = model._differenced_measurement_covariance(F, ref_dat)
+    for p in range(n_mirrors):
+        np.testing.assert_allclose(cov[p], cov[p].transpose(), rtol=RTOL, atol=ATOL)
+        for i in range(N_DIFF):
+            for j in range(N_DIFF):
+                if abs(i - j) >= 2:
+                    assert cov[p, i, j] == 0.0, f"entry ({i},{j}) should be zero"
+        np.linalg.cholesky(cov[p])  # raises if not positive definite
+
+
+def test_measurement_covariance_without_the_endpoint_correction_is_todays_behaviour():
+    """endpoint_correction=False must reproduce exactly what the current likelihood uses."""
+    rng = np.random.default_rng(13)
+    n_mirrors = 3
+    sigma = rng.uniform(5e-4, 2e-3, size=(len(PREDICTION_INDICES), n_mirrors))
+    model = _constant_mean_model(np.full((n_mirrors, T_GRID), 30.0))
+    ref_dat = _ref_dat(n_mirrors)
+    ref_dat.sigma_of_the_mean = {F: sigma}
+
+    cov = model._differenced_measurement_covariance(F, ref_dat, endpoint_correction=False)
+    s2 = sigma**2
+    for p in range(n_mirrors):
+        np.testing.assert_allclose(np.diag(cov[p]), s2[1:, p] + s2[:-1, p], rtol=RTOL, atol=ATOL)
+        assert np.count_nonzero(cov[p] - np.diag(np.diag(cov[p]))) == 0
+
+
+def test_measurement_covariance_off_diagonal_is_the_shared_endpoint():
+    """The off-diagonal is -sigma^2 of the measurement the two differences share."""
+    n_mirrors = 1
+    sigma = np.array([[1e-3], [2e-3], [3e-3], [4e-3], [5e-3]])
+    model = _constant_mean_model(np.full((n_mirrors, T_GRID), 30.0))
+    ref_dat = _ref_dat(n_mirrors)
+    ref_dat.sigma_of_the_mean = {F: sigma}
+
+    cov = model._differenced_measurement_covariance(F, ref_dat)[0]
+    for i in range(N_DIFF - 1):
+        shared_measurement = i + 1  # differences i and i+1 meet at measurement i+1
+        assert cov[i, i + 1] == -(sigma[shared_measurement, 0] ** 2)
+
+
+def test_measurement_covariance_handles_a_single_difference():
+    """Two measurements give one difference and no off-diagonal to correct."""
+    model = _constant_mean_model(np.full((1, T_GRID), 30.0))
+    ref_dat = _ref_dat(1)
+    ref_dat.prediction_indices = {F: [0, 5]}
+    ref_dat.sigma_of_the_mean = {F: np.array([[1e-3], [2e-3]])}
+
+    cov = model._differenced_measurement_covariance(F, ref_dat)
+    assert cov.shape == (1, 1, 1)
+    np.testing.assert_allclose(cov[0, 0, 0], 1e-6 + 4e-6, rtol=RTOL)

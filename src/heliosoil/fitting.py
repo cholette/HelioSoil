@@ -107,6 +107,101 @@ class CommonFittingMethods:
 
         return s2total
 
+    # ------------------------------------------------------------------
+    # Pieces of the multi-mirror difference covariance that do not depend on the
+    # deposition mechanism. Assembled into a full covariance later; on their own they
+    # describe how a reflectance DIFFERENCE relates to the measurements behind it.
+    # ------------------------------------------------------------------
+
+    def _difference_windows(self, f, reflectance_data):
+        """
+        Simulation-grid slices spanned by each reflectance difference.
+
+        Difference ``i`` covers deposition intervals ``k_{i-1}+1 ... k_i`` inclusive,
+        matching the inclusive cumulative sum in ``compute_soiling_factor`` that forms the
+        mean. Because all mirrors in an experiment share a measurement grid, these windows
+        partition the timeline: they are disjoint and together cover every interval between
+        the first and last measurement.
+
+        Args:
+            f: Experiment (file) key.
+            reflectance_data (ReflectanceMeasurements): Supplies ``prediction_indices``.
+
+        Returns:
+            list[slice]: One slice per difference.
+        """
+        pi = reflectance_data.prediction_indices[f]
+        return [slice(pi[i] + 1, pi[i + 1] + 1) for i in range(len(pi) - 1)]
+
+    def _reflectance_loss_factor(self, f, reflectance_data=None):
+        """
+        Reflectance lost per unit soiled area, per mirror: ``b = rho_nominal * inc_ref_factor``.
+
+        Returned per mirror rather than as a scalar because the reference-mirror drift
+        correction gives each mirror its own nominal reflectance at the moment its rho0 was
+        recorded; without a reference column every entry is the same fixed constant.
+
+        Assumes a fixed reflectometer incidence angle within an experiment, so that ``b`` is
+        the same at both ends of a reflectance difference.
+
+        Args:
+            f: Experiment (file) key.
+            reflectance_data (ReflectanceMeasurements, optional): Supplies the
+                reference-derived nominal reflectance. Omitted or without one for this
+                file, the fixed ``helios.nominal_reflectance`` is used.
+
+        Returns:
+            numpy.ndarray: Loss factor per mirror, shape (n_mirrors,).
+
+        Raises:
+            ValueError: If ``inc_ref_factor[f]`` is not a single value.
+        """
+        inc = np.asarray(self.helios.inc_ref_factor[f])
+        if inc.size != 1:
+            raise ValueError(
+                f"Experiment {f} has {inc.size} incidence-reflectance factors. The fitting likelihoods assume a fixed reflectometer "
+                "incidence angle per experiment."
+            )
+        anchor = _nominal_reflectance_anchor(reflectance_data, f, self.helios.nominal_reflectance)
+        n_mirrors = self.helios.tilt[f].shape[0]
+        return np.broadcast_to(np.asarray(anchor, dtype=float) * float(inc.reshape(-1)[0]), (n_mirrors,)).copy()
+
+    def _differenced_measurement_covariance(self, f, reflectance_data, endpoint_correction=True):
+        """
+        Covariance of the differenced reflectometer noise, per mirror.
+
+        Stacking a mirror's measurement noise as ``eps`` with diagonal covariance
+        ``Sigma_r``, the differences carry ``Delta eps`` for the first-difference operator
+        ``Delta``, so their covariance is ``R = Delta Sigma_r Delta'`` -- tridiagonal, with
+        ``sigma_{k_i}^2 + sigma_{k_{i-1}}^2`` on the diagonal and ``-sigma_{k_i}^2`` off it.
+        The off-diagonal is the negative correlation induced by the measurement two
+        consecutive differences share at their common endpoint.
+
+        Setting ``endpoint_correction`` False keeps only the diagonal, i.e. treats the
+        differences as independent -- the approximation the current likelihoods make.
+
+        Args:
+            f: Experiment (file) key.
+            reflectance_data (ReflectanceMeasurements): Supplies ``sigma_of_the_mean``.
+            endpoint_correction (bool): Whether to include the shared-endpoint
+                off-diagonal terms.
+
+        Returns:
+            numpy.ndarray: Covariance, shape (n_mirrors, n_differences, n_differences).
+        """
+        s2 = np.asarray(reflectance_data.sigma_of_the_mean[f]) ** 2  # (n_meas, n_mirrors)
+        n_diff, n_mirrors = s2.shape[0] - 1, s2.shape[1]
+
+        cov = np.zeros((n_mirrors, n_diff, n_diff))
+        diag = np.arange(n_diff)
+        for p in range(n_mirrors):
+            cov[p, diag, diag] = s2[1:, p] + s2[:-1, p]
+            if endpoint_correction and n_diff > 1:
+                shared = -s2[1:n_diff, p]
+                cov[p, diag[:-1], diag[:-1] + 1] = shared
+                cov[p, diag[:-1] + 1, diag[:-1]] = shared
+        return cov
+
     def _sse(self, params, simulation_inputs, reflectance_data):
         # Computes the sum of squared errors between a soiling model and
         # the reflectance measurements.
