@@ -2216,6 +2216,208 @@ class ReflectanceMeasurements:
             column_names_to_import=self.imported_column_names,
         )
 
+    def _populate_experiment(
+        self,
+        index: int,
+        times: np.ndarray,
+        average: np.ndarray,
+        sigma: np.ndarray,
+        mirror_names: List[str],
+        time_grid: Any,
+        incidence_angle: float,
+        acceptance_angle: float,
+        tilts: Optional[np.ndarray] = None,
+        reference_values: Optional[np.ndarray] = None,
+        reference_columns: Optional[List[str]] = None,
+        label: Optional[str] = None,
+    ):
+        """
+        Fills the per-experiment dictionaries from arrays.
+
+        Shared by the Excel importer and by ``from_arrays``, so the two constructors agree
+        by construction rather than by two copies of the same algebra staying in step.
+
+        Args:
+            index: Experiment key.
+            times: Measurement times, shape (n_measurements,).
+            average: Mean reflectance as a **fraction**, not a percentage, shape
+                (n_measurements, n_mirrors). The Excel importer divides by 100 before
+                calling.
+            sigma: Standard deviation of the measurements, same shape and units as
+                ``average``.
+            mirror_names: One name per mirror (reference-mirror columns already removed).
+            time_grid: Simulation time grid, used to locate each measurement.
+            incidence_angle: Reflectometer incidence angle [degrees].
+            acceptance_angle: Reflectometer acceptance half-angle [radians].
+            tilts: Optional tilts, shape (n_mirrors, n_times) on the simulation grid.
+            reference_values: Optional reference-mirror reading as a fraction, shape
+                (n_measurements,), already averaged if several reference columns exist.
+                ``None`` means no reference mirror: the drift factor is unity and
+                ``nominal_reflectance`` is left unset, which is what tells the fitting
+                code to fall back to the fixed nominal-reflectance constant.
+            reference_columns: Names of the reference columns, recorded for provenance.
+            label: Name used in log messages; defaults to the experiment index.
+
+        Notes:
+            ``number_of_measurements[index]`` must already be set, since
+            ``sigma_of_the_mean`` divides by its square root.
+        """
+        where = f"File {label}" if label is not None else f"Experiment {index}"
+        self.times[index] = np.asarray(times)
+        self.mirror_names[index] = list(mirror_names)
+        self.reference_mirror_columns[index] = list(reference_columns or [])
+
+        average = np.asarray(average, dtype=float)
+        sigma = np.asarray(sigma, dtype=float)
+
+        # Ensure 2D arrays for both single and multiple columns
+        if average.ndim == 1:
+            self.average[index] = average.reshape(-1, 1)
+            self.sigma[index] = sigma.reshape(-1, 1)
+        else:
+            self.average[index] = average
+            self.sigma[index] = sigma
+
+        # Reference-derived nominal reflectance: each mirror's own first VALID
+        # (non-NaN) reading is its clean baseline (mirrors can be added
+        # mid-campaign with leading NaNs, so this can't assume row 0). drift_factor
+        # tracks how much the reference mirror's own reading has moved since ITS
+        # own first valid reading, forward-filled across gaps. nominal_reflectance
+        # is populated only when a genuine, usable reference reading was supplied --
+        # its absence per file is what signals fitting code to fall back to the
+        # fixed nominal_reflectance constant instead.
+        n_time_ii, n_mirrors_ii = self.average[index].shape
+        valid_avg = ~np.isnan(self.average[index])
+        has_any_valid_mirror = valid_avg.any(axis=0)
+        first_valid_row = np.argmax(valid_avg, axis=0)  # first True; meaningless (0) where no valid reading exists
+        campaign_clean_baseline = np.where(has_any_valid_mirror, self.average[index][first_valid_row, np.arange(n_mirrors_ii)], np.nan)
+
+        if reference_values is None:
+            self.drift_factor[index] = np.ones(n_time_ii)
+        else:
+            reference_values = np.asarray(reference_values, dtype=float)
+            valid_ref = ~np.isnan(reference_values)
+            if not valid_ref.any():
+                logger.warning(f"{where}: reference-mirror column(s) {self.reference_mirror_columns[index]} are entirely NaN; ignoring.")
+                self.drift_factor[index] = np.ones(n_time_ii)
+            else:
+                t0_idx = np.flatnonzero(valid_ref)[0]
+                raw_ratio = reference_values / reference_values[t0_idx]
+                drift = pd.Series(np.where(valid_ref, raw_ratio, np.nan)).ffill().to_numpy(copy=True)
+                drift[:t0_idx] = 1.0
+                self.drift_factor[index] = drift
+                self.nominal_reflectance[index] = campaign_clean_baseline[None, :] * drift[:, None]
+
+        # Calculate delta_ref with proper dimensions
+        self.delta_ref[index] = np.vstack((np.zeros((1, self.average[index].shape[1])), -np.diff(self.average[index], axis=0)))
+
+        # Set up prediction indices and times
+        time_grid = np.asarray(time_grid)
+        self.prediction_indices[index] = []
+        self.prediction_times[index] = []
+        for m in self.times[index]:
+            self.prediction_indices[index].append(np.argmin(np.abs(m - time_grid)))
+        self.prediction_times[index].append(time_grid[self.prediction_indices[index]])
+
+        # Calculate initial reflectance (rho0), handling NaN values
+        self.rho0[index] = np.nanmax(self.average[index], axis=0)
+        self.rho0_index[index] = _safe_nanargmax(self.average[index], axis=0)
+
+        # Set reflectometer parameters
+        self.reflectometer_incidence_angle[index] = incidence_angle
+        self.reflectometer_acceptance_angle[index] = acceptance_angle
+        self.sigma_of_the_mean[index] = self.sigma[index] / np.sqrt(self.number_of_measurements[index])
+
+        if tilts is not None:
+            self.tilts[index] = np.asarray(tilts)
+
+    @classmethod
+    def from_arrays(
+        cls,
+        times: List[Any],
+        average: List[np.ndarray],
+        sigma: List[np.ndarray],
+        time_grids: List[Any],
+        tilts: Optional[List[np.ndarray]] = None,
+        mirror_names: Optional[List[List[str]]] = None,
+        number_of_measurements: Any = 1.0,
+        reflectometer_incidence_angle: Any = 0.0,
+        reflectometer_acceptance_angle: Any = 0.0,
+        names: Optional[List[str]] = None,
+        reference_values: Optional[List[Optional[np.ndarray]]] = None,
+    ) -> "ReflectanceMeasurements":
+        """
+        Builds a ReflectanceMeasurements from arrays instead of Excel files.
+
+        For synthetic data, tests, and any workflow that has measurements in memory. The
+        per-experiment fields are filled by the same ``_populate_experiment`` the Excel
+        importer uses, so the two constructors agree by construction.
+
+        Args:
+            times: Measurement times for each experiment.
+            average: Mean reflectance for each experiment as a **fraction**, shape
+                (n_measurements, n_mirrors). Note the Excel sheets are in percent and are
+                converted on import; no conversion happens here.
+            sigma: Measurement standard deviations, same shapes and units as ``average``.
+            time_grids: Simulation time grid for each experiment.
+            tilts: Optional tilts for each experiment, shape (n_mirrors, n_times).
+            mirror_names: Optional names; defaults to "mirror_0", "mirror_1", ...
+            number_of_measurements: Repeats behind each mean, per experiment or global.
+            reflectometer_incidence_angle: Incidence angle [degrees], per experiment or
+                global.
+            reflectometer_acceptance_angle: Acceptance half-angle [radians], per
+                experiment or global.
+            names: Optional labels used in place of file paths.
+            reference_values: Optional per-experiment reference-mirror readings (a
+                fraction, shape (n_measurements,)), for building synthetic data that
+                exercises the drift correction. The default of ``None`` everywhere means
+                no reference mirror, so ``nominal_reflectance`` is left unset and the
+                fitting code uses the fixed nominal-reflectance constant -- the behaviour
+                of a campaign file with no reference column.
+
+        Returns:
+            ReflectanceMeasurements: A populated instance.
+
+        Raises:
+            ValueError: If the per-experiment lists have inconsistent lengths.
+        """
+        average = _ensure_list(average)
+        sigma = _ensure_list(sigma)
+        times = _ensure_list(times)
+        time_grids = _ensure_list(time_grids)
+        n = len(average)
+
+        for label, supplied in (("sigma", sigma), ("times", times), ("time_grids", time_grids)):
+            if len(supplied) != n:
+                raise ValueError(f"{label} has {len(supplied)} entries but average has {n}; one entry per experiment is required.")
+
+        self = cls()  # empty: __post_init__ imports nothing when there are no files
+        self.files = list(names) if names is not None else [f"array_{ii}" for ii in range(n)]
+        self.number_of_measurements = _import_option_helper(self.files, number_of_measurements)
+        self.reflectometer_incidence_angle = _import_option_helper(self.files, reflectometer_incidence_angle)
+        self.reflectometer_acceptance_angle = _import_option_helper(self.files, reflectometer_acceptance_angle)
+
+        for ii in range(n):
+            columns = np.asarray(average[ii]).reshape(len(times[ii]), -1).shape[1]
+            names_ii = mirror_names[ii] if mirror_names is not None else [f"mirror_{jj}" for jj in range(columns)]
+            reference_ii = None if reference_values is None else reference_values[ii]
+
+            self._populate_experiment(
+                ii,
+                times[ii],
+                average[ii],
+                sigma[ii],
+                names_ii,
+                time_grids[ii],
+                self.reflectometer_incidence_angle[ii],
+                self.reflectometer_acceptance_angle[ii],
+                tilts=None if tilts is None else tilts[ii],
+                reference_values=reference_ii,
+                label=str(self.files[ii]),
+            )
+
+        return self
+
     def import_reflectance_data(
         self,
         time_grids: List[Any],
@@ -2249,7 +2451,6 @@ class ReflectanceMeasurements:
             # branch below, so neither can ever treat one as a soiling-subject mirror.
             candidate_cols = [c for c in reflectance_data["Average"].columns if c != time_column]
             ref_cols = [c for c in candidate_cols if _is_reference_mirror_column(c)]
-            self.reference_mirror_columns[ii] = ref_cols
             if not ref_cols:
                 ref_values = None
             elif len(ref_cols) == 1:
@@ -2268,76 +2469,37 @@ class ReflectanceMeasurements:
                 # Extract selected columns
                 avg_data = reflectance_data["Average"][column_names_to_import].values / 100.0
                 sig_data = reflectance_data["Sigma"][column_names_to_import].values / 100.0
-                self.mirror_names[ii] = column_names_to_import
+                mirror_names_ii = list(column_names_to_import)
             else:
                 # Extract all columns except the first (time) column
                 avg_data = reflectance_data["Average"].iloc[:, 1:].values / 100.0
                 sig_data = reflectance_data["Sigma"].iloc[:, 1:].values / 100.0
-                self.mirror_names[ii] = list(reflectance_data["Average"].keys())[1:]
+                mirror_names_ii = list(reflectance_data["Average"].keys())[1:]
 
-            # Ensure 2D arrays for both single and multiple columns
-            if avg_data.ndim == 1:
-                self.average[ii] = avg_data.reshape(-1, 1)
-                self.sigma[ii] = sig_data.reshape(-1, 1)
-            else:
-                self.average[ii] = avg_data
-                self.sigma[ii] = sig_data
-
-            # Reference-derived nominal reflectance: each mirror's own first VALID
-            # (non-NaN) reading is its clean baseline (mirrors can be added
-            # mid-campaign with leading NaNs, so this can't assume row 0). drift_factor
-            # tracks how much the reference mirror's own reading has moved since ITS
-            # own first valid reading, forward-filled across gaps. nominal_reflectance
-            # is populated only when a genuine, usable reference column was found --
-            # its absence per file is what signals fitting code to fall back to the
-            # fixed nominal_reflectance constant instead.
-            n_time_ii, n_mirrors_ii = self.average[ii].shape
-            valid_avg = ~np.isnan(self.average[ii])
-            has_any_valid_mirror = valid_avg.any(axis=0)
-            first_valid_row = np.argmax(valid_avg, axis=0)  # first True; meaningless (0) where no valid reading exists
-            campaign_clean_baseline = np.where(has_any_valid_mirror, self.average[ii][first_valid_row, np.arange(n_mirrors_ii)], np.nan)
-
-            if ref_values is None:
-                self.drift_factor[ii] = np.ones(n_time_ii)
-            else:
-                valid_ref = ~np.isnan(ref_values)
-                if not valid_ref.any():
-                    logger.warning(f"File {fpath}: reference-mirror column(s) {ref_cols} are entirely NaN; ignoring.")
-                    self.drift_factor[ii] = np.ones(n_time_ii)
-                else:
-                    t0_idx = np.flatnonzero(valid_ref)[0]
-                    raw_ratio = ref_values / ref_values[t0_idx]
-                    drift = pd.Series(np.where(valid_ref, raw_ratio, np.nan)).ffill().to_numpy(copy=True)
-                    drift[:t0_idx] = 1.0
-                    self.drift_factor[ii] = drift
-                    self.nominal_reflectance[ii] = campaign_clean_baseline[None, :] * drift[:, None]
-
-            # Calculate delta_ref with proper dimensions
-            self.delta_ref[ii] = np.vstack((np.zeros((1, self.average[ii].shape[1])), -np.diff(self.average[ii], axis=0)))
-
-            # Set up prediction indices and times
-            self.prediction_indices[ii] = []
-            self.prediction_times[ii] = []
-            for m in self.times[ii]:
-                self.prediction_indices[ii].append(np.argmin(np.abs(m - time_grids[ii])))
-            self.prediction_times[ii].append(time_grids[ii][self.prediction_indices[ii]])
-
-            # Calculate initial reflectance (rho0), handling NaN values
-            self.rho0[ii] = np.nanmax(self.average[ii], axis=0)
-            self.rho0_index[ii] = _safe_nanargmax(self.average[ii], axis=0)
-
-            # Set reflectometer parameters
-            self.reflectometer_incidence_angle[ii] = incidence_angles[ii]
-            self.reflectometer_acceptance_angle[ii] = acceptance_angles[ii]
-            self.sigma_of_the_mean[ii] = self.sigma[ii] / np.sqrt(self.number_of_measurements[ii])
-
-            # Import tilts if requested
+            # Import tilts if requested. Read here (this is the Excel-specific part) and
+            # handed to _populate_experiment, which owns every derived field.
+            tilt_data = None
             if import_tilts:
-                tilt_data = pd.read_excel(fpath, sheet_name="Tilts")[self.mirror_names[ii]].values
+                tilt_data = pd.read_excel(fpath, sheet_name="Tilts")[mirror_names_ii].values
                 if tilt_data.ndim == 1:
-                    self.tilts[ii] = tilt_data.reshape(1, -1)  # Single row becomes (1, n_times)
+                    tilt_data = tilt_data.reshape(1, -1)  # Single row becomes (1, n_times)
                 else:
-                    self.tilts[ii] = tilt_data.transpose()  # Shape becomes (n_heliostats, n_times)
+                    tilt_data = tilt_data.transpose()  # Shape becomes (n_heliostats, n_times)
+
+            self._populate_experiment(
+                ii,
+                self.times[ii],
+                avg_data,
+                sig_data,
+                mirror_names_ii,
+                time_grids[ii],
+                incidence_angles[ii],
+                acceptance_angles[ii],
+                tilts=tilt_data,
+                reference_values=ref_values,
+                reference_columns=ref_cols,
+                label=str(fpath),
+            )
 
     def get_experiment_subset(self, idx):
         attributes = [a for a in dir(self) if not a.startswith("__")]  # filters out python standard attributes
