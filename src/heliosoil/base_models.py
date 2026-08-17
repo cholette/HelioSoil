@@ -2154,18 +2154,19 @@ class ReflectanceMeasurements:
         metadata={"description": "A fine grid of times where reflectance measurements are desired (e.g. at times where simulations are available)."},
     )
     number_of_measurements: Optional[List[float]] = field(
-        default_factory=list, metadata={"description": "Number of measurements for each file. This should be a float for later operations."}
+        default=None, metadata={"description": "Number of measurements for each file. This should be a float for later operations. None -> 1.0 each."}
     )
     reflectometer_incidence_angle: Optional[List[float]] = field(
-        default_factory=list, metadata={"description": "Incidence angle of the reflectometer for each file.", "units": "degrees"}
+        default=None, metadata={"description": "Incidence angle of the reflectometer for each file. None -> 0.0 each.", "units": "degrees"}
     )
     reflectometer_acceptance_angle: Optional[List[float]] = field(
-        default_factory=list,
-        metadata={"description": "Half-angle describing the (conical) acceptance solid angle of the reflectometer ", "units": "radians"},
+        default=None,
+        metadata={"description": "Half-angle describing the (conical) acceptance solid angle of the reflectometer. None -> 0.0 each.", "units": "radians"},
     )
     import_tilts: bool = False
     imported_column_names: Optional[List[str]] = field(
-        default_factory=list, metadata={"description": "List of column names to import from the reflectance data files."}
+        default=None,
+        metadata={"description": "Column names to import from the reflectance data files. None (the default) imports every mirror column."},
     )
     verbose: bool = True
 
@@ -2195,17 +2196,17 @@ class ReflectanceMeasurements:
         if self.number_of_measurements is None:
             self.number_of_measurements = [1.0] * n
         else:
-            self.number_of_measurements = _import_option_helper(self.files, self.number_of_measurements)
+            self.number_of_measurements = _import_option_helper(self.files, self.number_of_measurements, "number_of_measurements")
 
         if self.reflectometer_incidence_angle is None:
             self.reflectometer_incidence_angle = [0.0] * n
         else:
-            self.reflectometer_incidence_angle = _import_option_helper(self.files, self.reflectometer_incidence_angle)
+            self.reflectometer_incidence_angle = _import_option_helper(self.files, self.reflectometer_incidence_angle, "reflectometer_incidence_angle")
 
         if self.reflectometer_acceptance_angle is None:
             self.reflectometer_acceptance_angle = [0.0] * n
         else:
-            self.reflectometer_acceptance_angle = _import_option_helper(self.files, self.reflectometer_acceptance_angle)
+            self.reflectometer_acceptance_angle = _import_option_helper(self.files, self.reflectometer_acceptance_angle, "reflectometer_acceptance_angle")
 
         # Finally, import the data
         self.import_reflectance_data(
@@ -2393,9 +2394,9 @@ class ReflectanceMeasurements:
 
         self = cls()  # empty: __post_init__ imports nothing when there are no files
         self.files = list(names) if names is not None else [f"array_{ii}" for ii in range(n)]
-        self.number_of_measurements = _import_option_helper(self.files, number_of_measurements)
-        self.reflectometer_incidence_angle = _import_option_helper(self.files, reflectometer_incidence_angle)
-        self.reflectometer_acceptance_angle = _import_option_helper(self.files, reflectometer_acceptance_angle)
+        self.number_of_measurements = _import_option_helper(self.files, number_of_measurements, "number_of_measurements")
+        self.reflectometer_incidence_angle = _import_option_helper(self.files, reflectometer_incidence_angle, "reflectometer_incidence_angle")
+        self.reflectometer_acceptance_angle = _import_option_helper(self.files, reflectometer_acceptance_angle, "reflectometer_acceptance_angle")
 
         for ii in range(n):
             columns = np.asarray(average[ii]).reshape(len(times[ii]), -1).shape[1]
@@ -2465,6 +2466,14 @@ class ReflectanceMeasurements:
                 reflectance_data["Sigma"] = reflectance_data["Sigma"].drop(columns=ref_cols)
 
             # Import data and ensure proper dimensions, Reflectance assumed to be in % based hence / 100
+            # An explicit empty list selects no mirrors at all, which silently produced an
+            # (n_times, 0) array and a model with nothing to fit. None is how "import every
+            # column" is expressed; an empty list is a caller error.
+            if column_names_to_import is not None and len(column_names_to_import) == 0:
+                raise ValueError(
+                    f"imported_column_names is empty for file {fpath}, which would import no mirrors at all. "
+                    "Pass None (the default) to import every mirror column, or name the columns you want."
+                )
             if column_names_to_import is not None:
                 # Extract selected columns
                 avg_data = reflectance_data["Average"][column_names_to_import].values / 100.0

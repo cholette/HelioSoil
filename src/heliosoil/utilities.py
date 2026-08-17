@@ -166,11 +166,29 @@ def _check_keys(simulation_data, reflectance_data):
             raise ValueError("Filenames in simulation data and reflectance do not match. Please ensure you imported the same list of files for both.")
 
 
-def _import_option_helper(file_list, option):
+def _import_option_helper(file_list, option, name="option"):
+    """Broadcast a per-experiment option to one entry per file.
+
+    A list or array must already have one entry per experiment; anything else (a scalar,
+    a string) is repeated for every experiment.
+
+    Args:
+        file_list: The experiment files the option applies to.
+        option: A per-experiment sequence, or a single value to apply to all of them.
+        name: The option's name, used in the error message.
+
+    Returns:
+        list: One entry per file.
+
+    Raises:
+        ValueError: If a sequence is supplied whose length is not len(file_list).
+    """
     if isinstance(option, (list, np.ndarray)):
-        assert len(file_list) == len(option), (
-            "Please supply a list for {option} containing one string for each experiment. Or, supply a single global type by specifying a string. "
-        )
+        if len(file_list) != len(option):
+            raise ValueError(
+                f"{name} has {len(option)} entries but there are {len(file_list)} experiment(s). Supply one entry per experiment, "
+                f"or a single value to apply to all of them."
+            )
     else:
         option = [option] * len(file_list)
 

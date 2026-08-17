@@ -280,3 +280,48 @@ def test_from_arrays_rejects_ragged_inputs():
             sigma=[SIGMA_PERCENT / 100.0, SIGMA_PERCENT / 100.0],
             time_grids=[TIME_GRID],
         )
+
+
+# ---------------------------------------------------------------------------
+# Constructor defaults
+# ---------------------------------------------------------------------------
+
+
+def test_importer_optional_arguments_may_be_omitted(tmp_path):
+    """The optional constructor arguments fall back to their documented defaults.
+
+    number_of_measurements, the two reflectometer angles and imported_column_names are all
+    documented as Optional and handled as None, but previously defaulted to an empty list.
+    Omitting the angles or the count then tripped the length check in _import_option_helper,
+    and omitting imported_column_names silently selected zero mirror columns. Every caller
+    in the repository passes all four explicitly, which is why it went unnoticed.
+    """
+    path = _write_workbook(tmp_path / "experiment.xlsx")
+    data = ReflectanceMeasurements(files=[str(path)], time_grids=[TIME_GRID])
+
+    assert data.average[0].shape == (len(TIMES), len(MIRROR_NAMES))
+    assert data.mirror_names[0] == MIRROR_NAMES
+    assert data.number_of_measurements == [1.0]
+    assert data.reflectometer_incidence_angle == [0.0]
+    assert data.reflectometer_acceptance_angle == [0.0]
+
+    # sigma_of_the_mean divides by sqrt(1) in this case, i.e. it equals sigma.
+    np.testing.assert_allclose(data.sigma_of_the_mean[0], SIGMA_PERCENT / 100.0, rtol=RTOL, atol=ATOL)
+
+
+def test_importer_rejects_an_explicitly_empty_column_list(tmp_path):
+    """An empty list is a caller error, not a synonym for "every column"."""
+    path = _write_workbook(tmp_path / "experiment.xlsx")
+    with pytest.raises(ValueError, match="would import no mirrors"):
+        ReflectanceMeasurements(files=[str(path)], time_grids=[TIME_GRID], imported_column_names=[])
+
+
+def test_importer_reports_which_option_has_the_wrong_length(tmp_path):
+    """A mismatched per-experiment list names itself and both lengths.
+
+    The old message was a plain string containing a literal "{option}" placeholder, so it
+    identified neither the option nor the sizes.
+    """
+    path = _write_workbook(tmp_path / "experiment.xlsx")
+    with pytest.raises(ValueError, match=r"number_of_measurements has 2 entries but there are 1 experiment"):
+        ReflectanceMeasurements(files=[str(path)], time_grids=[TIME_GRID], number_of_measurements=[9.0, 9.0])
