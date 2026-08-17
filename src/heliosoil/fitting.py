@@ -96,8 +96,13 @@ class CommonFittingMethods:
                 meas_sig = reflectance_data.sigma_of_the_mean[f]
 
             c2t = np.cumsum(alpha**2 * gravitational_settling_factor(self.helios.tilt[f]) ** 2, axis=1).transpose()
+            # Difference i spans deposition intervals k_{i-1}+1 ... k_i INCLUSIVE, matching
+            # the inclusive cumulative sum in compute_soiling_factor that forms the mean:
+            # soiling_factor[k] already contains delta_soiled_area[k]. Taking the cumulative
+            # sum at ind2 = k_i (not k_i - 1) is what makes the variance cover the same
+            # intervals the mean difference accumulates.
             ind1 = pif[0:-1]
-            ind2 = [x - 1 for x in pif[1::]]
+            ind2 = pif[1::]
             s2total[f] = s2_dep * b**2 * (c2t[ind2, :] - c2t[ind1, :]) + meas_sig[0:-1, :] ** 2 + meas_sig[1::, :] ** 2
 
         return s2total

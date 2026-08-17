@@ -1,0 +1,17 @@
+# Store text files in the repository with LF line endings. Working-tree
+# endings follow each machine's core.autocrlf / core.eol, so Windows and
+# Linux checkouts of the same commit both read as clean.
+* text=auto
+
+# Binary formats: never end-of-line converted or text-diffed.
+*.dll   binary
+*.xlsx  binary
+*.xlsm  binary
+*.docx  binary
+*.pptx  binary
+*.pdf   binary
+*.png   binary
+*.jpg   binary
+*.pkl   binary
+*.pickle binary
+*.mat   binary

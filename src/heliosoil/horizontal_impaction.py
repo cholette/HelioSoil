@@ -817,8 +817,11 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
             wind_dir = sim_in.wind_direction[f] if self._needs_wind else None
             wind_speed = sim_in.wind_speed[f] if self._needs_wind else None
 
+            # Difference i spans deposition intervals k_{i-1}+1 ... k_i INCLUSIVE, matching
+            # the inclusive cumulative sum in compute_soiling_factor that forms the mean.
+            # See CommonFittingMethods._compute_variance_of_measurements.
             ind1 = pif[0:-1]
-            ind2 = [x - 1 for x in pif[1::]]
+            ind2 = pif[1::]
 
             total_delta = np.zeros((len(ind1), tilt.shape[0]))
             for component in self.components:
@@ -922,12 +925,20 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
         y, y_cov = CommonFittingMethods.fit_mle(
             self, simulation_inputs, reflectance_data, verbose=False, x0=x0, transform_to_original_scale=False, **optim_kwargs
         )
-        H_log = np.linalg.inv(y_cov)
 
         _print_if("========== MLE Estimates ======== ", verbose)
         if transform_to_original_scale:
-            x_hat, H = self.transform_scale(y, H_log)
-            x_hat_cov = np.linalg.inv(H)
+            x_hat = self.transform_scale(y)
+            # Transform the covariance directly rather than inverting y_cov back to a Hessian,
+            # transforming that, and inverting again. The two are algebraically identical, but
+            # the round trip inverts a matrix that is near-singular whenever a variance
+            # parameter fits to its bound -- a routine outcome, since sigma >= 0 makes the
+            # constraint active whenever the observed scatter is no larger than the
+            # measurement noise already predicts -- and raises LinAlgError there.
+            # d(natural)/d(fitted) is exp(y) = x_hat at the log-transformed entries and 1 at
+            # the linear ones, so with J diagonal the delta method is cov -> J cov J.
+            jacobian = np.where(self._log_transform[: len(y)], x_hat, 1.0)
+            x_hat_cov = (jacobian[:, None] * y_cov) * jacobian[None, :]
         else:
             x_hat = y
             x_hat_cov = y_cov
