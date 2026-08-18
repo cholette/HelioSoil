@@ -359,9 +359,10 @@ def test_shared_and_per_mechanism_agree_when_the_fractions_are_equal():
 
 
 def _three_mirror_case(tilts):
+    """A small field at the given tilts, with azimuths spread so no two mirrors coincide."""
     concentration, speed, direction = _weather()
     tilt = np.array([[t] * T_GRID for t in tilts])
-    azimuth = np.array([[a] * T_GRID for a in [10.0, 130.0, 250.0][: len(tilts)]])
+    azimuth = np.array([[10.0 + 47.0 * p] * T_GRID for p in range(len(tilts))])
     return _wind_model(tilt, azimuth), _sim_in(concentration, speed, direction), _ref_dat(len(tilts))
 
 
@@ -371,6 +372,51 @@ def test_loaded_mirror_counts_ignores_mirrors_a_mechanism_does_not_touch():
     counts = model.loaded_mirror_counts(sim_in, ref_dat)
     assert counts["sigma_dep"] == 2  # tilts 0 and 45; 120 is past vertical
     assert counts["sigma_dep_gamma"] == 2  # tilts 45 and 120; sin(0) = 0
+
+
+def test_a_numerically_zero_loading_does_not_count_as_loaded():
+    """cos(90 deg) is 6.1e-17 and sin(180 deg) is 1.2e-16, not 0.
+
+    An exact test therefore counts a vertical mirror as gravitationally loaded and a
+    face-down one as wind-loaded. On the Yadnarie field that inflated the counts enough to
+    let the identifiability guard pass a mechanism with numerically zero support.
+    """
+    # Two horizontal (gravitational only), two vertical, one face-down (neither, bar the
+    # floating-point residue this test is about).
+    model, sim_in, ref_dat = _three_mirror_case([0.0, 0.0, 90.0, 90.0, 180.0])
+    counts = model.loaded_mirror_counts(sim_in, ref_dat)
+    assert counts["sigma_dep"] == 2  # the two horizontal ones; cos(90) and cos(180) do not count
+    assert counts["sigma_dep_gamma"] == 2  # the two vertical ones; sin(0) and sin(180) do not count
+
+    # The exact-zero test the tolerance replaced would have counted every mirror.
+    naive = {}
+    for channel in model.noise_channels(0, sim_in):
+        loading = np.asarray(channel.loading, dtype=float)
+        naive[channel.name] = int(np.count_nonzero(np.any(loading != 0.0, axis=1)))
+    assert naive["sigma_dep"] > counts["sigma_dep"]
+
+
+def test_a_small_but_real_loading_still_counts():
+    """The tolerance is relative and generous: a mirror one tenth of a degree off vertical
+    has a gravitational loading of 1.7e-3 relative, which is real and must be counted."""
+    model, sim_in, ref_dat = _three_mirror_case([0.0, 89.9])
+    assert model.loaded_mirror_counts(sim_in, ref_dat)["sigma_dep"] == 2
+
+
+def test_a_non_finite_loading_counts_as_unloaded():
+    """Mirrors added mid-campaign carry NaN tilts before trimming. Counting them as
+    unloaded makes the guard stricter, never falsely permissive."""
+    model, sim_in, ref_dat = _three_mirror_case([0.0, 0.0, 30.0])
+    model.helios.tilt[0] = model.helios.tilt[0].copy()
+    model.helios.tilt[0][2, :] = np.nan
+    assert model.loaded_mirror_counts(sim_in, ref_dat)["sigma_dep"] == 2
+
+
+def test_a_mechanism_that_loads_nothing_counts_zero():
+    """The peak is then zero, and the tolerance must not turn that into a divide or a
+    vacuous 'everything exceeds zero'."""
+    model, sim_in, ref_dat = _three_mirror_case([0.0, 0.0])  # sin(0) = 0 exactly
+    assert model.loaded_mirror_counts(sim_in, ref_dat)["sigma_dep_gamma"] == 0
 
 
 def test_independent_needs_no_mirrors_at_all():

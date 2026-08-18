@@ -378,7 +378,7 @@ class CommonFittingMethods:
             raise ValueError(f"The common variance fraction {name} must be in [0, 1], got {value}.")
         return value
 
-    def loaded_mirror_counts(self, simulation_inputs, reflectance_data):
+    def loaded_mirror_counts(self, simulation_inputs, reflectance_data, tolerance=1e-12):
         """How many mirrors each mechanism actually loads, at best, in any one experiment.
 
         A mechanism's common fraction is identified by mirrors that feel it *together*: the
@@ -387,9 +387,24 @@ class CommonFittingMethods:
         face-down mirror, normal wind on a horizontal one) contributes to neither, so it is
         not counted. See the soiling model notes, eq. (94).
 
+        "Does not load" has to be judged against a tolerance rather than against exact zero.
+        The geometry factors are trigonometric, and ``cos(90 degrees)`` is 6.1e-17 rather
+        than 0, ``sin(180 degrees)`` 1.2e-16 -- so an exact test counts a vertical mirror as
+        gravitationally loaded and a face-down one as wind-loaded, at relative magnitudes
+        around 1e-16. On the Yadnarie field that inflated the counts from 7/7/7/10/5 to
+        9/9/8/10/7, enough to let ``_check_variance_components_identifiable`` pass a
+        mechanism whose support is numerically zero.
+
+        Non-finite loadings count as unloaded. That can only make the guard stricter, never
+        falsely permissive, which is the safe direction for a check of this kind.
+
         Args:
             simulation_inputs (SimulationInputs): Simulation inputs.
             reflectance_data (ReflectanceMeasurements): Measurement data.
+            tolerance (float): A mirror counts as loaded where its loading exceeds this
+                fraction of the mechanism's largest loading anywhere in the experiment.
+                Relative, so it is insensitive to the mechanism's physical units -- which
+                differ between mechanisms by a factor of about seven on real data.
 
         Returns:
             dict: Magnitude name -> the largest number of mirrors it loads in one experiment.
@@ -397,8 +412,11 @@ class CommonFittingMethods:
         counts = {name: 0 for name in self._sigma_param_names}
         for f in reflectance_data.times:
             for channel in self.noise_channels(f, simulation_inputs):
-                loading = np.asarray(channel.loading, dtype=float)
-                loaded = int(np.count_nonzero(np.any(loading != 0.0, axis=1)))
+                loading = np.abs(np.asarray(channel.loading, dtype=float))
+                loading = np.where(np.isfinite(loading), loading, 0.0)
+                # A mechanism that loads nothing at all has peak 0, and `> 0` is then False
+                # everywhere, which is the answer wanted.
+                loaded = int(np.count_nonzero(np.any(loading > tolerance * loading.max(), axis=1)))
                 counts[channel.name] = max(counts.get(channel.name, 0), loaded)
         return counts
 
