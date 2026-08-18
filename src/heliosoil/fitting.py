@@ -2022,12 +2022,14 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, AffineMeanLeastSquares, Commo
     def fit_mle(self, simulation_inputs, reflectance_data, verbose=True, x0=None, transform_to_original_scale=False, save_file=None):
         _print_if("Getting MLE estimates ... ", verbose)
         y, y_cov = super().fit_mle(simulation_inputs, reflectance_data, verbose=False, x0=x0, transform_to_original_scale=False)
-        H_log = np.linalg.inv(y_cov)
 
         _print_if("========== MLE Estimates ======== ", verbose)
         if transform_to_original_scale:
-            x_hat, H = self.transform_scale(y, H_log)
-            x_hat_cov = np.linalg.inv(H)
+            x_hat = self.transform_scale(y)
+            # Transform the covariance directly rather than inverting it to a Hessian,
+            # transforming that, and inverting again.
+            jacobian = self.natural_scale_jacobian(y)
+            x_hat_cov = (jacobian[:, None] * y_cov) * jacobian[None, :]
 
             # print estimates
             fmt = "mu_tilde = {0:.2e}, sigma_dep = {1:.2e}"

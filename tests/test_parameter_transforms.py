@@ -211,6 +211,47 @@ def test_hessian_transform_round_trips():
     np.testing.assert_allclose(fitted, hessian, rtol=1e-9)
 
 
+def test_the_covariance_delta_method_agrees_with_the_hessian_route():
+    """``J cov J`` and ``inv(transform(inv(cov)))`` are the same matrix.
+
+    ``fit_mle`` uses the first. This pins that the switch was algebra, not a change of
+    answer -- for a covariance the inverse route can actually be taken.
+    """
+    model = _constant_mean()
+    y = np.asarray(model.transform_scale([0.014, 7e-4], direction="forward"))
+    rng = np.random.default_rng(11)
+    a = rng.normal(size=(2, 2))
+    y_cov = a @ a.transpose() + np.eye(2)
+
+    jacobian = model.natural_scale_jacobian(y)
+    direct = (jacobian[:, None] * y_cov) * jacobian[None, :]
+
+    _, hessian = model.transform_scale(y, likelihood_hessian=np.linalg.inv(y_cov))
+    np.testing.assert_allclose(direct, np.linalg.inv(hessian), rtol=1e-9)
+
+
+def test_the_covariance_delta_method_survives_a_variance_parameter_on_its_bound():
+    """The two routes stop agreeing where one of them stops existing.
+
+    sigma >= 0 makes the constraint active whenever the observed scatter is no larger than
+    the measurement noise already predicts -- a routine outcome, not a pathology. The
+    curvature is then singular, the round trip through a Hessian raises, and the direct
+    delta method still returns a finite (rank-deficient) covariance.
+    """
+    model = _constant_mean()
+    y = np.asarray(model.transform_scale([0.014, 7e-4], direction="forward"))
+    y_cov = np.array([[0.02, 0.0], [0.0, 0.0]])  # sigma_dep pinned: no curvature left
+
+    with pytest.raises(np.linalg.LinAlgError):
+        np.linalg.inv(y_cov)
+
+    jacobian = model.natural_scale_jacobian(y)
+    x_hat_cov = (jacobian[:, None] * y_cov) * jacobian[None, :]
+    assert np.all(np.isfinite(x_hat_cov))
+    assert x_hat_cov[0, 0] == pytest.approx(0.02 * 0.014**2, rel=RTOL)
+    assert x_hat_cov[1, 1] == 0.0
+
+
 # ---------------------------------------------------------------------------
 # 4. The common fractions on the parameter vector
 # ---------------------------------------------------------------------------
