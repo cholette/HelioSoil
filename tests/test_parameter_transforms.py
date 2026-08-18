@@ -457,6 +457,87 @@ def test_the_guard_reports_the_counts_it_saw():
 
 
 # ---------------------------------------------------------------------------
+# 5b. The MLE warm start
+# ---------------------------------------------------------------------------
+#
+# fit_mle used to warm-start its means with fit_least_squares -- the SCALAR bounded search,
+# whose bracket exists because hrz0 must exceed one. Applied to mu_tilde, which is around
+# 2e-5 on real data, it returned the bracket's lower bound every time. Nothing warned, and
+# the optimiser climbed out of it while there were five parameters; with a common variance
+# fraction it no longer could, and the fit ended on the boundary with a likelihood worse
+# than the null's.
+
+
+def _warm_start_case(variance_model="shared_kappa"):
+    concentration, speed, direction = _weather()
+    tilt = np.array([[t] * T_GRID for t in [10.0, 45.0, 80.0]])
+    azimuth = np.array([[a] * T_GRID for a in [0.0, 120.0, 240.0]])
+    model = _wind_model(tilt, azimuth)
+    model.set_variance_model(variance_model)
+    return model, _sim_in(concentration, speed, direction), _ref_dat(3)
+
+
+def test_the_warm_start_means_come_from_the_linear_fit():
+    """Not from the scalar search, whose bracket is sized for a different parameter."""
+    model, sim_in, ref_dat = _warm_start_case()
+    expected, _ = model.fit_ls(sim_in, ref_dat, verbose=False, transform_to_original_scale=True)
+    x0 = model._initial_parameter_guess(sim_in, ref_dat, verbose=False)
+    np.testing.assert_allclose(x0[: len(model._mean_param_names)], expected, rtol=RTOL)
+
+
+def test_the_warm_start_is_nowhere_near_the_scalar_search_bracket():
+    """The regression itself: a mean of about 1e-5 must not start at the bracket's floor."""
+    model, sim_in, ref_dat = _warm_start_case()
+    lower_bound = model._LS_SCALAR_BOUNDS[0]
+    x0 = model._initial_parameter_guess(sim_in, ref_dat, verbose=False)
+    assert x0[0] < 1e-3 * lower_bound  # mu_tilde, orders of magnitude below the old floor
+
+    # And the scalar search really would have pinned there, on this same data.
+    for name in model._mean_param_names[1:]:
+        setattr(model, name, 0.0)
+    pinned, _ = model.fit_least_squares(sim_in, ref_dat, verbose=False)
+    assert pinned == pytest.approx(lower_bound, rel=1e-4)
+
+
+def test_the_warm_start_puts_every_parameter_in_range():
+    model, sim_in, ref_dat = _warm_start_case()
+    x0 = model._initial_parameter_guess(sim_in, ref_dat, verbose=False)
+    assert len(x0) == len(model.parameter_names)
+    n_mean, n_sigma = len(model._mean_param_names), len(model._sigma_param_names)
+    assert x0[0] > 0.0  # mu_tilde is log-transformed and must be positive
+    assert np.all(x0[n_mean : n_mean + n_sigma] > 0.0)  # so are the magnitudes
+    assert np.all((0.0 < x0[n_mean + n_sigma :]) & (x0[n_mean + n_sigma :] < 1.0))  # kappa interior
+    # It must be a usable starting point, not merely a well-formed one.
+    assert np.isfinite(model._negative_log_likelihood(list(x0), sim_in, ref_dat))
+
+
+def test_the_warm_start_leaves_the_magnitudes_the_caller_set():
+    """fit_ls clears every sigma; the warm start borrows it and must put them back."""
+    model, sim_in, ref_dat = _warm_start_case()
+    model.sigma_dep, model.sigma_dep_gamma = 1.1e-3, 2.2e-6
+    model._initial_parameter_guess(sim_in, ref_dat, verbose=False)
+    assert (model.sigma_dep, model.sigma_dep_gamma) == (1.1e-3, 2.2e-6)
+
+
+@pytest.mark.parametrize("variance_model,extra", [("independent", 0), ("shared_kappa", 1), ("per_mechanism", 2)])
+def test_the_warm_start_is_sized_by_the_variance_model(variance_model, extra):
+    model, sim_in, ref_dat = _warm_start_case(variance_model)
+    x0 = model._initial_parameter_guess(sim_in, ref_dat, verbose=False)
+    assert len(x0) == len(model._mean_param_names) + len(model._sigma_param_names) + extra
+
+
+def test_a_scalar_least_squares_fit_on_its_bracket_is_reported(caplog):
+    """It used to be silent, which is why the warm start went wrong unnoticed for so long."""
+    model, sim_in, ref_dat = _warm_start_case()
+    for name in model._mean_param_names[1:]:
+        setattr(model, name, 0.0)
+    with caplog.at_level("WARNING"):
+        model.fit_least_squares(sim_in, ref_dat, verbose=False)
+    assert "search bound" in caplog.text
+    assert "mu_tilde" in caplog.text
+
+
+# ---------------------------------------------------------------------------
 # 6. Reporting
 # ---------------------------------------------------------------------------
 

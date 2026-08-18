@@ -866,37 +866,66 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
             "fit_mle instead."
         )
 
+    def _initial_parameter_guess(self, simulation_inputs, reflectance_data, verbose=True):
+        """
+        Warm start for ``fit_mle``: the exact least-squares means, then a magnitude.
+
+        The means come from ``fit_ls`` -- one bounded LINEAR solve, no starting point, no
+        local optima, and it fits every mean whatever the active components are. The
+        magnitudes then come from a bounded scalar search over the likelihood with every
+        mechanism sharing one value, and each common fraction starts at an even split,
+        which is interior to [0, 1] so the search does not begin on a boundary.
+
+        This used to call ``fit_least_squares`` instead -- the SCALAR bounded search, whose
+        bracket ``_LS_SCALAR_BOUNDS = (1.000001, 1000)`` exists because ``hrz0`` must exceed
+        one. Applied to ``mu_tilde``, about 2e-5 on real data, it returned the lower bound
+        every time, so every fit started from ``mu_tilde = 1`` with an objective three
+        orders of magnitude off its optimum. The optimiser climbed out of it while there
+        were five parameters; adding a common variance fraction it no longer could, and the
+        fit terminated on the boundary with inflated magnitudes and a likelihood worse than
+        the null's. The sigma bracket had the same origin: the old upper bound was the sum
+        of squares itself, 1.8e9 at a pinned mean, where a magnitude is on the scale of a
+        reflectance increment.
+
+        Args:
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+            verbose (bool): Whether to print progress messages.
+
+        Returns:
+            numpy.ndarray: A starting vector in ``parameter_names`` order.
+        """
+        _print_if("Getting initial mean-parameter guess by linear least squares ...", verbose)
+        n_sigma = len(self._sigma_param_names)
+        kappa0 = [0.5] * len(self.fitted_kappa_names)
+
+        # Choosing a starting point must not change the model. Two things here would
+        # otherwise: fit_ls clears every magnitude (a least-squares fit estimates none), and
+        # the scalar search below leaves the last value it probed on the model, since
+        # evaluating the likelihood goes through update_model_parameters. Both are restored
+        # before returning.
+        saved = {name: getattr(self, name, None) for name in self._sigma_param_names}
+        means, _ = self.fit_ls(simulation_inputs, reflectance_data, verbose=False, transform_to_original_scale=True)
+        means = [float(v) for v in np.asarray(means, dtype=float).reshape(-1)]
+
+        # A magnitude has the units of a reflectance increment, so the root of the sum of
+        # squares is the right scale for the bracket -- not the sum itself.
+        sse = float(self._sse(means, simulation_inputs, reflectance_data))
+        upper = max(np.sqrt(max(sse, 0.0)), 10.0 * smb.tol)
+
+        def nloglike1d(s):
+            return self._negative_log_likelihood(means + [s] * n_sigma + kappa0, simulation_inputs, reflectance_data)
+
+        s0 = minimize_scalar(nloglike1d, bounds=(smb.tol, upper), method="Bounded")
+        for name, value in saved.items():
+            setattr(self, name, value)
+        return np.array(means + [s0.x] * n_sigma + kappa0)
+
     def fit_mle(self, simulation_inputs, reflectance_data, verbose=True, x0=None, transform_to_original_scale=False, save_file=None, **optim_kwargs):
         _check_keys(simulation_inputs, reflectance_data)
 
-        n_mean = len(self._mean_param_names)
-        n_sigma = len(self._sigma_param_names)
-        # Every common fraction starts at an even split: interior to [0, 1], so the search
-        # does not begin on a boundary.
-        kappa0 = [0.5] * len(self.fitted_kappa_names)
-
         if x0 is None:
-            if "gravitational" in self._component_keys:
-                _print_if("Getting initial mean-parameter guess via a plain least-squares fit (all wind coefficients set to 0) ...", verbose)
-                other_means = self._mean_param_names[1:]
-                saved = {name: getattr(self, name) for name in other_means}
-                for name in other_means:
-                    setattr(self, name, 0.0)
-                p0, sse = self.fit_least_squares(simulation_inputs, reflectance_data, verbose=False)
-                for name, value in saved.items():
-                    setattr(self, name, value)
-
-                mean_inits = [0.0] * n_mean
-                mean_inits[0] = p0
-
-                def nloglike1d(s):
-                    return self._negative_log_likelihood(mean_inits + [s] * n_sigma + kappa0, simulation_inputs, reflectance_data)
-
-                s0 = minimize_scalar(nloglike1d, bounds=(smb.tol, sse), method="Bounded")
-                x0 = np.array(mean_inits + [s0.x] * n_sigma + kappa0)
-            else:
-                _print_if("No gravitational component active; warm-starting all means at 0 and all sigmas at a small default (1e-4).", verbose)
-                x0 = np.array([0.0] * n_mean + [1e-4] * n_sigma + kappa0)
+            x0 = self._initial_parameter_guess(simulation_inputs, reflectance_data, verbose=verbose)
             _print_if("x0 = " + str(x0), verbose)
 
         _print_if("Getting MLE estimates ... ", verbose)

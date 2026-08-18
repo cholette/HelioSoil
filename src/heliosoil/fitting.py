@@ -1404,6 +1404,12 @@ class CommonFittingMethods:
         xL, xU = self._LS_SCALAR_BOUNDS
         res = minimize_scalar(fun, bounds=(xL, xU), method="Bounded")  # use bounded to prevent evaluation at values <=1
         _print_if("... done! \n estimated parameter is = " + str(res.x), verbose)
+        # An estimate on the bracket is not an optimum. This search bracket is sized for
+        # hrz0, which must exceed one; used on a parameter of a different magnitude it
+        # returns its own lower bound and says nothing. That happened silently for years on
+        # the wind model's warm start, so the check is here rather than only at the one call
+        # site that remembered to make it.
+        self._warn_if_at_scalar_bound(self._mean_param_names[0] if self._mean_param_names else "the fitted parameter", res.x)
         return res.x, res.fun
 
     def fit_mle(self, simulation_inputs, reflectance_data, verbose=True, x0=None, transform_to_original_scale=False, save_file=None, **optim_kwargs):
