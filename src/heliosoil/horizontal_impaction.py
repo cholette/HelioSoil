@@ -773,26 +773,9 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
 
         self.helios = helios
 
-    def random_delta_soiled_area(self, simulation_inputs, verbose=True, **param_overrides):
-        """
-        Simulates the delta soiled area with randomness from all active mechanisms'
-        variance. The airborne dust loading is treated as a constant.
-
-        Overrides ConstantMeanBase.random_delta_soiled_area, which calls
-        calculate_delta_soiled_area positionally as (sim_in, mu_tilde, sigma_dep,
-        verbose) -- incompatible with this class's **param_overrides signature.
-        """
-        self.calculate_delta_soiled_area(simulation_inputs, verbose=verbose, **param_overrides)
-        mean_area_loss = self.helios.delta_soiled_area
-        var_area_loss = self.helios.delta_soiled_area_variance
-        files = list(mean_area_loss.keys())
-        sim = {f: [] for f in files}
-        for f in files:
-            mu = mean_area_loss[f]
-            sigma = np.sqrt(var_area_loss[f])
-            sim[f] = mu + sigma * np.random.standard_normal(size=mu.shape)
-
-        return sim
+    # random_delta_soiled_area lives on heliosoil.fitting.CommonFittingMethods now: the
+    # draw is per mechanism, with each one's noise split into a site-common and a
+    # mirror-specific part, so it needs the channel list this class does not have.
 
 
 class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):

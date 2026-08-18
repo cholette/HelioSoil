@@ -96,6 +96,15 @@ def _natural_derivative(code, y):
     raise ValueError(f"Unknown parameter transform '{code}'.")
 
 
+def _experiment_value(value, f):
+    """Value for experiment ``f``, from a per-experiment mapping or a shared scalar."""
+    if isinstance(value, dict):
+        return value[f]
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return value[f]
+    return value
+
+
 def kappa_param_name(sigma_name):
     """The common-variance-fraction attribute paired with a noise magnitude.
 
@@ -899,6 +908,181 @@ class CommonFittingMethods:
                     block = block + meas_cov[p]
                 cov[rows, columns] = block
         return cov
+
+    # ------------------------------------------------------------------
+    # The generative side. Written from the same channel list the covariance is built
+    # from, but independently of it: the covariance sums second moments, this draws the
+    # random variables whose second moments those are. Their agreement is therefore
+    # evidence rather than tautology, which is what the Monte-Carlo test checks.
+    # ------------------------------------------------------------------
+
+    def random_delta_soiled_area(self, simulation_inputs, rng=None, verbose=True, **param_overrides):
+        """
+        Draw the soiled area deposited in each interval, mechanism by mechanism.
+
+        Each mechanism carries its own noise process, split into a part common to every
+        mirror at the site during an interval and a mirror-specific part:
+
+            delta[p, j] = mean[p, j]
+                        + sum_c g_c[p, j] * sigma_c * ( sqrt(kappa_c) * eta_c[j]
+                                                        + sqrt(1 - kappa_c) * xi_c[p, j] )
+
+        ``eta_c[j]`` is one standard normal per interval, shared across mirrors;
+        ``xi_c[p, j]`` is independent across both. Each mirror's noise is scaled by that
+        mechanism's own loading, so a mirror the mechanism does not act on receives none of
+        it. ``kappa_c = 0`` gives every mirror independent noise, which is what the
+        historical single-channel draw did.
+
+        Replaces ``SoilingBase.random_delta_soiled_area``, which drew one independent
+        normal per (mirror, interval) scaled by the square root of the TOTAL variance --
+        correct only when there is one mechanism and mirrors do not share noise.
+
+        Args:
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            rng (numpy.random.Generator, optional): Source of randomness. Defaults to a
+                fresh default_rng, so pass one to make a simulation reproducible.
+            verbose (bool): Passed to ``calculate_delta_soiled_area``.
+            **param_overrides: Passed to ``calculate_delta_soiled_area``.
+
+        Returns:
+            dict: Simulated ``delta_soiled_area`` per experiment, shape
+            (n_mirrors, n_times).
+
+        Raises:
+            ValueError: If no active mechanism carries a magnitude, so there is no noise
+                scale to draw with.
+        """
+        if rng is None:
+            rng = np.random.default_rng()
+
+        self.calculate_delta_soiled_area(simulation_inputs, verbose=verbose, **param_overrides)
+        mean_area_loss = self.helios.delta_soiled_area
+
+        simulated = {}
+        for f in list(mean_area_loss.keys()):
+            mean = np.asarray(mean_area_loss[f], dtype=float)
+            total = np.zeros_like(mean)
+            drew = False
+            for channel in self.noise_channels(f, simulation_inputs):
+                if channel.sigma is None:
+                    continue
+                drew = True
+                kappa = self._validate_kappa(channel.kappa, f"kappa of '{channel.name}'")
+                loading = np.asarray(channel.loading, dtype=float)
+                # One shared row, broadcast across mirrors, plus one independent matrix.
+                common = rng.standard_normal(size=(1, mean.shape[1]))
+                mirror_specific = rng.standard_normal(size=mean.shape)
+                total = total + channel.sigma * loading * (np.sqrt(kappa) * common + np.sqrt(1.0 - kappa) * mirror_specific)
+            if not drew:
+                raise ValueError(f"No mechanism of model '{getattr(self, 'model_name', type(self).__name__)}' carries a noise magnitude, so there is nothing to draw. Set at least one of {list(self._sigma_param_names)} before simulating.")
+            simulated[f] = mean + total
+        return simulated
+
+    def simulate_reflectance_data(
+        self,
+        simulation_inputs,
+        params,
+        measurement_indices,
+        measurement_sigma,
+        rho0=None,
+        number_of_measurements=1.0,
+        reflectometer_incidence_angle=None,
+        rng=None,
+        missing_fraction=0.0,
+    ):
+        """
+        Simulate a reflectance dataset from the model, ready to be fitted.
+
+        Draws deposition from the generative process, accumulates it into a reflectance
+        path, samples that path at the requested times and adds measurement noise. The
+        result is a ``ReflectanceMeasurements`` that the likelihoods and ``fit_mle``
+        accept unchanged.
+
+        Args:
+            simulation_inputs (SimulationInputs): Simulation inputs. ``helios.tilt`` and
+                ``helios.inc_ref_factor`` must already be set, as ``helios_angles`` does.
+            params: Parameter vector, in ``parameter_names`` order.
+            measurement_indices: Indices into the simulation grid at which the mirrors are
+                measured -- one sequence applied to every experiment, or a dict keyed by
+                experiment.
+            measurement_sigma: Standard deviation of a single reflectometer reading,
+                scalar or per experiment. The noise actually added has standard deviation
+                ``measurement_sigma / sqrt(number_of_measurements)``, matching the
+                ``sigma_of_the_mean`` the likelihood uses.
+            rho0 (dict, optional): Initial reflectance per mirror. Defaults to the nominal
+                reflectance for every mirror.
+            number_of_measurements (float): Readings behind each reported mean.
+            reflectometer_incidence_angle (float, optional): Recorded on the result.
+            rng (numpy.random.Generator, optional): Source of randomness.
+            missing_fraction (float): Fraction of measurements replaced with NaN, for
+                exercising the missing-data path. Defaults to none.
+
+        Returns:
+            ReflectanceMeasurements: The simulated dataset.
+
+        Raises:
+            ValueError: If ``missing_fraction`` is not in [0, 1).
+        """
+        if rng is None:
+            rng = np.random.default_rng()
+        if not 0.0 <= missing_fraction < 1.0:
+            raise ValueError(f"missing_fraction must be in [0, 1), got {missing_fraction}.")
+
+        sim_in = simulation_inputs
+        files = list(self.helios.tilt.keys())
+
+        if not isinstance(measurement_indices, dict):
+            measurement_indices = {f: list(measurement_indices) for f in files}
+        if rho0 is None:
+            rho0 = {f: np.full(self.helios.tilt[f].shape[0], self.helios.nominal_reflectance) for f in files}
+
+        self.update_model_parameters(params)
+        deposited = self.random_delta_soiled_area(sim_in, rng=rng, verbose=False)
+
+        times, average, sigma, tilts, angles = [], [], [], [], []
+        for f in files:
+            indices = measurement_indices[f]
+            b = self._reflectance_loss_factor(f)  # (n_mirrors,)
+
+            # The same relation compute_soiling_factor inverts: an inclusive cumulative
+            # sum, so index k already includes the deposition during interval k.
+            path = np.asarray(rho0[f], dtype=float)[:, None] - b[:, None] * np.cumsum(deposited[f], axis=1)
+            clean = path[:, indices].transpose()
+
+            sigma_f = np.full(clean.shape, _experiment_value(measurement_sigma, f))
+            noise_sd = sigma_f / np.sqrt(_experiment_value(number_of_measurements, f))
+            measured = clean + noise_sd * rng.standard_normal(clean.shape)
+
+            if missing_fraction > 0.0:
+                measured = measured.copy()
+                measured[rng.random(measured.shape) < missing_fraction] = np.nan
+
+            if reflectometer_incidence_angle is not None:
+                angle = _experiment_value(reflectometer_incidence_angle, f)
+            else:
+                angle = float(np.asarray(getattr(self.helios, "incidence_angle", {}).get(f, 0.0)).reshape(-1)[0])
+
+            times.append(np.asarray(sim_in.time[f])[indices])
+            average.append(measured)
+            sigma.append(sigma_f)
+            tilts.append(self.helios.tilt[f])
+            angles.append(angle)
+
+        # Carry the simulation inputs' labels so that _check_keys passes and the result can
+        # be handed straight to the likelihood.
+        source_names = getattr(sim_in, "files", None)
+        names = [source_names[f] for f in files] if source_names else None
+
+        return smb.ReflectanceMeasurements.from_arrays(
+            times=times,
+            average=average,
+            sigma=sigma,
+            time_grids=[np.asarray(sim_in.time[f]) for f in files],
+            tilts=tilts,
+            number_of_measurements=[_experiment_value(number_of_measurements, f) for f in files],
+            reflectometer_incidence_angle=angles,
+            names=names,
+        )
 
     def _sse(self, params, simulation_inputs, reflectance_data):
         # Computes the sum of squared errors between a soiling model and

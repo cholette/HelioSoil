@@ -241,11 +241,14 @@ def test_constant_mean_wind_delta_soiled_area_variance():
 
 
 def test_random_delta_soiled_area_matches_calculate_delta_soiled_area_mean():
-    """ConstantMeanBase.random_delta_soiled_area calls calculate_delta_soiled_area
-    positionally as (sim_in, mu_tilde, sigma_dep, verbose); on ConstantMeanWindBase
-    that would silently misroute `verbose` into the omega_windward slot unless
-    overridden. Check that the mean produced by random_delta_soiled_area matches a
-    direct calculate_delta_soiled_area call (i.e. omega_windward/leeward survive)."""
+    """random_delta_soiled_area must leave the deterministic mean intact.
+
+    It used to be inherited from ConstantMeanBase, which called
+    calculate_delta_soiled_area POSITIONALLY as (sim_in, mu_tilde, sigma_dep, verbose) --
+    on the wind model that silently misrouted `verbose` into the omega_windward slot, so
+    this class overrode it. There is now one implementation, on CommonFittingMethods,
+    which passes everything by keyword and draws per mechanism; the hazard is gone but the
+    property it guarded is still worth pinning."""
     f = 0
     density = 40.0
     tilt = np.array([[30.0, 60.0]])
@@ -254,7 +257,9 @@ def test_random_delta_soiled_area_matches_calculate_delta_soiled_area_mean():
     wind_dir = np.array([0.0, 180.0])
     wind_speed = np.array([4.0, 5.0])
 
-    model = ConstantMeanWindBase()
+    # The fitting subclass, since the draw needs the noise-channel list.
+    model = ConstantMeanWindDeposition.__new__(ConstantMeanWindDeposition)
+    ConstantMeanWindBase.__init__(model)
     model.mu_tilde = 0.5
     model.sigma_dep = 0.02
     model.omega_windward = 0.03
@@ -274,8 +279,7 @@ def test_random_delta_soiled_area_matches_calculate_delta_soiled_area_mean():
     model.calculate_delta_soiled_area(sim_in, verbose=False)
     expected_mean = model.helios.delta_soiled_area[f].copy()
 
-    np.random.seed(0)
-    model.random_delta_soiled_area(sim_in, verbose=False)
+    model.random_delta_soiled_area(sim_in, rng=np.random.default_rng(0), verbose=False)
     actual_mean = model.helios.delta_soiled_area[f]
 
     np.testing.assert_allclose(actual_mean, expected_mean, rtol=RTOL, atol=ATOL)
