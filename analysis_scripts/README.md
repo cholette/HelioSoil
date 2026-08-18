@@ -60,12 +60,25 @@ in their means → one bounded linear solve; `semi_physical` uses a bounded scal
 `hrz0`). If a model type ever lacked `fit_ls`, it silently falls back to MLE — and the
 `simulate` header and `select`'s `fit_method` column report what was *actually* run.
 
-Model-aware training-mirror default under `mle`: a gravitational-only / constant-mean model
-shares one deposition-noise process across mirrors and trains on the single lowest-tilt
-representative (`ONE_M2_T00`); a model with an active `normal_wind`, `tangential_wind` or
-`impaction_retention` term ties its noise to wind direction × each mirror's geometry, so all
-10 mirrors are used. Evaluation always scores all 10 either way, so runs stay comparable.
-`--train-mirrors NAME [NAME ...]` overrides this.
+### `--variance-model {independent,shared_kappa,per_mechanism}`
+
+How the deposition noise is correlated across mirrors. Mirrors at one site are measured together and soil under the same weather, so their noise is not independent.
+
+- `independent` (default) — the historical model. Every mirror's deposition noise is its own, and the reflectance differences are treated as independent. Unchanged numbers for unchanged commands.
+- `shared_kappa` — one common fraction across all mechanisms, one extra parameter. 
+- `per_mechanism` — one fraction per mechanism. Might have identifiability issues with limited mirrors / campaigns. 
+
+MLE only — least squares fits no noise parameters, so the flag has no effect on `--fit-method
+ls` or on `select`. Recorded in `run_config.json`; any fitted κ appears as its own row in
+`fitted_parameters.csv`.
+
+Training-mirror default under `mle`: with `shared_kappa` or `per_mechanism` **all mirrors
+are used**, because the likelihood models the between-mirror correlation directly and the
+shared part is no longer counted once per mirror. With `independent` the older rule stands: a
+gravitational-only / constant-mean model trains on the single lowest-tilt representative
+(`ONE_M2_T00`), and a model with an active `normal_wind`, `tangential_wind` or
+`impaction_retention` term uses all mirrors. Prefer `shared_kappa` for new work. 
+`--train-mirrors NAME [NAME ...]` overrides all of this.
 
 ### `--model-type {constant_mean,constant_mean_wind,semi_physical,all}`
 
@@ -130,13 +143,13 @@ so per-component channels are already in the path.
 | `performance_stats.csv` | per-fold in/out-of-sample `N, MBE, MAE, RMSE, R2`, plus `cv_mean`/`cv_std` and **`cv_pooled`** — the single statistic over every held-out prediction at once. **`cv_pooled` is the one to quote.** MBE/MAE/RMSE score the *daily soiling rate*; R² is a reflectance goodness-of-fit |
 | `all_campaigns_test.pdf` | every campaign drawn from the fold that held it out (nothing highlighted — nothing was trained on) |
 | `fold_k/all_campaigns.pdf` | that fold's model over all campaigns, its training campaigns highlighted |
-| `fold_k/fit_quality_{train_mirrors,test_mirrors,test_experiments}.pdf` | predicted-vs-measured daily loss, shared axis limits. `test_mirrors` is absent when the fit trained on every mirror (any `ls` run, any wind-noise model) |
+| `fold_k/fit_quality_{train_mirrors,test_mirrors,test_experiments}.pdf` | predicted-vs-measured daily loss, shared axis limits. `test_mirrors` is absent when the fit trained on every mirror (any `ls` run, any wind-noise model, any run with `--variance-model` other than `independent`) |
 | `campaign_N/reflectance_tilt_TT_{train,test}-fK.pdf` | measured vs predicted reflectance for one tilt, annotated with that tilt's MAE/RMSE. The suffix names the fold and the campaign's role in it — `campaign_1/..._test-f1.pdf` is campaign 1 held out by fold 1 |
 | `campaign_N/performance_stats.csv` | those per-tilt stats plus an `all` row, pooled over every fold that touched the campaign |
 | `rate_error_by_tilt.pdf/.csv` | boxplot of \|daily soiling-rate error\| per tilt, in-sample vs out-of-sample, in p.p./day. Shows the *spread* behind each MAE. Note the in-sample side pools (C−1) folds' training campaigns, hence the per-box `n` row |
 | `loss_vs_tilt.pdf/.csv` | design curve: predicted daily loss vs fixed tilt, one curve per orientation, with a parameter-uncertainty band. **Skipped for `ls` and for `semi_physical`** |
 | `loss_distributions.pdf/.csv` | full distribution of a horizontal mirror's daily loss on the low/median/high/worst dust day. Same skip rule |
-| `run_config.json`, `run.log` | full invocation + versions; suppressed warnings |
+| `run_config.json`, `run.log` | full invocation + versions; suppressed warnings. Written at `{run_name}/`, not inside each model's `{label}/` |
 
 The two `loss_*` outputs are design results, not CV results, so under cross-validation one
 extra fit on **all** campaigns is run to back them (saved as `fitting_results`, reported as

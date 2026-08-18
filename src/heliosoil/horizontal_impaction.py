@@ -321,13 +321,18 @@ class _WindComponent:
     simply don't use the azimuth/wind_dir/wind_speed arguments.
     """
 
-    def __init__(self, key, name_fragment, mean_param_names, sigma_param_name, requires_wind, mean_bases_fn):
+    def __init__(self, key, name_fragment, mean_param_names, sigma_param_name, requires_wind, mean_bases_fn, identifiability_factor):
         self.key = key
         self.name_fragment = name_fragment
         self.mean_param_names = mean_param_names
         self.sigma_param_name = sigma_param_name
         self.requires_wind = requires_wind
         self._mean_bases_fn = mean_bases_fn
+        # This mechanism's geometry factor at a given tilt, maximised over wind angle, on
+        # a 0-1 scale. Near zero means a mirror at that tilt carries essentially no
+        # information about the mechanism, however long the campaign runs. Used to warn
+        # when an independent-mirror fit is about to estimate a coefficient it cannot see.
+        self.identifiability_factor = identifiability_factor
 
     def mean_bases(self, alpha, tilt, azimuth, wind_dir, wind_speed):
         """List of arrays (N_helios, N_times), one per entry of mean_param_names."""
@@ -363,17 +368,45 @@ class _WindComponent:
         return self.noise_loading(alpha, tilt, azimuth, wind_dir, wind_speed) ** 2
 
 
+# ------------------------------ geometry factors ------------------------------
+# Each mechanism's coefficient multiplier at a given tilt, maximised over wind angle and
+# normalised to peak at 1. These are module-level named functions rather than lambdas
+# **because the model is pickled**: `save` pickles `self`, the model holds its
+# `_WindComponent`s, and a lambda attribute makes the whole save fail with
+# "Can't pickle <function <lambda>>". Same reason the mean-bases callables above are named.
+
+
+def _settling_identifiability(tilt_deg):
+    """cos+(tilt) -- gravitational settling, and the turbulent term that rides on it."""
+    return float(gravitational_settling_factor(tilt_deg))
+
+
+def _normal_wind_identifiability(tilt_deg):
+    """|sin(tilt)| -- normal wind cannot reach a horizontal mirror's face."""
+    return float(abs(sind(tilt_deg)))
+
+
+def _tangential_wind_identifiability(tilt_deg):
+    """Tangential wind is carried at every tilt, so nothing is lost to geometry."""
+    return 1.0
+
+
+def _retention_identifiability(tilt_deg):
+    """2 sin(tilt) cos+(tilt) -- vanishes at BOTH 0 and 90 deg; peak at 45 deg reads as 1."""
+    return float(2.0 * abs(sind(tilt_deg)) * gravitational_settling_factor(tilt_deg))
+
+
 _GRAVITATIONAL = _WindComponent(
-    "gravitational", "gravitational", ("mu_tilde",), "sigma_dep", False, _gravitational_mean_bases
+    "gravitational", "gravitational", ("mu_tilde",), "sigma_dep", False, _gravitational_mean_bases, identifiability_factor=_settling_identifiability
 )
 _TURBULENT = _WindComponent(
-    "turbulent_wind", "turbulent-wind", ("omega_turbulent",), "sigma_dep_turb", True, _turbulant_wind_mean_bases
+    "turbulent_wind", "turbulent-wind", ("omega_turbulent",), "sigma_dep_turb", True, _turbulant_wind_mean_bases, identifiability_factor=_settling_identifiability
 )
 _NORMAL_WIND = _WindComponent(
-    "normal_wind", "normal-wind", ("omega_windward", "omega_leeward"), "sigma_dep_gamma", True, _normal_wind_mean_bases
+    "normal_wind", "normal-wind", ("omega_windward", "omega_leeward"), "sigma_dep_gamma", True, _normal_wind_mean_bases, identifiability_factor=_normal_wind_identifiability
 )
 _TANGENTIAL_WIND = _WindComponent(
-    "tangential_wind", "tangential-wind", ("omega_tangential",), "sigma_dep_tan", True, _tangential_wind_mean_bases
+    "tangential_wind", "tangential-wind", ("omega_tangential",), "sigma_dep_tan", True, _tangential_wind_mean_bases, identifiability_factor=_tangential_wind_identifiability
 )
 _IMPACTION_RETENTION = _WindComponent(
     "impaction_retention",
@@ -382,7 +415,9 @@ _IMPACTION_RETENTION = _WindComponent(
     "sigma_dep_ret",
     True,
     _impaction_retention_mean_bases,
+    identifiability_factor=_retention_identifiability,
 )
+
 
 # Order here is the canonical order: it fixes the parameter-vector layout and the
 # model_name string regardless of the order `components` is passed in.
@@ -397,6 +432,36 @@ _COMPONENTS = {
     "tangential_wind": _TANGENTIAL_WIND,
     "impaction_retention": _IMPACTION_RETENTION,
 }
+
+
+def poorly_identified_components(component_keys, tilt_deg, threshold=0.05):
+    """Which mechanisms a mirror at this tilt carries almost no information about.
+
+    A mechanism's geometry factor is what multiplies its coefficient in the forward model,
+    so where that factor vanishes the coefficient has nothing to be estimated from: a fit
+    restricted to such a mirror returns whatever the optimiser started at, or exactly zero.
+    A horizontal mirror does this to every wind mechanism, since normal wind goes as
+    sin(tilt) and impaction retention as sin(tilt) cos+(tilt).
+
+    Args:
+        component_keys: iterable of component keys, or None for the default pair.
+        tilt_deg: the mirror's tilt [deg].
+        threshold: geometry factors at or below this count as uninformative.
+
+    Returns:
+        list[tuple[str, float]]: (component key, factor) for each starved mechanism, in
+        canonical order.
+    """
+    if tilt_deg is None:
+        return []
+    starved = []
+    for key in resolve_component_keys(component_keys):
+        factor = _COMPONENTS[key].identifiability_factor(float(tilt_deg))
+        if factor <= threshold:
+            starved.append((key, factor))
+    return starved
+
+
 _ALL_MEAN_PARAM_NAMES = (
     "mu_tilde",
     "omega_turbulent",

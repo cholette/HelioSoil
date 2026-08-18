@@ -53,14 +53,13 @@ size band tangentially. It defaults to None, meaning every mechanism uses cfg.du
 and the dust axis is the workflow's outer dust-type sweep. See build_runs,
 available_dust_specs and component_dust_assignments.
 
-Training-mirror selection is model-aware (see smu.default_training_mirrors): a
-purely gravitational/constant-mean model shares one deposition-noise process across
-mirrors and trains on a single representative (lowest-tilt) mirror; a model with an
-active normal_wind/tangential_wind/impaction_retention component ties its noise to
-wind direction x each mirror's tilt/azimuth, so every common mirror contributes
-independent information and all are used. Evaluation always scores every common
-mirror, regardless of what was used for training, so results are comparable across
-model types.
+Training-mirror selection follows the VARIANCE MODEL (see resolve_training_mirrors).
+"independent" treats the mirrors as carrying independent information, which they do not, so
+it trains on a single lowest-tilt representative as crude protection. "shared_kappa" and
+"per_mechanism" model the between-mirror correlation directly and train on every common
+mirror. An "ls" run fits no noise parameters at all and likewise uses every mirror.
+Evaluation always scores every common mirror, so runs stay comparable whatever was trained
+on.
 """
 
 import os
@@ -81,7 +80,7 @@ import heliosoil
 import heliosoil.base_models as smb
 import heliosoil.fitting as smf
 import heliosoil.utilities as smu
-from heliosoil.horizontal_impaction import COMPONENT_KEYS, ConstantMeanWindDeposition, describe_components, resolve_component_keys
+from heliosoil.horizontal_impaction import COMPONENT_KEYS, ConstantMeanWindDeposition, describe_components, poorly_identified_components, resolve_component_keys
 from heliosoil.paper_specific_utilities import regression_performance_stats
 
 # Serializes the semi_physical extinction-lookup-table step across worker threads:
@@ -160,6 +159,12 @@ class PipelineConfig:
     # least squares and profiles the likelihood over the noise parameters at that solution. Only
     # model types whose class provides fit_ls honour it -- see resolve_fit_method.
     fit_method: str = "mle"
+    # How the deposition noise is correlated across mirrors (heliosoil.fitting's
+    # set_variance_model). "independent" is the historical model and stays the default, so
+    # an unchanged command reproduces an unchanged number; "shared_kappa" estimates one
+    # common fraction across mechanisms and "per_mechanism" one each. Only the MLE path
+    # sees this -- least squares fits no noise parameters at all.
+    variance_model: str = "independent"
     dust_type: str = "PM10"  # "PM10" or "PM2.5", selects the dust distribution in the parameter file
     k_factor: Any = "import"  # None sets equal to 1.0, "import" imports from the file
     number_of_measurements: float = 9.0
@@ -211,21 +216,6 @@ def orientation_code(mirror_name):
 
 def extract(x, ind):
     return [x[ii] for ii in ind]
-
-
-def uses_wind_variance(model_type, wind_components):
-    """Only "constant_mean_wind" with an active wind-driven noise term ties sigma to
-    wind direction x mirror orientation; every other configuration (constant_mean,
-    semi_physical, or constant_mean_wind with only "gravitational") shares a single
-    sigma_dep process across mirrors and must train on one representative mirror.
-
-    wind_components is resolved rather than read directly, so None -- the library's default
-    gravitational + normal_wind, which is what a run with no --model expression fits -- is
-    judged on the components the model will actually be built with."""
-    if model_type != "constant_mean_wind":
-        return False
-    keys = resolve_component_keys(wind_components)
-    return any(c in keys for c in ("normal_wind", "tangential_wind", "impaction_retention"))
 
 
 def build_model(
@@ -307,7 +297,32 @@ def resolve_training_mirrors(cfg: PipelineConfig, all_mirrors: list, model_type:
         return cfg.train_mirrors
     if resolve_fit_method(cfg, model_type) == "ls":
         return list(all_mirrors)
-    return smu.default_training_mirrors(all_mirrors, uses_wind_variance(model_type, wind_components))
+    if cfg.variance_model != "independent":
+        # The likelihood models the between-mirror correlation directly, so there is nothing
+        # left for a single-representative-mirror rule to protect against: every mirror
+        # contributes, and the common component stops the shared part being counted once per
+        # mirror. This is the plan's D6, delivered on the path that earns it.
+        return list(all_mirrors)
+    # "independent" believes the mirrors carry independent information. They do not -- for a
+    # wind model either, which is what the deleted uses_wind_variance used to assert. One
+    # representative mirror is the only protection this likelihood has.
+    #
+    # One mirror cannot identify a multi-mechanism model, and that is not worked around here:
+    # it is the cost of the independent-mirror likelihood, and the fix is to model the
+    # correlation with --variance-model shared_kappa rather than to widen the training set
+    # under a likelihood that would then over-count it. What IS done is to say so.
+    mirrors = smu.default_training_mirrors(all_mirrors)
+    if model_type == "constant_mean_wind":
+        tilt = smu.parse_mirror_tilt(mirrors[0])
+        starved = poorly_identified_components(wind_components, tilt)
+        if starved:
+            named = ", ".join(f"{key} (geometry factor {factor:.3g})" for key, factor in starved)
+            smu.logger.warning(
+                f"Training on the single mirror {mirrors[0]} at tilt {tilt} deg, which carries essentially no information about: {named}. "
+                "Those coefficients are not identified by this fit and will report whatever the optimiser started from. "
+                "This is what --variance-model independent costs on a multi-mechanism model; use shared_kappa to train on every mirror instead."
+            )
+    return mirrors
 
 
 def resolve_fit_method(cfg: PipelineConfig, model_type: str) -> str:
@@ -660,6 +675,9 @@ def fit_and_evaluate(
     sim_train, reflect_train = build_training_inputs(cfg, data, train_mirrors_run, train_exps)
 
     model.helios_angles(sim_train, reflect_train, second_surface=cfg.second_surf, verbose=verbose)
+    # Before the fit, so that parameter_names (and therefore every downstream report) already
+    # carries whatever common fractions this run estimates.
+    model.set_variance_model(cfg.variance_model)
 
     ext_weights = None
     if model_type == "semi_physical":
@@ -694,9 +712,18 @@ def fit_and_evaluate(
     # scale back to each parameter's natural scale.
     s = smu._std_errors_from_cov(log_param_cov)
     param_ci = log_param_hat + 1.96 * s * np.array([[-1], [1]])
-    lower_ci = model.transform_scale(param_ci[0, :])
-    upper_ci = model.transform_scale(param_ci[1, :])
-    param_hat = model.transform_scale(log_param_hat)
+    lower_ci = np.asarray(model.transform_scale(param_ci[0, :]), dtype=float)
+    upper_ci = np.asarray(model.transform_scale(param_ci[1, :]), dtype=float)
+    # A Wald interval is not defined where an estimate sits on its bound, and the symptom
+    # here is an interval that has diverged: a non-finite standard error, or one so wide that
+    # exp() of the endpoints overflows to inf and underflows to 0. Reporting "[0, inf]" in
+    # fitted_parameters.csv reads as a measurement; blank says what is true, that no interval
+    # is available (plan D9).
+    estimate = np.asarray(model.transform_scale(log_param_hat), dtype=float)
+    diverged = ~np.isfinite(s) | ~np.isfinite(upper_ci) | ((lower_ci == 0.0) & (estimate != 0.0))
+    lower_ci = np.where(diverged, np.nan, lower_ci)
+    upper_ci = np.where(diverged, np.nan, upper_ci)
+    param_hat = estimate
     # update_model_parameters zips against the full parameter list, so a mean-only vector sets
     # exactly the means and leaves fit_ls's sigmas at None -- no prediction variance is
     # resurrected by writing the estimate back.

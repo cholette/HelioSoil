@@ -135,6 +135,15 @@ def build_parser() -> argparse.ArgumentParser:
         "and its figures carry no prediction interval (default: %(default)s)",
     )
 
+    model.add_argument(
+        "--variance-model",
+        choices=("independent", "shared_kappa", "per_mechanism"),
+        default=mp.PipelineConfig.variance_model,
+        help="how the deposition noise is correlated across mirrors. \"independent\" is the historical model; \"shared_kappa\" estimates one common "
+        "fraction across mechanisms and \"per_mechanism\" one each, and both train on every common mirror rather than a single representative. "
+        "MLE only -- least squares fits no noise parameters (default: %(default)s)",
+    )
+
     common_run = argparse.ArgumentParser(add_help=False)
     run = common_run.add_argument_group("run control")
     run.add_argument("--run-name", default=None, help="results subfolder name (default: run-yy-mm-dd_hh-mm timestamp)")
@@ -206,6 +215,7 @@ def _build_config(args) -> mp.PipelineConfig:
         train_experiments=list(train_experiments) if train_experiments else None,
         train_mirrors=args.train_mirrors,
         fit_method=args.fit_method,
+        variance_model=args.variance_model,
         dust_type=getattr(args, "dust_type", None) or mp.PipelineConfig.dust_type,
         k_factor=args.k_factor,
         number_of_measurements=args.number_of_measurements,

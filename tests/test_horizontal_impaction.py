@@ -1838,3 +1838,76 @@ def test_mean_parameter_names_cover_every_model_class():
     assert smf.ConstantMeanDeposition.__new__(smf.ConstantMeanDeposition).mean_parameter_names == ["mu_tilde"]
     assert smf.SemiPhysical.__new__(smf.SemiPhysical).mean_parameter_names == ["hrz0"]
     assert _bare_wind_model(["gravitational", "tangential_wind"]).mean_parameter_names == ["mu_tilde", "omega_tangential"]
+
+
+# --------------------------------------------------------------------------- #
+# Geometry factors and the identifiability warning
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "key,tilt,expected",
+    [
+        # cos+(tilt), and zero once the face points at the ground.
+        ("gravitational", 0.0, 1.0),
+        ("gravitational", 60.0, 0.5),
+        ("gravitational", 180.0, 0.0),
+        ("turbulent_wind", 0.0, 1.0),
+        # |sin(tilt)|: nothing on a horizontal mirror, everything on a vertical one.
+        ("normal_wind", 0.0, 0.0),
+        ("normal_wind", 90.0, 1.0),
+        ("normal_wind", 180.0, 0.0),
+        # Carried at every tilt.
+        ("tangential_wind", 0.0, 1.0),
+        ("tangential_wind", 90.0, 1.0),
+        # 2 sin cos+: vanishes at BOTH ends, peaks at 45 deg.
+        ("impaction_retention", 0.0, 0.0),
+        ("impaction_retention", 45.0, 1.0),
+        ("impaction_retention", 90.0, 0.0),
+    ],
+)
+def test_identifiability_factor_matches_the_mechanism_geometry(key, tilt, expected):
+    from heliosoil.horizontal_impaction import _COMPONENTS
+
+    assert _COMPONENTS[key].identifiability_factor(tilt) == pytest.approx(expected, abs=1e-12)
+
+
+def test_poorly_identified_components_flags_the_starved_mechanisms():
+    """A horizontal mirror sees no wind normal to its face and no retention; a vertical one
+    catches nothing by settling. At 45 deg every mechanism is carried."""
+    from heliosoil.horizontal_impaction import COMPONENT_KEYS, poorly_identified_components
+
+    keys = list(COMPONENT_KEYS)
+    assert [key for key, _ in poorly_identified_components(keys, 0.0)] == ["normal_wind", "impaction_retention"]
+    assert [key for key, _ in poorly_identified_components(keys, 90.0)] == ["gravitational", "turbulent_wind", "impaction_retention"]
+    assert poorly_identified_components(keys, 45.0) == []
+    # Only the components asked about are reported.
+    assert [key for key, _ in poorly_identified_components(["gravitational", "normal_wind"], 0.0)] == ["normal_wind"]
+    # An unparseable tilt is not an accusation of anything.
+    assert poorly_identified_components(keys, None) == []
+
+
+def test_poorly_identified_components_uses_a_tolerance_not_an_exact_zero():
+    """cos(90 deg) is 6.1e-17, not 0. The same floating-point trap that made
+    loaded_mirror_counts over-count would make this under-report."""
+    from heliosoil.horizontal_impaction import poorly_identified_components
+
+    flagged = dict(poorly_identified_components(["gravitational"], 90.0))
+    assert "gravitational" in flagged
+    assert 0.0 <= flagged["gravitational"] < 1e-15
+
+
+def test_wind_model_is_picklable():
+    """`save` pickles the model, which holds its _WindComponents. Geometry factors must
+    therefore be module-level functions: a lambda attribute fails the whole save with
+    "Can't pickle <function <lambda>>", and it fails at the END of a fit, after the
+    expensive part."""
+    import pickle
+
+    model = _bare_wind_model(["gravitational", "turbulent_wind", "normal_wind"])
+    restored = pickle.loads(pickle.dumps(model))
+
+    assert restored.model_name == model.model_name
+    assert restored._component_keys == model._component_keys
+    original = {c.key: c.identifiability_factor(45.0) for c in model.components}
+    assert {c.key: c.identifiability_factor(45.0) for c in restored.components} == original

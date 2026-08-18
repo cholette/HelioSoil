@@ -1460,7 +1460,14 @@ def virtual_mirror_daily_loss(model, sim_dat, model_save_file, grid, M=1000, tri
         # estimate for that entry rather than propagating it.
         params = np.where(np.isfinite(params), params, np.atleast_1d(model.transform_scale(log_param_hat)))
         mean_daily = np.tensordot(params[:n_mean], mean_bases, axes=1)
-        var_daily = np.tensordot(np.asarray(params[n_mean:], dtype=float) ** 2, var_bases, axes=1)
+        # Exactly as many magnitudes as there are variance bases. NOT "everything after the
+        # means": a variance-components fit appends one or more common fractions to the
+        # parameter vector, and those are not magnitudes. Excluding them is right rather than
+        # merely convenient -- a virtual mirror is a single mirror, and the variance of one
+        # mirror's deposition is sum_c sigma_c^2 g_c^2 whatever kappa is. kappa only splits
+        # that total between a common and a mirror-specific part, which one mirror cannot
+        # tell apart (see test_single_mirror_likelihood_is_invariant_to_kappa).
+        var_daily = np.tensordot(np.asarray(params[n_mean : n_mean + var_bases.shape[0]], dtype=float) ** 2, var_bases, axes=1)
         sample = rng.normal(loc=mean_daily, scale=np.sqrt(np.clip(var_daily, 0.0, None)))
 
         def select(x):
@@ -1706,7 +1713,14 @@ def point_estimate_daily_loss(model, sim_dat, model_save_file, grid):
     inc_factor = float(np.atleast_1d(model.helios.inc_ref_factor[next(iter(sim_dat.time.keys()))]).ravel()[0])
 
     mean = inc_factor * np.tensordot(params[:n_mean], mean_bases, axes=1) * 100.0
-    variance = np.tensordot(np.asarray(params[n_mean:], dtype=float) ** 2, var_bases, axes=1)
+    # Exactly as many magnitudes as there are variance bases. NOT "everything after the
+    # means": a variance-components fit appends one or more common fractions to the
+    # parameter vector, and those are not magnitudes. Excluding them is right rather than
+    # merely convenient -- a virtual mirror is a single mirror, and the variance of one
+    # mirror's deposition is sum_c sigma_c^2 g_c^2 whatever kappa is. kappa only splits
+    # that total between a common and a mirror-specific part, which one mirror cannot
+    # tell apart (see test_single_mirror_likelihood_is_invariant_to_kappa).
+    variance = np.tensordot(np.asarray(params[n_mean : n_mean + var_bases.shape[0]], dtype=float) ** 2, var_bases, axes=1)
     sd = inc_factor * np.sqrt(np.clip(variance, 0.0, None)) * 100.0
     return mean, sd
 
