@@ -106,7 +106,7 @@ import pandas as pd
 from scipy.optimize import minimize_scalar
 
 import heliosoil.base_models as smb
-from heliosoil.fitting import ConstantMeanDeposition, CommonFittingMethods, NoiseChannel
+from heliosoil.fitting import ConstantMeanDeposition, CommonFittingMethods, NoiseChannel, kappa_param_name
 from heliosoil.utilities import (
     _print_if,
     _check_keys,
@@ -589,6 +589,14 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
         self._param_names = self._mean_param_names + self._sigma_param_names
         self._log_transform = np.array([_MEAN_PARAM_LOG[n] for n in self._mean_param_names] + [True] * len(self._sigma_param_names))
 
+        # One common-variance fraction per mechanism, for variance_model="per_mechanism".
+        # Left unset until set_variance_model seeds them; the other variance models never
+        # read these. Not part of _param_names -- kappa is model state, not a fitted
+        # parameter, until the parameter vector is extended.
+        for name in self._sigma_param_names:
+            if not hasattr(self, kappa_param_name(name)):
+                setattr(self, kappa_param_name(name), None)
+
     @property
     def model_name(self):
         # A component driven by its own dust channel is tagged with it, e.g.
@@ -704,7 +712,7 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
                 component.sigma_param_name,
                 component.noise_loading(alphas[component.key], tilt, azimuth, wind_dir, wind_speed),
                 getattr(self, component.sigma_param_name),
-                self.common_variance_fraction,
+                self._kappa_for(component.sigma_param_name),
             )
             for component in self.components
         ]

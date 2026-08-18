@@ -16,9 +16,32 @@ from numpy.linalg import inv
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from scipy.linalg import cho_factor, cho_solve
 from scipy.optimize import lsq_linear, minimize_scalar, minimize
 import numdifftools as ndt
 import pickle
+
+
+def kappa_param_name(sigma_name):
+    """The common-variance-fraction attribute paired with a noise magnitude.
+
+    ``sigma_dep`` -> ``kappa_dep``, ``sigma_dep_gamma`` -> ``kappa_dep_gamma``. A module
+    function rather than a method because the model bases that declare the magnitudes
+    (heliosoil.horizontal_impaction.ConstantMeanWindBase) are separate from the fitting
+    mixin that consumes them, and the naming rule should be stated once.
+
+    Args:
+        sigma_name (str): The magnitude's attribute name.
+
+    Returns:
+        str: The paired common-fraction attribute name.
+
+    Raises:
+        ValueError: If the magnitude does not follow the ``sigma...`` convention.
+    """
+    if not sigma_name.startswith("sigma"):
+        raise ValueError(f"Noise magnitude '{sigma_name}' does not follow the 'sigma...' naming convention, so its kappa cannot be named.")
+    return "kappa" + sigma_name[len("sigma") :]
 
 
 class NoiseChannel(NamedTuple):
@@ -58,10 +81,107 @@ class NoiseChannel(NamedTuple):
 
 class CommonFittingMethods:
 
-    # Fraction of the deposition variance common to every mirror at the site. Zero gives
-    # each mirror independent noise, which is what the likelihoods here assume; estimating
-    # it is what the multi-mirror extension adds.
+    # Fraction of the deposition variance common to every mirror at the site, used when
+    # every mechanism shares one value. Zero gives each mirror independent noise, which is
+    # what the diagonal likelihood assumes.
     common_variance_fraction = 0.0
+
+    # How the deposition noise is correlated across mirrors. See set_variance_model.
+    variance_model = "independent"
+    _endpoint_correction = None
+
+    # ------------------------------------------------------------------
+    # The variance structure: how much of each mechanism's noise is shared between the
+    # mirrors at a site. The magnitudes (sigma) live on the model as named attributes and
+    # so do the common fractions (kappa), one per magnitude. Neither is read positionally
+    # out of a parameter vector -- update_model_parameters writes them, noise_channels
+    # reads them -- which is what lets one likelihood serve models with one mechanism and
+    # models with five.
+    # ------------------------------------------------------------------
+
+    @property
+    def _kappa_param_names(self):
+        """One common-fraction name per noise magnitude, in the same order."""
+        return tuple(kappa_param_name(name) for name in self._sigma_param_names)
+
+    @property
+    def endpoint_correction(self):
+        """Whether consecutive differences share their endpoint measurement noise.
+
+        Defaults to following the variance model, so that "independent" reproduces earlier
+        fits exactly and the multi-mirror models get the correlation they imply.
+        """
+        if self._endpoint_correction is None:
+            return self.variance_model != "independent"
+        return bool(self._endpoint_correction)
+
+    def set_variance_model(self, variance_model="independent", endpoint_correction=None, kappa=None):
+        """
+        Choose how the deposition noise is correlated across mirrors.
+
+        - ``"independent"``: every mirror's deposition noise is its own. The differences are
+          then independent too, so the likelihood is the diagonal one and each measurement
+          contributes a scalar term. This is the default and reproduces earlier fits.
+        - ``"shared_kappa"``: one common fraction ``kappa`` across all mechanisms, held in
+          ``common_variance_fraction``. Mirrors at a site share that fraction of every
+          mechanism's noise during an interval.
+        - ``"per_mechanism"``: a common fraction per mechanism, held in the attributes named
+          by ``_kappa_param_names``. Set them individually after calling this.
+
+        Separating a mechanism's common part from its mirror-specific part needs at least
+        two mirrors that the mechanism actually loads in the same experiment; with one, the
+        likelihood does not depend on its kappa at all.
+
+        Args:
+            variance_model (str): "independent", "shared_kappa" or "per_mechanism".
+            endpoint_correction (bool, optional): Whether to model the correlation between
+                consecutive reflectance differences created by the measurement they share.
+                Defaults to following ``variance_model``.
+            kappa (float, optional): Initial common fraction. Sets
+                ``common_variance_fraction`` under "shared_kappa", and seeds every
+                per-mechanism attribute under "per_mechanism".
+
+        Raises:
+            ValueError: If ``variance_model`` is not recognised, or ``kappa`` is outside [0, 1].
+        """
+        allowed = ("independent", "shared_kappa", "per_mechanism")
+        if variance_model not in allowed:
+            raise ValueError(f"variance_model must be one of {allowed}, got {variance_model!r}.")
+
+        if kappa is not None:
+            kappa = self._validate_kappa(kappa, "kappa")
+
+        self.variance_model = variance_model
+        self._endpoint_correction = endpoint_correction
+
+        if variance_model == "shared_kappa" and kappa is not None:
+            self.common_variance_fraction = kappa
+        elif variance_model == "per_mechanism":
+            # Seed from the shared value so that switching models is a no-op until the
+            # individual fractions are set (or, at Step 7, fitted).
+            seed = self.common_variance_fraction if kappa is None else kappa
+            for name in self._kappa_param_names:
+                if getattr(self, name, None) is None:
+                    setattr(self, name, seed)
+
+    @staticmethod
+    def _validate_kappa(value, name):
+        value = float(value)
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"The common variance fraction {name} must be in [0, 1], got {value}.")
+        return value
+
+    def _kappa_for(self, sigma_name):
+        """This mechanism's common fraction under the current variance model."""
+        if self.variance_model == "independent":
+            return 0.0
+        if self.variance_model == "shared_kappa":
+            return self._validate_kappa(self.common_variance_fraction, "common_variance_fraction")
+        name = kappa_param_name(sigma_name)
+        value = getattr(self, name, None)
+        if value is None:
+            raise ValueError(f"Variance model 'per_mechanism' needs a common fraction for every mechanism, but '{name}' is unset. Call set_variance_model(..., kappa=...) or set it directly.")
+        return self._validate_kappa(value, name)
 
     def compute_soiling_factor(self, reflectance_data=None):
         # Converts helios.delta_soiled_area into an accumulated area loss and
@@ -149,7 +269,7 @@ class CommonFittingMethods:
         alpha = self._dust_loading(f, simulation_inputs)
         loading = alpha[None, :] * gravitational_settling_factor(self.helios.tilt[f])
         sigma = self.sigma_dep if sigma_override is None else sigma_override
-        return [NoiseChannel("sigma_dep", loading, sigma, self.common_variance_fraction)]
+        return [NoiseChannel("sigma_dep", loading, sigma, self._kappa_for("sigma_dep"))]
 
     def _compute_variance_of_measurements(self, sigma_dep, simulation_inputs, reflectance_data=None):
         """
@@ -297,6 +417,111 @@ class CommonFittingMethods:
                 cov[p, diag[:-1] + 1, diag[:-1]] = shared
         return cov
 
+    # ------------------------------------------------------------------
+    # The multi-mirror difference covariance. Notation follows the soiling model notes
+    # section 8.3: c indexes a mechanism, p and q mirrors, i and i' reflectance
+    # differences, j simulation intervals. a_{c,j}^(p) = b^(p) g_{c,j}^(p) is mirror p's
+    # response to mechanism c's noise in interval j, and W_i is the set of intervals
+    # spanned by difference i.
+    # ------------------------------------------------------------------
+
+    def _deposition_cross_products(self, f, channel, simulation_inputs, reflectance_data):
+        """
+        Between-mirror cross-products of one channel's response, per reflectance difference.
+
+        Entry ``[i, p, q]`` is ``sum_{j in W_i} a_j_p * a_j_q``, the Gram matrix of the
+        mirrors' responses over difference ``i``'s window. Scaling this by the channel's
+        variance components (see ``_experiment_covariance``) gives that mechanism's
+        contribution to the difference covariance.
+
+        Args:
+            f: Experiment (file) key.
+            channel (NoiseChannel): The mechanism whose loading is being accumulated.
+            simulation_inputs (SimulationInputs): Unused here; kept so the signature matches
+                the rest of the covariance builders.
+            reflectance_data (ReflectanceMeasurements): Supplies the difference windows and
+                the per-mirror nominal reflectance behind ``b``.
+
+        Returns:
+            numpy.ndarray: Cross-products, shape (n_differences, n_mirrors, n_mirrors).
+        """
+        b = self._reflectance_loss_factor(f, reflectance_data)  # (n_mirrors,)
+        a = b[:, None] * np.asarray(channel.loading, dtype=float)  # (n_mirrors, n_intervals)
+        windows = self._difference_windows(f, reflectance_data)
+
+        n_mirrors = a.shape[0]
+        cross_products = np.zeros((len(windows), n_mirrors, n_mirrors))
+        for i, window in enumerate(windows):
+            a_window = a[:, window]  # (n_mirrors, |W_i|)
+            # The matrix product IS the sum over j in W_i, one entry per mirror pair.
+            cross_products[i] = a_window @ a_window.transpose()
+        return cross_products
+
+    def _experiment_covariance(self, f, simulation_inputs, reflectance_data, endpoint_correction=True):
+        """
+        Covariance of every reflectance difference in one experiment, across all mirrors.
+
+        Each mechanism's deposition noise is split into a part common to every mirror at the
+        site during an interval and a mirror-specific part, in proportion ``kappa`` to
+        ``1 - kappa``. The common part couples mirrors; the mirror-specific part and the
+        reflectometer noise do not. Entry ``((p, i), (q, i'))`` is
+
+            delta_ii' * sum_c sigma_c**2 * [kappa_c + (1 - kappa_c) * delta_pq]
+                              * sum_{j in W_i} a_c_j_p * a_c_j_q
+            + delta_pq * R_ii'_p
+
+        The Kronecker delta on the difference index is the windows partitioning the
+        timeline, which ``_difference_windows`` guarantees; ``R`` is the differenced
+        measurement covariance.
+
+        Entries are ordered mirror-major: difference ``i`` of mirror ``p`` sits at index
+        ``p * n_differences + i``.
+
+        The result is positive definite by construction, not by luck: each mechanism's
+        contribution is the covariance of an actual random vector, and ``R = Delta Sigma_r
+        Delta'`` with ``Delta`` of full row rank is strictly positive definite. A Cholesky
+        failure here means the assembly is wrong, not that the problem is ill-conditioned.
+
+        Args:
+            f: Experiment (file) key.
+            simulation_inputs (SimulationInputs): Simulation inputs, for the channels.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+            endpoint_correction (bool): Passed to ``_differenced_measurement_covariance``.
+
+        Returns:
+            numpy.ndarray: Covariance, shape (n_mirrors * n_differences, same).
+        """
+        meas_cov = self._differenced_measurement_covariance(f, reflectance_data, endpoint_correction=endpoint_correction)
+        n_mirrors, n_diff = meas_cov.shape[0], meas_cov.shape[1]
+
+        # Deposition first: for each difference, an (n_mirrors, n_mirrors) block summed
+        # over mechanisms. Built one mechanism at a time so it reads as the formula above.
+        deposition = np.zeros((n_diff, n_mirrors, n_mirrors))
+        for channel in self.noise_channels(f, simulation_inputs):
+            if channel.sigma is None:
+                continue
+            # sigma_c^2 * [kappa_c + (1 - kappa_c) * delta_pq], the mirror-pair weight of
+            # mechanism c: kappa_c * sigma_c^2 everywhere, sigma_c^2 on the diagonal.
+            kappa = self._validate_kappa(channel.kappa, f"kappa of '{channel.name}'")
+            weights = channel.sigma**2 * (kappa + (1.0 - kappa) * np.eye(n_mirrors))
+            cross_products = self._deposition_cross_products(f, channel, simulation_inputs, reflectance_data)
+            for i in range(n_diff):
+                deposition[i] = deposition[i] + weights * cross_products[i]
+
+        # Then place block (p, q). Deposition is diagonal in the difference index; the
+        # measurement noise is confined to one mirror and is where the off-diagonal in
+        # that index comes from.
+        cov = np.zeros((n_mirrors * n_diff, n_mirrors * n_diff))
+        for p in range(n_mirrors):
+            rows = slice(p * n_diff, (p + 1) * n_diff)
+            for q in range(n_mirrors):
+                columns = slice(q * n_diff, (q + 1) * n_diff)
+                block = np.diag(deposition[:, p, q])
+                if p == q:
+                    block = block + meas_cov[p]
+                cov[rows, columns] = block
+        return cov
+
     def _sse(self, params, simulation_inputs, reflectance_data):
         # Computes the sum of squared errors between a soiling model and
         # the reflectance measurements.
@@ -323,20 +548,63 @@ class CommonFittingMethods:
         return sse
 
     def _negative_log_likelihood(self, params, simulation_inputs, reflectance_data):
+        """
+        Negative log-likelihood under the currently selected variance model.
+
+        Args:
+            params: The model's parameter vector, in ``_param_names`` order.
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+
+        Returns:
+            float: The negative log-likelihood.
+        """
+        if self.variance_model == "independent" and not self.endpoint_correction:
+            return self._negative_log_likelihood_diagonal(params, simulation_inputs, reflectance_data)
+        return self._negative_log_likelihood_components(params, simulation_inputs, reflectance_data, endpoint_correction=self.endpoint_correction)
+
+    def _difference_residuals(self, f, reflectance_data):
+        """
+        Observed minus predicted reflectance differences for one experiment.
+
+        Assumes ``predict_soiling_factor`` has already been run for the current parameters.
+
+        Args:
+            f: Experiment (file) key.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+
+        Returns:
+            numpy.ndarray: Residuals, shape (n_differences, n_mirrors).
+        """
+        pi = reflectance_data.prediction_indices[f]
+        # nominal clean reflectance, not rho0 -- see the identity on _nominal_reflectance_series
+        r0 = _nominal_reflectance_series(reflectance_data, f, self.helios.nominal_reflectance)
+        rho_prediction = r0 * self.helios.soiling_factor[f][:, pi].transpose()
+        return np.diff(reflectance_data.average[f], axis=0) - np.diff(rho_prediction, axis=0)
+
+    def _negative_log_likelihood_diagonal(self, params, simulation_inputs, reflectance_data):
+        """
+        Negative log-likelihood treating every reflectance difference as independent.
+
+        Each (difference, mirror) contributes a univariate normal term. This is the
+        original likelihood and what ``variance_model="independent"`` selects.
+
+        Args:
+            params: The model's parameter vector, in ``_param_names`` order.
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+
+        Returns:
+            float: The negative log-likelihood.
+        """
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs, reflectance_data)
 
         sim_in = simulation_inputs
         files = list(reflectance_data.times.keys())
-        pi = reflectance_data.prediction_indices
-        meas = reflectance_data.average
-        NL = [reflectance_data.average[f].shape[0] for f in files]
 
-        # define optimization objective function (negative log likelihood)
-        loglike = -0.5 * np.sum(NL) * np.log(2 * np.pi)
         self.update_model_parameters(params)
         self.predict_soiling_factor(simulation_inputs, reflectance_data=reflectance_data, verbose=False)
-        sf = self.helios.soiling_factor  # soiling factor to be multiplied by clean reflectance
 
         # Compute variance in reflectance, not soiling factor. No sigma is passed
         # positionally: update_model_parameters has just written every noise magnitude onto
@@ -344,14 +612,66 @@ class CommonFittingMethods:
         # for several, so this body serves every model in the family.
         s2total = self._compute_variance_of_measurements(None, sim_in, reflectance_data=reflectance_data)
 
+        loglike = 0.0
         for f in files:
-            delta_r = np.diff(meas[f], axis=0)
-            r0 = _nominal_reflectance_series(reflectance_data, f, self.helios.nominal_reflectance)  # nominal clean reflectance
-            rho_prediction = r0 * sf[f][:, pi[f]].transpose()
-            mu_delta_r = np.diff(rho_prediction, axis=0)
-            loglike += np.sum(-0.5 * np.log(s2total[f]) - (delta_r - mu_delta_r) ** 2 / (2 * s2total[f]))
+            residual = self._difference_residuals(f, reflectance_data)
+            # One 2*pi per term, i.e. per (difference, mirror). This used to be counted
+            # once per measurement row instead; the difference is an additive constant that
+            # no caller reads and that the optimiser cannot see, but the multivariate
+            # likelihood below has to normalise correctly, and the two only agree at
+            # kappa = 0 if this one does too.
+            loglike += -0.5 * residual.size * np.log(2 * np.pi)
+            loglike += np.sum(-0.5 * np.log(s2total[f]) - residual**2 / (2 * s2total[f]))
 
         return -loglike
+
+    def _negative_log_likelihood_components(self, params, simulation_inputs, reflectance_data, endpoint_correction=True):
+        """
+        Negative log-likelihood with the deposition noise split into variance components.
+
+        Generalises ``_negative_log_likelihood_diagonal`` to mirrors observed together at one
+        site, whose deposition noise is partly shared. Each experiment contributes one
+        multivariate normal over its stacked reflectance differences, with the covariance
+        built by ``_experiment_covariance``. Differences with a missing endpoint measurement
+        are dropped, which marginalises them exactly rather than approximating them.
+
+        Args:
+            params: The model's parameter vector, in ``_param_names`` order. The common
+                fractions are NOT part of it: they are read from the model (see
+                ``set_variance_model``).
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+            endpoint_correction (bool): Whether to model the correlation between consecutive
+                differences induced by the measurement they share.
+
+        Returns:
+            float: The negative log-likelihood.
+        """
+        # check to ensure that reflectance_data and simulation_input keys correspond to the same files
+        _check_keys(simulation_inputs, reflectance_data)
+
+        self.update_model_parameters(params)
+        self.predict_soiling_factor(simulation_inputs, reflectance_data=reflectance_data, verbose=False)
+
+        nll = 0.0
+        for f in list(reflectance_data.times.keys()):
+            # mirror-major ordering, matching _experiment_covariance: difference i of
+            # mirror p at index p * n_differences + i.
+            residual = self._difference_residuals(f, reflectance_data).transpose().ravel()
+            cov = self._experiment_covariance(f, simulation_inputs, reflectance_data, endpoint_correction=endpoint_correction)
+
+            observed = np.isfinite(residual)
+            if not observed.all():
+                residual = residual[observed]
+                cov = cov[observed, :][:, observed]
+            if residual.size == 0:
+                continue
+
+            factor = cho_factor(cov, lower=True)
+            # log|cov| = 2 * sum(log(diag(L))) for the lower Cholesky factor L.
+            nll += 0.5 * (residual.size * np.log(2 * np.pi) + 2.0 * np.sum(np.log(np.diag(factor[0]))) + residual @ cho_solve(factor, residual))
+
+        return nll
 
     def _logpost(self, y, simulation_inputs, reflectance_data, priors):
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
