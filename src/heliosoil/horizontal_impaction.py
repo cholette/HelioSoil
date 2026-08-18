@@ -106,7 +106,7 @@ import pandas as pd
 from scipy.optimize import minimize_scalar
 
 import heliosoil.base_models as smb
-from heliosoil.fitting import ConstantMeanDeposition, CommonFittingMethods
+from heliosoil.fitting import ConstantMeanDeposition, CommonFittingMethods, NoiseChannel
 from heliosoil.utilities import (
     _print_if,
     _check_keys,
@@ -635,6 +635,81 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
                 setattr(self, name, None)
                 _print_if(f"No {name} model defined in {file_params}.", self.verbose)
 
+    def _geometry_and_wind(self, f, simulation_inputs):
+        """
+        The geometry and weather every mechanism is evaluated on, validated once.
+
+        Single funnel for this model's inputs, so the tilt-range check and the
+        missing-data errors cover both the mean assembly and the noise channels.
+
+        Returns:
+            tuple: (tilt, azimuth, wind_dir, wind_speed); the last three are None when no
+            active mechanism needs wind.
+
+        Raises:
+            ValueError: If tilts leave [0, 180] deg, or a wind-driven mechanism is active
+                without azimuth or wind data.
+        """
+        helios = self.helios
+        tilt = helios.tilt[f]
+        check_tilt_range(tilt, f)
+
+        if not self._needs_wind:
+            return tilt, None, None, None
+
+        if getattr(helios, "azimuth", None) is None or helios.azimuth.get(f) is None:
+            raise ValueError(
+                "helios.azimuth is not populated for file "
+                + str(f)
+                + ". Call helios_angles(..., orientations=...) before "
+                + "calculate_delta_soiled_area on a wind-impaction model."
+            )
+        wind_dir = getattr(simulation_inputs, "wind_direction", {}).get(f)
+        wind_speed = getattr(simulation_inputs, "wind_speed", {}).get(f)
+        if wind_dir is None or wind_speed is None:
+            raise ValueError(
+                "Wind speed and/or wind direction are not available for file "
+                + str(f)
+                + ". The weather file must contain wind-speed and wind-direction "
+                + "columns (e.g. 'WindSpeed'/'WD') for the wind-impaction model."
+            )
+        return tilt, helios.azimuth[f], wind_dir, wind_speed
+
+    def noise_channels(self, f, simulation_inputs, sigma_override=None):
+        """
+        One deposition-noise channel per active mechanism.
+
+        Each mechanism carries its own noise process, whose loading is the sum of that
+        mechanism's mean bases (see _WindComponent.noise_loading). Overrides the
+        single-channel implementation in CommonFittingMethods, which is what lets the
+        variance assembly there serve both model families unchanged.
+
+        Args:
+            f: Experiment (file) key.
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            sigma_override: Ignored. There is no single magnitude to replace when several
+                mechanisms are active; every sigma is read from the model, which
+                update_model_parameters keeps in sync with the parameter vector.
+
+        Returns:
+            list[NoiseChannel]: One per active mechanism, in canonical order.
+
+        Raises:
+            ValueError: If a wind-driven mechanism is active but azimuth or wind data are
+                missing for this experiment.
+        """
+        tilt, azimuth, wind_dir, wind_speed = self._geometry_and_wind(f, simulation_inputs)
+        alphas = self._component_alphas(simulation_inputs, f)
+        return [
+            NoiseChannel(
+                component.sigma_param_name,
+                component.noise_loading(alphas[component.key], tilt, azimuth, wind_dir, wind_speed),
+                getattr(self, component.sigma_param_name),
+                self.common_variance_fraction,
+            )
+            for component in self.components
+        ]
+
     def calculate_delta_soiled_area(self, simulation_inputs, verbose=True, **param_overrides):
         # _print_if("Calculating soil deposited in a timestep [m^2/m^2]", verbose)
 
@@ -658,32 +733,7 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
 
         files = list(sim_in.time.keys())
         for f in files:
-            tilt = helios.tilt[f]
-            # Single funnel for this model's geometry, so the check covers tilts set by
-            # helios_angles and any assigned directly. See check_tilt_range for why.
-            check_tilt_range(tilt, f)
-
-            azimuth = wind_dir = wind_speed = None
-            if self._needs_wind:
-                if getattr(helios, "azimuth", None) is None or helios.azimuth.get(f) is None:
-                    raise ValueError(
-                        "helios.azimuth is not populated for file "
-                        + str(f)
-                        + ". Call helios_angles(..., orientations=...) before "
-                        + "calculate_delta_soiled_area on a wind-impaction model."
-                    )
-                azimuth = helios.azimuth[f]
-
-                wind_dir = getattr(sim_in, "wind_direction", {}).get(f)
-                wind_speed = getattr(sim_in, "wind_speed", {}).get(f)
-                if wind_dir is None or wind_speed is None:
-                    raise ValueError(
-                        "Wind speed and/or wind direction are not available for file "
-                        + str(f)
-                        + ". The weather file must contain wind-speed and wind-direction "
-                        + "columns (e.g. 'WindSpeed'/'WD') for the wind-impaction model."
-                    )
-
+            tilt, azimuth, wind_dir, wind_speed = self._geometry_and_wind(f, sim_in)
             alphas = self._component_alphas(sim_in, f)
 
             total_mean = np.zeros_like(tilt, dtype=float)
@@ -830,61 +880,6 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
             loglike += np.sum(-0.5 * np.log(s2total[f]) - (delta_r - mu_delta_r) ** 2 / (2 * s2total[f]))
 
         return -loglike
-
-    def _compute_variance_of_measurements(self, sigma_dep, simulation_inputs, reflectance_data=None):
-        # `sigma_dep` is kept as the first positional argument for signature
-        # compatibility with CommonFittingMethods' calling convention, but ignored:
-        # every active component's sigma is read from self (kept in sync by
-        # update_model_parameters immediately before this is called).
-        _check_keys(simulation_inputs, reflectance_data)
-
-        sim_in = simulation_inputs
-        files = list(sim_in.time.keys())
-        sigmas = {name: getattr(self, name) for name in self._sigma_param_names}
-
-        s2total = dict.fromkeys(files)
-        for f in files:
-            if reflectance_data is None:
-                pif = range(0, len(sim_in.time[f]))
-            else:
-                pif = reflectance_data.prediction_indices[f]
-
-            nom_ref_anchor = _nominal_reflectance_anchor(reflectance_data, f, self.helios.nominal_reflectance)
-            b = nom_ref_anchor * self.helios.inc_ref_factor[f]
-
-            alphas = self._component_alphas(sim_in, f)
-
-            if reflectance_data is None:
-                meas_sig = np.zeros(self.helios.tilt[f].shape).transpose()
-            else:
-                meas_sig = reflectance_data.sigma_of_the_mean[f]
-
-            tilt = self.helios.tilt[f]
-            # calculate_delta_soiled_area (called via predict_soiling_factor just
-            # before this) already validated azimuth/wind data when any component
-            # needs wind, so it's safe to index directly here.
-            azimuth = self.helios.azimuth[f] if self._needs_wind else None
-            wind_dir = sim_in.wind_direction[f] if self._needs_wind else None
-            wind_speed = sim_in.wind_speed[f] if self._needs_wind else None
-
-            # Difference i spans deposition intervals k_{i-1}+1 ... k_i INCLUSIVE, matching
-            # the inclusive cumulative sum in compute_soiling_factor that forms the mean.
-            # See CommonFittingMethods._compute_variance_of_measurements.
-            ind1 = pif[0:-1]
-            ind2 = pif[1::]
-
-            total_delta = np.zeros((len(ind1), tilt.shape[0]))
-            for component in self.components:
-                sigma = sigmas[component.sigma_param_name]
-                if sigma is None:
-                    continue
-                basis = component.variance_basis(alphas[component.key], tilt, azimuth, wind_dir, wind_speed)
-                c2t = np.cumsum(basis, axis=1).transpose()
-                total_delta = total_delta + sigma**2 * (c2t[ind2, :] - c2t[ind1, :])
-
-            s2total[f] = b**2 * total_delta + meas_sig[0:-1, :] ** 2 + meas_sig[1::, :] ** 2
-
-        return s2total
 
     def transform_scale(self, x, likelihood_hessian=None, direction="inverse"):
         if isinstance(x, (np.ndarray, list)):

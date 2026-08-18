@@ -10,6 +10,7 @@ from heliosoil.utilities import (
     gravitational_settling_factor,
 )
 import numpy as np
+from typing import NamedTuple, Optional
 from numpy import radians as rad
 from numpy.linalg import inv
 import pandas as pd
@@ -20,7 +21,48 @@ import numdifftools as ndt
 import pickle
 
 
+class NoiseChannel(NamedTuple):
+    """One independent deposition-noise process and the loading that scales it.
+
+    A model's deposition noise is a sum of such channels. The plain constant-mean and
+    semi-physical models have one; the wind model has one per active mechanism. Each
+    contributes ``sigma**2 * loading**2`` to the variance of an interval's deposition, and
+    -- once mirrors are no longer treated as independent -- couples mirrors in proportion
+    to the PRODUCT of their loadings, weighted by ``kappa``.
+
+    Attributes:
+        name: The model attribute carrying this channel's magnitude, e.g. "sigma_dep".
+        loading: Array (n_mirrors, n_times), nonnegative.
+        sigma: The magnitude, or None when the model carries no noise process (a
+            least-squares fit leaves every sigma unset).
+        kappa: Fraction of this channel's variance common to every mirror. Zero means
+            independent mirrors, which is what the current likelihoods assume.
+    """
+
+    name: str
+    loading: np.ndarray
+    sigma: Optional[float]
+    kappa: float = 0.0
+
+    @property
+    def scale(self):
+        """RMS loading over the design, the fixed constant that makes magnitudes comparable.
+
+        Channels of different mechanisms carry different physical dimensions (the
+        gravitational loading is dimensionless, the wind loadings carry a speed), so their
+        sigmas cannot be compared or pooled directly. ``sigma * scale`` is in soiled-area
+        units for every channel. See the soiling model notes, eq. (88).
+        """
+        return float(np.sqrt(np.mean(np.asarray(self.loading, dtype=float) ** 2)))
+
+
 class CommonFittingMethods:
+
+    # Fraction of the deposition variance common to every mirror at the site. Zero gives
+    # each mirror independent noise, which is what the likelihoods here assume; estimating
+    # it is what the multi-mirror extension adds.
+    common_variance_fraction = 0.0
+
     def compute_soiling_factor(self, reflectance_data=None):
         # Converts helios.delta_soiled_area into an accumulated area loss and
         # populates helios.soiling_factor.
@@ -50,15 +92,84 @@ class CommonFittingMethods:
 
         self.helios = helios
 
+    def _dust_loading(self, f, simulation_inputs):
+        """
+        Dimensionless airborne dust loading alpha_j: the measured mass over the same
+        measure's mass in the reference size distribution. A site quantity, shared by
+        every mirror and every mechanism that draws on this dust channel.
+
+        Args:
+            f: Experiment (file) key.
+            simulation_inputs (SimulationInputs): Supplies the concentration and type.
+
+        Returns:
+            numpy.ndarray: Loading, shape (n_times,).
+
+        Raises:
+            ValueError: If the simulation's dust type is not present on the Dust class.
+        """
+        sim_in = simulation_inputs
+        try:
+            attr = _parse_dust_str(sim_in.dust_type[f])
+            den = getattr(sim_in.dust, attr)  # dust.(sim_in.dust_type[f])
+        except Exception:
+            raise ValueError(
+                "Dust measurement "
+                + sim_in.dust_type[f]
+                + " not present in dust class. Use dust_type="
+                + sim_in.dust_type[f]
+                + " option when initializing the model"
+            )
+        return sim_in.dust_concentration[f] / den[f]
+
+    def noise_channels(self, f, simulation_inputs, sigma_override=None):
+        """
+        The deposition-noise channels active for experiment ``f``.
+
+        One channel per independent noise process. This model family has a single one:
+        deposition scaled by the dust loading and the mirror's horizontal projection.
+        Models with several mechanisms (heliosoil.horizontal_impaction) override this and
+        return one channel each.
+
+        Everything that consumes the noise -- the difference variance here, and the
+        multi-mirror covariance built on top of it -- goes through this list, so a model
+        gains noise handling by describing its channels rather than by reimplementing the
+        assembly.
+
+        Args:
+            f: Experiment (file) key.
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            sigma_override (float, optional): Replaces this single channel's magnitude.
+                Used by callers that pass a candidate value positionally rather than
+                setting it on the model first.
+
+        Returns:
+            list[NoiseChannel]: The active channels, in a fixed order.
+        """
+        alpha = self._dust_loading(f, simulation_inputs)
+        loading = alpha[None, :] * gravitational_settling_factor(self.helios.tilt[f])
+        sigma = self.sigma_dep if sigma_override is None else sigma_override
+        return [NoiseChannel("sigma_dep", loading, sigma, self.common_variance_fraction)]
+
     def _compute_variance_of_measurements(self, sigma_dep, simulation_inputs, reflectance_data=None):
-        """ "
-        Computes the total variance of the reflectance measurements, including both the measurement error and the variance due to the soiling model parameters.
+        """
+        Variance of each reflectance difference: deposition noise plus measurement noise.
 
-        The function takes in the standard deviation of the model parameters (`sigma_dep`), the simulation inputs (`simulation_inputs`), and optionally
-        the reflectance data (`reflectance_data`). It first checks that the keys in the simulation inputs and reflectance data match. Then, it computes
-        the total variance for each file, taking into account the measurement error and the variance due to the soiling model parameters.
+        Sums the contribution of every channel from ``noise_channels``, treating the
+        mirrors as independent and the differences as independent of one another -- so the
+        result is one variance per (difference, mirror) rather than a covariance. The
+        multi-mirror extension replaces this with a full covariance; the channels it is
+        assembled from are the same ones used here.
 
-        The function returns a dictionary `s2total` that contains the total variance for each file.
+        Args:
+            sigma_dep (float): Candidate magnitude for the single-channel models. Ignored
+                by models with more than one channel, whose magnitudes are read from the
+                model itself.
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+
+        Returns:
+            dict: Per experiment, an array of shape (n_differences, n_mirrors).
         """
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs, reflectance_data)
@@ -66,36 +177,12 @@ class CommonFittingMethods:
         sim_in = simulation_inputs
         files = list(sim_in.time.keys())
 
-        s2_dep = sigma_dep**2
         s2total = dict.fromkeys(files)
         for f in files:
-            if reflectance_data is None:
-                pif = range(0, len(sim_in.time[f]))
-            else:
-                pif = reflectance_data.prediction_indices[f]
+            pif = reflectance_data.prediction_indices[f]
+            b = self._reflectance_loss_factor(f, reflectance_data)  # per mirror
+            meas_sig = reflectance_data.sigma_of_the_mean[f]
 
-            nom_ref_anchor = _nominal_reflectance_anchor(reflectance_data, f, self.helios.nominal_reflectance)
-            b = nom_ref_anchor * self.helios.inc_ref_factor[f]  # fixed for fitting experiments at reflectometer incidence angle
-            try:
-                attr = _parse_dust_str(sim_in.dust_type[f])
-                den = getattr(sim_in.dust, attr)  # dust.(sim_in.dust_type[f])
-            except Exception:
-                raise ValueError(
-                    "Dust measurement "
-                    + sim_in.dust_type[f]
-                    + " not present in dust class. Use dust_type="
-                    + sim_in.dust_type[f]
-                    + " option when initializing the model"
-                )
-
-            alpha = sim_in.dust_concentration[f] / den[f]
-
-            if reflectance_data is None:
-                meas_sig = np.zeros(self.helios.tilt[f].shape).transpose()
-            else:
-                meas_sig = reflectance_data.sigma_of_the_mean[f]
-
-            c2t = np.cumsum(alpha**2 * gravitational_settling_factor(self.helios.tilt[f]) ** 2, axis=1).transpose()
             # Difference i spans deposition intervals k_{i-1}+1 ... k_i INCLUSIVE, matching
             # the inclusive cumulative sum in compute_soiling_factor that forms the mean:
             # soiling_factor[k] already contains delta_soiled_area[k]. Taking the cumulative
@@ -103,7 +190,15 @@ class CommonFittingMethods:
             # intervals the mean difference accumulates.
             ind1 = pif[0:-1]
             ind2 = pif[1::]
-            s2total[f] = s2_dep * b**2 * (c2t[ind2, :] - c2t[ind1, :]) + meas_sig[0:-1, :] ** 2 + meas_sig[1::, :] ** 2
+
+            deposition = np.zeros((len(ind1), self.helios.tilt[f].shape[0]))
+            for channel in self.noise_channels(f, sim_in, sigma_override=sigma_dep):
+                if channel.sigma is None:
+                    continue
+                c2t = np.cumsum(channel.loading**2, axis=1).transpose()
+                deposition = deposition + channel.sigma**2 * (c2t[ind2, :] - c2t[ind1, :])
+
+            s2total[f] = b**2 * deposition + meas_sig[0:-1, :] ** 2 + meas_sig[1::, :] ** 2
 
         return s2total
 
