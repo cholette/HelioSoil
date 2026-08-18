@@ -112,7 +112,6 @@ from heliosoil.utilities import (
     _check_keys,
     _parse_dust_str,
     _std_errors_from_cov,
-    _nominal_reflectance_series,
     _nominal_reflectance_anchor,
     canonical_dust_spec,
     resolve_dust_concentration,
@@ -852,34 +851,9 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
             # gravitational component is active -- it is always first in canonical order).
             setattr(self, self._mean_param_names[0], x)
 
-    def _negative_log_likelihood(self, params, simulation_inputs, reflectance_data):
-        # Structurally identical to CommonFittingMethods._negative_log_likelihood,
-        # except sigma is not extracted positionally from `params` -- every active
-        # component's sigma is read from self by _compute_variance_of_measurements,
-        # which update_model_parameters keeps in sync immediately below.
-        _check_keys(simulation_inputs, reflectance_data)
-
-        sim_in = simulation_inputs
-        files = list(reflectance_data.times.keys())
-        pi = reflectance_data.prediction_indices
-        meas = reflectance_data.average
-        NL = [reflectance_data.average[f].shape[0] for f in files]
-
-        loglike = -0.5 * np.sum(NL) * np.log(2 * np.pi)
-        self.update_model_parameters(params)
-        self.predict_soiling_factor(simulation_inputs, reflectance_data=reflectance_data, verbose=False)
-        sf = self.helios.soiling_factor
-
-        s2total = self._compute_variance_of_measurements(None, sim_in, reflectance_data=reflectance_data)
-
-        for f in files:
-            delta_r = np.diff(meas[f], axis=0)
-            r0 = _nominal_reflectance_series(reflectance_data, f, self.helios.nominal_reflectance)
-            rho_prediction = r0 * sf[f][:, pi[f]].transpose()
-            mu_delta_r = np.diff(rho_prediction, axis=0)
-            loglike += np.sum(-0.5 * np.log(s2total[f]) - (delta_r - mu_delta_r) ** 2 / (2 * s2total[f]))
-
-        return -loglike
+    # _negative_log_likelihood is inherited. It used to be overridden here only to avoid
+    # extracting a single sigma positionally from `params`; the base version no longer does
+    # that either, so the two bodies had become identical.
 
     def transform_scale(self, x, likelihood_hessian=None, direction="inverse"):
         if isinstance(x, (np.ndarray, list)):

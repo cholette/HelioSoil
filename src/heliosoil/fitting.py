@@ -333,14 +333,16 @@ class CommonFittingMethods:
         NL = [reflectance_data.average[f].shape[0] for f in files]
 
         # define optimization objective function (negative log likelihood)
-        sigma_dep = params[1]
         loglike = -0.5 * np.sum(NL) * np.log(2 * np.pi)
         self.update_model_parameters(params)
         self.predict_soiling_factor(simulation_inputs, reflectance_data=reflectance_data, verbose=False)
         sf = self.helios.soiling_factor  # soiling factor to be multiplied by clean reflectance
 
-        # Compute variance in reflectance, not soiling factor
-        s2total = self._compute_variance_of_measurements(sigma_dep, sim_in, reflectance_data=reflectance_data)
+        # Compute variance in reflectance, not soiling factor. No sigma is passed
+        # positionally: update_model_parameters has just written every noise magnitude onto
+        # the model, and noise_channels reads them from there. That holds for one sigma or
+        # for several, so this body serves every model in the family.
+        s2total = self._compute_variance_of_measurements(None, sim_in, reflectance_data=reflectance_data)
 
         for f in files:
             delta_r = np.diff(meas[f], axis=0)
