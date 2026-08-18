@@ -18,8 +18,82 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from scipy.linalg import cho_factor, cho_solve
 from scipy.optimize import lsq_linear, minimize_scalar, minimize
+from scipy.special import expit, logit
 import numdifftools as ndt
 import pickle
+
+
+# ----------------------------------------------------------------------------------
+# Parameter transforms. Every parameter is optimised on an unconstrained "fitted" scale
+# and stored on its natural one; these name the map between them. Stating the map per
+# parameter, rather than per model class, is what lets one transform_scale serve models
+# whose parameters are variously positive (log), greater than one (log-log), bounded to
+# the unit interval (logit) or unconstrained (identity).
+# ----------------------------------------------------------------------------------
+
+TRANSFORM_IDENTITY = "identity"
+TRANSFORM_LOG = "log"
+TRANSFORM_LOGLOG = "loglog"
+TRANSFORM_LOGIT = "logit"
+
+_TRANSFORM_LABELS = {
+    TRANSFORM_IDENTITY: "{0}",
+    TRANSFORM_LOG: "log({0})",
+    TRANSFORM_LOGLOG: "log(log({0}))",
+    TRANSFORM_LOGIT: "logit({0})",
+}
+
+# Transforms whose natural scale is bounded below at zero. Used to decide which mean
+# parameters a least-squares fit must keep positive.
+_POSITIVE_TRANSFORMS = (TRANSFORM_LOG, TRANSFORM_LOGLOG)
+
+
+def _to_natural(code, y):
+    """One parameter, fitted scale -> natural scale."""
+    if code == TRANSFORM_IDENTITY:
+        return float(y)
+    if code == TRANSFORM_LOG:
+        return float(np.exp(y))
+    if code == TRANSFORM_LOGLOG:
+        # A double exponential overflows for a large fitted value. That is left to
+        # overflow to inf rather than clipped: fit_mle checks the converged optimum for
+        # finiteness and reports an unidentified model, which a clip would hide.
+        return float(np.exp(np.exp(y)))
+    if code == TRANSFORM_LOGIT:
+        return float(expit(y))
+    raise ValueError(f"Unknown parameter transform '{code}'.")
+
+
+def _to_fitted(code, x):
+    """One parameter, natural scale -> fitted scale."""
+    if code == TRANSFORM_IDENTITY:
+        return float(x)
+    if code == TRANSFORM_LOG:
+        return float(np.log(x))
+    if code == TRANSFORM_LOGLOG:
+        return float(np.log(np.log(x)))
+    if code == TRANSFORM_LOGIT:
+        return float(logit(x))
+    raise ValueError(f"Unknown parameter transform '{code}'.")
+
+
+def _natural_derivative(code, y):
+    """d(natural)/d(fitted) for one parameter, evaluated at the FITTED point ``y``.
+
+    This is the diagonal entry of the Jacobian the delta method needs. Evaluating at the
+    fitted point (rather than the natural one) keeps the expressions in closed form:
+    ``exp(y)`` for a log parameter, ``exp(y + exp(y))`` for a log-log one.
+    """
+    if code == TRANSFORM_IDENTITY:
+        return 1.0
+    if code == TRANSFORM_LOG:
+        return float(np.exp(y))
+    if code == TRANSFORM_LOGLOG:
+        return float(np.exp(y + np.exp(y)))
+    if code == TRANSFORM_LOGIT:
+        p = expit(y)
+        return float(p * (1.0 - p))
+    raise ValueError(f"Unknown parameter transform '{code}'.")
 
 
 def kappa_param_name(sigma_name):
@@ -105,6 +179,130 @@ class CommonFittingMethods:
         return tuple(kappa_param_name(name) for name in self._sigma_param_names)
 
     @property
+    def fitted_kappa_names(self):
+        """The common fractions carried in the parameter vector, under the current model.
+
+        None under "independent"; one pooled fraction under "shared_kappa"; one per
+        mechanism under "per_mechanism".
+        """
+        if self.variance_model == "independent":
+            return ()
+        if self.variance_model == "shared_kappa":
+            return ("common_variance_fraction",)
+        return self._kappa_param_names
+
+    @property
+    def parameter_names(self):
+        """Every fitted parameter, in parameter-vector order: means, then magnitudes, then
+        common fractions.
+
+        Distinct from ``_param_names``, which names only the mean and magnitude parameters
+        that enter the forward model. The common fractions affect the likelihood but not
+        the prediction, so they belong here and not there.
+        """
+        return list(self._mean_param_names) + list(self._sigma_param_names) + list(self.fitted_kappa_names)
+
+    @property
+    def transform_codes(self):
+        """One transform per entry of ``parameter_names``, in the same order."""
+        return tuple(self._mean_transform_codes) + (TRANSFORM_LOG,) * len(self._sigma_param_names) + (TRANSFORM_LOGIT,) * len(self.fitted_kappa_names)
+
+    def _codes_for_length(self, n):
+        """The leading transforms for a parameter vector of length ``n``.
+
+        Three lengths are meaningful: the mean parameters alone (what a least-squares fit
+        returns), the means and magnitudes, and the complete vector. Anything else is a
+        caller error worth catching here rather than in a silent broadcast downstream.
+        """
+        codes = self.transform_codes
+        n_mean = len(self._mean_param_names)
+        allowed = sorted({n_mean, n_mean + len(self._sigma_param_names), len(codes)})
+        if n not in allowed:
+            model = getattr(self, "model_name", type(self).__name__)
+            labels = ", ".join(f"{k} ({', '.join(self.parameter_names[:k])})" for k in allowed)
+            raise ValueError(f"Cannot transform a vector of {n} parameter(s) for model '{model}': expected one of {labels}.")
+        return codes[:n]
+
+    def _split_parameters(self, x):
+        """Split a parameter vector into its forward-model part and its common fractions."""
+        x = list(x)
+        n_kappa = len(self.fitted_kappa_names)
+        if n_kappa and len(x) == len(self.parameter_names):
+            return x[: len(x) - n_kappa], x[len(x) - n_kappa :]
+        return x, []
+
+    def _update_kappa_parameters(self, values):
+        """Write the common fractions from the tail of a parameter vector onto the model."""
+        for name, value in zip(self.fitted_kappa_names, values):
+            setattr(self, name, self._validate_kappa(value, name))
+
+    def transform_scale(self, x, likelihood_hessian=None, direction="inverse"):
+        """
+        Map parameters between their natural scale and the unconstrained fitting scale.
+
+        ``direction="forward"`` goes natural -> fitted, ``"inverse"`` fitted -> natural.
+        Optimising on the fitted scale enforces each parameter's constraint without bounds:
+        ``hrz0 > 1``, ``mu_tilde > 0``, ``sigma > 0``, ``0 < kappa < 1``. Which transform
+        applies to which parameter is declared by ``transform_codes``.
+
+        Supplying ``likelihood_hessian`` also returns it transformed by the delta method.
+        The Jacobian is diagonal, so the map is elementwise division (or multiplication) by
+        its entries -- no matrix inverse, which matters because that inverse is
+        near-singular exactly when a variance parameter has fitted to its bound.
+
+        Args:
+            x: Parameter vector, on the scale ``direction`` starts from.
+            likelihood_hessian (numpy.ndarray, optional): Hessian on that same scale.
+            direction (str): "forward" or "inverse".
+
+        Returns:
+            numpy.ndarray, or (numpy.ndarray, numpy.ndarray) when a Hessian is supplied.
+
+        Raises:
+            ValueError: On an unrecognised direction, or a vector of unusable length.
+        """
+        if not isinstance(x, (list, tuple, np.ndarray)):
+            raise ValueError(f"transform_scale takes a parameter vector, got {type(x).__name__}. Wrap a single parameter in a list.")
+        x = np.asarray(x, dtype=float).reshape(-1)
+        codes = self._codes_for_length(len(x))
+
+        # The optimiser probes extreme values while searching; the resulting transient
+        # overflow is not informative, and fit_mle checks the converged optimum instead.
+        with np.errstate(over="ignore"):
+            if direction == "inverse":
+                z = np.array([_to_natural(c, v) for c, v in zip(codes, x)])
+                jacobian = np.array([_natural_derivative(c, v) for c, v in zip(codes, x)])
+            elif direction == "forward":
+                z = np.array([_to_fitted(c, v) for c, v in zip(codes, x)])
+                jacobian = np.array([_natural_derivative(c, v) for c, v in zip(codes, z)])
+            else:
+                raise ValueError("Transformation direction not recognized.")
+
+        if not isinstance(likelihood_hessian, np.ndarray):
+            # not `is None`: callers pass an array, and `array is None` is not the test.
+            return z
+
+        # With J = d(natural)/d(fitted) diagonal, a Hessian with respect to the fitted
+        # parameters becomes J^-T H J^-1 with respect to the natural ones, and the reverse
+        # is J^T H J.
+        if direction == "inverse":
+            return z, (likelihood_hessian / jacobian[:, None]) / jacobian[None, :]
+        return z, (jacobian[:, None] * likelihood_hessian) * jacobian[None, :]
+
+    def natural_scale_jacobian(self, y):
+        """d(natural)/d(fitted) at the fitted point ``y``, elementwise.
+
+        The delta method for a covariance runs the other way from ``transform_scale``'s
+        Hessian: ``cov -> J cov J'``. Exposed so ``fit_mle`` can transform a covariance
+        directly instead of inverting it to a Hessian and back, a round trip that fails
+        whenever a variance parameter has fitted to its bound.
+        """
+        y = np.asarray(y, dtype=float).reshape(-1)
+        codes = self._codes_for_length(len(y))
+        with np.errstate(over="ignore"):
+            return np.array([_natural_derivative(c, v) for c, v in zip(codes, y)])
+
+    @property
     def endpoint_correction(self):
         """Whether consecutive differences share their endpoint measurement noise.
 
@@ -170,6 +368,186 @@ class CommonFittingMethods:
         if not 0.0 <= value <= 1.0:
             raise ValueError(f"The common variance fraction {name} must be in [0, 1], got {value}.")
         return value
+
+    def loaded_mirror_counts(self, simulation_inputs, reflectance_data):
+        """How many mirrors each mechanism actually loads, at best, in any one experiment.
+
+        A mechanism's common fraction is identified by mirrors that feel it *together*: the
+        scatter between them carries the mirror-specific part and their shared movement the
+        common part. A mirror the mechanism does not load (gravitational settling on a
+        face-down mirror, normal wind on a horizontal one) contributes to neither, so it is
+        not counted. See the soiling model notes, eq. (94).
+
+        Args:
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+
+        Returns:
+            dict: Magnitude name -> the largest number of mirrors it loads in one experiment.
+        """
+        counts = {name: 0 for name in self._sigma_param_names}
+        for f in reflectance_data.times:
+            for channel in self.noise_channels(f, simulation_inputs):
+                loading = np.asarray(channel.loading, dtype=float)
+                loaded = int(np.count_nonzero(np.any(loading != 0.0, axis=1)))
+                counts[channel.name] = max(counts.get(channel.name, 0), loaded)
+        return counts
+
+    def _check_variance_components_identifiable(self, simulation_inputs, reflectance_data):
+        """
+        Confirm the data can separate the variance components the current model asks for.
+
+        Splitting a mechanism's variance into a common and a mirror-specific part needs at
+        least two mirrors that the mechanism loads in the same experiment. Under
+        "shared_kappa" one such mechanism suffices, since the fraction is pooled; under
+        "per_mechanism" every mechanism carrying a magnitude needs its own pair.
+
+        Args:
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+
+        Raises:
+            ValueError: If the requested variance model is not identified by this data.
+        """
+        if self.variance_model == "independent":
+            return
+
+        counts = self.loaded_mirror_counts(simulation_inputs, reflectance_data)
+        active = [name for name in self._sigma_param_names if getattr(self, name, None) is not None]
+        # Before a fit no magnitude need be set yet; then every mechanism is a candidate.
+        if not active:
+            active = list(self._sigma_param_names)
+        detail = ", ".join(f"{name}: {counts.get(name, 0)}" for name in active)
+
+        if self.variance_model == "shared_kappa":
+            if max((counts.get(name, 0) for name in active), default=0) < 2:
+                raise ValueError(f"Variance model 'shared_kappa' needs at least two mirrors loaded by the same mechanism in one experiment, but no mechanism reaches two ({detail}). Use set_variance_model('independent') to fit the total deposition variance only.")
+            return
+
+        starved = [name for name in active if counts.get(name, 0) < 2]
+        if starved:
+            raise ValueError(f"Variance model 'per_mechanism' needs at least two mirrors loaded by EACH mechanism in one experiment, but {starved} fall short ({detail}). Drop those mechanisms, add mirrors whose orientation they act on, or use set_variance_model('shared_kappa').")
+
+    def noise_channel_scales(self, simulation_inputs, reflectance_data):
+        """RMS loading per mechanism, pooled over the whole training design.
+
+        The fixed constant ``s_c`` of the soiling model notes, eq. (88). Magnitudes of
+        different mechanisms carry different physical dimensions -- the gravitational
+        loading is dimensionless, the wind loadings carry a speed -- so ``sigma_c`` alone
+        cannot be compared across mechanisms, whereas ``tau_c = sigma_c * s_c`` is in
+        soiled-area units for every one of them.
+
+        Args:
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            reflectance_data (ReflectanceMeasurements): Measurement data, which fixes which
+                experiments make up the design.
+
+        Returns:
+            dict: Magnitude name -> its RMS loading.
+        """
+        totals = {name: [0.0, 0] for name in self._sigma_param_names}
+        for f in reflectance_data.times:
+            for channel in self.noise_channels(f, simulation_inputs):
+                loading = np.asarray(channel.loading, dtype=float)
+                total, count = totals.get(channel.name, [0.0, 0])
+                totals[channel.name] = [total + float(np.sum(loading**2)), count + loading.size]
+        return {name: (float(np.sqrt(total / count)) if count else 0.0) for name, (total, count) in totals.items()}
+
+    @staticmethod
+    def _delta_method_interval(centre, standard_deviation, inverse):
+        """A 95% interval mapped through a monotone inverse transform.
+
+        Returns ``None`` for the interval where the standard error is not usable -- a
+        non-finite or negative curvature, which is what a parameter sitting on its bound
+        produces. A bare NaN interval would read as a number; None does not.
+        """
+        if not np.isfinite(standard_deviation) or standard_deviation < 0.0:
+            return None
+        with np.errstate(over="ignore"):
+            return (float(inverse(centre - 1.96 * standard_deviation)), float(inverse(centre + 1.96 * standard_deviation)))
+
+    def variance_component_summary(self, y_hat, y_cov, simulation_inputs=None, reflectance_data=None):
+        """
+        Per-mechanism noise report: magnitude, scaled magnitude, variance share and common
+        fraction, each with a 95% interval by the delta method.
+
+        Everything is computed on the fitted scale, where the intervals are symmetric, and
+        mapped back through the transform -- so ``sigma`` and ``tau`` stay positive and
+        ``kappa`` and the share stay inside [0, 1] by construction.
+
+        ``tau_c = sigma_c * s_c`` and the share ``pi_c = tau_c**2 / sum_c' tau_c'**2`` are
+        diagnostics computed from the fit, not fitted parameters (see the port plan, D7 and
+        D8). The share's gradient on the fitted scale is
+        ``d logit(pi_c) / d log(sigma_j) = 2 (delta_cj - pi_j) / (1 - pi_c)``.
+
+        Args:
+            y_hat (numpy.ndarray): Estimates on the fitted scale, as ``fit_mle`` returns
+                them with ``transform_to_original_scale=False``.
+            y_cov (numpy.ndarray): Their covariance on the fitted scale.
+            simulation_inputs (SimulationInputs, optional): Needed for ``tau`` and the
+                share; without it those entries are omitted.
+            reflectance_data (ReflectanceMeasurements, optional): Likewise.
+
+        Returns:
+            dict: Magnitude name -> dict of entries, each ``(estimate, interval_or_None)``.
+        """
+        y_hat = np.asarray(y_hat, dtype=float)
+        y_cov = np.asarray(y_cov, dtype=float)
+        n_mean = len(self._mean_param_names)
+        sigma_names = list(self._sigma_param_names)
+        kappa_names = list(self.fitted_kappa_names)
+
+        def standard_deviation(gradient):
+            return float(np.sqrt(max(float(gradient @ y_cov @ gradient), 0.0))) if np.all(np.isfinite(gradient)) else np.nan
+
+        scales = None
+        if simulation_inputs is not None and reflectance_data is not None:
+            scales = self.noise_channel_scales(simulation_inputs, reflectance_data)
+            tau_squared = {}
+            for index, name in enumerate(sigma_names):
+                magnitude = getattr(self, name, None)
+                tau_squared[name] = 0.0 if magnitude is None else float(np.exp(2.0 * y_hat[n_mean + index]) * scales[name] ** 2)
+            total = sum(tau_squared.values())
+            shares = {name: (tau_squared[name] / total if total > 0.0 else 0.0) for name in sigma_names}
+
+        summary = {}
+        for index, name in enumerate(sigma_names):
+            if getattr(self, name, None) is None:
+                continue
+            entry = {}
+            i = n_mean + index
+
+            gradient = np.zeros(len(y_hat))
+            gradient[i] = 1.0
+            sd = standard_deviation(gradient)
+            entry["sigma"] = (float(np.exp(y_hat[i])), self._delta_method_interval(y_hat[i], sd, np.exp))
+
+            if scales is not None:
+                # tau differs from sigma by a constant factor, so on the log scale it is a
+                # shift: the same standard error, a translated centre.
+                log_tau = y_hat[i] + np.log(scales[name]) if scales[name] > 0.0 else -np.inf
+                entry["tau"] = (float(np.exp(log_tau)), self._delta_method_interval(log_tau, sd, np.exp))
+
+                share = shares[name]
+                if 0.0 < share < 1.0:
+                    share_gradient = np.zeros(len(y_hat))
+                    for other, other_name in enumerate(sigma_names):
+                        share_gradient[n_mean + other] = 2.0 * ((1.0 if other_name == name else 0.0) - shares[other_name]) / (1.0 - share)
+                    entry["share"] = (share, self._delta_method_interval(logit(share), standard_deviation(share_gradient), expit))
+                else:
+                    # Exactly 0 or 1 means the mechanism is alone, or its magnitude sat on
+                    # the boundary. Either way the logit is not finite and no interval is
+                    # meaningful.
+                    entry["share"] = (share, None)
+
+            if kappa_names:
+                j = len(y_hat) - len(kappa_names) + (0 if self.variance_model == "shared_kappa" else index)
+                gradient = np.zeros(len(y_hat))
+                gradient[j] = 1.0
+                entry["kappa"] = (float(expit(y_hat[j])), self._delta_method_interval(y_hat[j], standard_deviation(gradient), expit))
+
+            summary[name] = entry
+        return summary
 
     def _kappa_for(self, sigma_name):
         """This mechanism's common fraction under the current variance model."""
@@ -701,6 +1079,9 @@ class CommonFittingMethods:
 
     _mean_param_names = ()
     _sigma_param_names = ()
+    # One transform per mean parameter, aligned with _mean_param_names. Magnitudes are
+    # always log and common fractions always logit, so only the means need declaring.
+    _mean_transform_codes = ()
     # Search bracket for the single-parameter bounded scalar fits (fit_least_squares, and the
     # nonlinear SemiPhysical.fit_ls built on it). The lower bound sits just above 1 because
     # hrz0 is represented as log(log(hrz0)); a fit landing on either end is reported rather
@@ -736,16 +1117,27 @@ class CommonFittingMethods:
     def _fitted_scale_jacobian(self, x):
         """d(transform_scale(x, "forward")) / dx, elementwise, over the mean parameters.
 
-        Each model transforms its parameters differently (log, log-log, or not at all), and
-        the delta method needs that derivative to carry a least-squares covariance onto the
-        fitted scale. Declared next to each class's own transform_scale so the two cannot
-        disagree."""
-        raise NotImplementedError(f"{type(self).__name__} does not support least-squares fitting.")
+        The delta method needs this derivative to carry a least-squares covariance onto the
+        fitted scale. It is the reciprocal of ``natural_scale_jacobian`` at the matching
+        point, so it is derived from ``transform_codes`` rather than restated per class --
+        the two cannot disagree because there is only one statement of the transform.
+        """
+        x = np.atleast_1d(np.asarray(x, dtype=float))
+        codes = self._codes_for_length(len(x))
+        with np.errstate(over="ignore"):
+            return np.array([1.0 / _natural_derivative(c, _to_fitted(c, v)) for c, v in zip(codes, x)])
 
     def _fitted_scale_label(self, name, i):
-        """How mean parameter `i` is spelled on the fitted scale, for reporting -- "log(x)",
-        "log(log(x))", or the bare name where the parameter is not transformed."""
-        return f"transformed({name})"
+        """How parameter `i` is spelled on the fitted scale, for reporting -- "log(x)",
+        "log(log(x))", "logit(x)", or the bare name where it is not transformed."""
+        return _TRANSFORM_LABELS[self.transform_codes[i]].format(name)
+
+    def _ls_lower_bounded(self):
+        """Which mean parameters a least-squares fit must keep positive: those whose
+        transform implies it. The linear ones (the wind coefficients) may legitimately fit
+        negative -- scouring -- and are left free."""
+        codes = self.transform_codes[: len(self._mean_param_names)]
+        return np.array([c in _POSITIVE_TRANSFORMS for c in codes])
 
     def _predicted_reflectance(self, simulation_inputs, reflectance_data):
         """Predicted reflectance at the measurement times, {file: (N_measurements, N_helios)}
@@ -838,6 +1230,11 @@ class CommonFittingMethods:
 
         ref_dat = reflectance_data
         sim_in = simulation_inputs
+        self._check_variance_components_identifiable(simulation_inputs, reflectance_data)
+
+        # Start every common fraction at an even split, which is interior to [0, 1] and so
+        # does not begin the search on a boundary.
+        kappa0 = [0.5] * len(self.fitted_kappa_names)
 
         if np.all(x0 is None):  # intialize using least squares and 1D MLE
             _print_if("Getting initial deposition parameter guess via least squares", verbose)
@@ -846,11 +1243,11 @@ class CommonFittingMethods:
             _print_if("Getting initial sigma_dep guess via MLE (at least-squares value for deposition parameters)", verbose)
 
             def nloglike1D(y):
-                return self._negative_log_likelihood([p0, y], sim_in, ref_dat)
+                return self._negative_log_likelihood([p0, y] + kappa0, sim_in, ref_dat)
 
             s0 = minimize_scalar(nloglike1D, bounds=(smb.tol, sse), method="Bounded")  # use bounded to prevent evaluation at values <=1
-            x0 = np.array([p0, s0.x])
-            _print_if("x0 = [" + str(x0[0]) + ", " + str(x0[1]) + "]", verbose)
+            x0 = np.array([p0, s0.x] + kappa0)
+            _print_if("x0 = [" + ", ".join(f"{v}" for v in x0) + "]", verbose)
 
         # MLE. Transform to logs to ensure parameters are positive
         _print_if("Maximizing likelihood ...", verbose)
@@ -1291,19 +1688,14 @@ class AffineMeanLeastSquares:
 
         return self._finish_least_squares(theta, cov_theta, transform_to_original_scale, verbose)
 
-    def _ls_lower_bounded(self):
-        """Per-mean-parameter flag: True where the parameter must stay positive because the
-        model represents it in logs. Defaults to every mean parameter (the constant-mean
-        deposition coefficient is a rate and cannot be negative); the wind model overrides it,
-        since its omegas are carried linearly and may fit negative."""
-        return np.ones(len(self._mean_param_names), dtype=bool)
-
 
 class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
     # hrz0 enters through the deposition-velocity physics, so the prediction is NOT affine in
     # it and AffineMeanLeastSquares does not apply; fit_ls below is a nonlinear fit instead.
     _mean_param_names = ("hrz0",)
     _sigma_param_names = ("sigma_dep",)
+    # hrz0 is a roughness ratio greater than one, so it is carried as log(log(hrz0)).
+    _mean_transform_codes = (TRANSFORM_LOGLOG,)
 
     def __init__(self, file_params, verbose=True):
         table = pd.read_excel(file_params, index_col="Parameter")
@@ -1416,46 +1808,6 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
 
         return p_hat, p_cov
 
-    def transform_scale(self, x, likelihood_hessian=None, direction="inverse"):
-        # direction is either "forward" (to log-scaled space) or "inverse" (back to original scale)
-        x = np.array(x)
-        # A length-1 x is hrz0 alone -- what fit_ls estimates, since least squares fits no
-        # sigma. hrz0 comes first in the parameter vector, so every expression below simply
-        # stops after its first entry; a length-2 x is unchanged.
-        if len(x) not in (1, 2):
-            raise ValueError(f"Cannot transform a vector of {len(x)} parameter(s): expected 1 (hrz0) or 2 (hrz0 and sigma_dep).")
-        if direction == "inverse":
-            # Double-exp can overflow for large log-params; inf is handled downstream.
-            with np.errstate(over="ignore"):
-                z = np.array([np.exp(np.exp(x[0])), *(np.exp(x[1:]))])
-        elif direction == "forward":
-            z = np.array([np.log(np.log(x[0])), *(np.log(x[1:]))])
-        else:
-            raise ValueError("Transformation direction not recognized.")
-
-        if not isinstance(likelihood_hessian, np.ndarray):  # can't use likelihood_hessian is None because it is an array if supplied
-            return z
-        else:
-            # Jacobian for transformation. See Reparameterization at https://en.wikipedia.org/wiki/Fisher_information
-            with np.errstate(over="ignore"):
-                J = np.array([[np.exp(x[0] + np.exp(x[0])), 0], [0, np.exp(x[1])]])
-
-            if direction == "inverse":
-                Ji = inv(J)
-                H = Ji.transpose() @ likelihood_hessian @ Ji
-            elif direction == "forward":
-                H = J.transpose() @ likelihood_hessian @ J
-
-            return z, H
-
-    def _fitted_scale_jacobian(self, x):
-        # forward transform is log(log(hrz0)), so the derivative is 1 / (hrz0 * log(hrz0))
-        x = np.asarray(x, dtype=float)
-        return 1.0 / (x * np.log(x))
-
-    def _fitted_scale_label(self, name, i):
-        return f"log(log({name}))"
-
     def fit_ls(self, simulation_inputs, reflectance_data, verbose=True, transform_to_original_scale=False):
         """Least-squares counterpart of fit_mle: fits hrz0 alone, by NONLINEAR least squares.
 
@@ -1517,9 +1869,11 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
         If `x` is a single value, it is assigned to `hrz0` and `sigma_dep` is set to `None`.
         """
         if isinstance(x, list) or isinstance(x, np.ndarray):
-            self.hrz0 = x[0]
-            if len(x) > 1:
-                self.sigma_dep = x[1]
+            core, kappas = self._split_parameters(x)
+            self.hrz0 = core[0]
+            if len(core) > 1:
+                self.sigma_dep = core[1]
+            self._update_kappa_parameters(kappas)
         else:
             self.hrz0 = x
             self.sigma_dep = None
@@ -1560,6 +1914,7 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, AffineMeanLeastSquares, Commo
     # so AffineMeanLeastSquares' one-shot linear fit_ls applies directly.
     _mean_param_names = ("mu_tilde",)
     _sigma_param_names = ("sigma_dep",)
+    _mean_transform_codes = (TRANSFORM_LOG,)
 
     def __init__(self, file_params, verbose=True):
         super().__init__()
@@ -1702,63 +2057,13 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, AffineMeanLeastSquares, Commo
 
         return x_hat, x_hat_cov
 
-    def _fitted_scale_jacobian(self, x):
-        # forward transform is log(mu_tilde), so the derivative is 1 / mu_tilde
-        return 1.0 / np.asarray(x, dtype=float)
-
-    def _fitted_scale_label(self, name, i):
-        return f"log({name})"
-
-    def transform_scale(self, x, likelihood_hessian=None, direction="inverse"):
-        if isinstance(x, np.ndarray) or isinstance(x, list):
-            x = np.array(x)
-            # Both parameters are log-transformed, so one elementwise map covers either the
-            # full [mu_tilde, sigma_dep] vector or mu_tilde alone -- which is what fit_ls
-            # returns, since least squares fits no sigma.
-            if len(x) not in (1, 2):
-                raise ValueError(f"Cannot transform a vector of {len(x)} parameter(s): expected 1 (mu_tilde) or 2 (mu_tilde and sigma_dep).")
-            if direction == "inverse":
-                z = np.exp(x)
-            elif direction == "forward":
-                z = np.log(x)
-            else:
-                raise ValueError("Transformation direction not recognized.")
-
-            if not isinstance(likelihood_hessian, np.ndarray):  # can't use likelihood_hessian is None because it is an array if supplied
-                return z
-            else:
-                # Jacobian for transformation. See Reparameterization at https://en.wikipedia.org/wiki/Fisher_information
-                J = np.diag(np.exp(x))
-
-                if direction == "inverse":
-                    Ji = inv(J)
-                    H = Ji.transpose() @ likelihood_hessian @ Ji
-                elif direction == "forward":
-                    H = J.transpose() @ likelihood_hessian @ J
-
-                return z, H
-
-        # elif isinstance(x,az.data.inference_data.InferenceData):
-        #     if likelihood_hessian != None:
-        #         print("Warning: You have supplied an Arviz infrenceData object. The supplied likelihood Hessian will be ignored.")
-
-        #     p = x.posterior
-        #     if direction == "inverse":
-        #         p2 = {  'mu_tilde': np.exp(p.log_mu_tilde),\
-        #                 'sigma_dep':np.exp(p.log_sigma_dep)
-        #             }
-        #     elif direction == "forward":
-        #         p2 = {  'log_mu_tilde': np.log(p.mu_tilde),\
-        #                 'log_sigma_dep':np.log(p.sigma_dep)
-        #             }
-        #     p2 = az.convert_to_inference_data(p2)
-        #     return p2
-
     def update_model_parameters(self, x):
         if isinstance(x, list) or isinstance(x, np.ndarray):
-            self.mu_tilde = x[0]
-            if len(x) > 1:
-                self.sigma_dep = x[1]
+            core, kappas = self._split_parameters(x)
+            self.mu_tilde = core[0]
+            if len(core) > 1:
+                self.sigma_dep = core[1]
+            self._update_kappa_parameters(kappas)
         else:
             self.mu_tilde = x
 

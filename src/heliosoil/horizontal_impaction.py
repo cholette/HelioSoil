@@ -106,7 +106,7 @@ import pandas as pd
 from scipy.optimize import minimize_scalar
 
 import heliosoil.base_models as smb
-from heliosoil.fitting import ConstantMeanDeposition, CommonFittingMethods, NoiseChannel, kappa_param_name
+from heliosoil.fitting import ConstantMeanDeposition, CommonFittingMethods, NoiseChannel, kappa_param_name, TRANSFORM_LOG, TRANSFORM_IDENTITY
 from heliosoil.utilities import (
     _print_if,
     _check_keys,
@@ -587,7 +587,9 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
         self._mean_param_names = [n for c in self.components for n in c.mean_param_names]
         self._sigma_param_names = [c.sigma_param_name for c in self.components]
         self._param_names = self._mean_param_names + self._sigma_param_names
-        self._log_transform = np.array([_MEAN_PARAM_LOG[n] for n in self._mean_param_names] + [True] * len(self._sigma_param_names))
+        # mu_tilde is a deposition rate and must stay positive; the wind coefficients are
+        # carried linearly, since a negative one is meaningful (scouring).
+        self._mean_transform_codes = tuple(TRANSFORM_LOG if _MEAN_PARAM_LOG[n] else TRANSFORM_IDENTITY for n in self._mean_param_names)
 
         # One common-variance fraction per mechanism, for variance_model="per_mechanism".
         # Left unset until set_variance_model seeds them; the other variance models never
@@ -616,10 +618,19 @@ class ConstantMeanWindBase(smb.ConstantMeanBase):
 
     @property
     def parameter_names(self):
-        return list(self._param_names)
+        """Every fitted parameter: means, then magnitudes, then the common fractions the
+        current variance model carries.
 
-    # mean_parameter_names (the least-squares subset) comes from CommonFittingMethods, off the
-    # _mean_param_names/_sigma_param_names this class sets per active component in __init__.
+        Agrees with ``CommonFittingMethods.parameter_names`` -- ``_param_names`` is exactly
+        means + magnitudes -- but is restated here so this base class, which has no fitting
+        mixin, can still report its own layout. ``_param_names`` deliberately stops at the
+        magnitudes: it is what the forward model accepts as overrides, and a common fraction
+        changes the likelihood rather than the prediction.
+        """
+        return list(self._param_names) + list(getattr(self, "fitted_kappa_names", ()))
+
+    # mean_parameter_names (the least-squares subset) comes from CommonFittingMethods, off
+    # the _mean_param_names/_sigma_param_names this class sets per active component.
 
     def _component_alphas(self, simulation_inputs, f):
         """{component key: alpha_j} for file `f`. Components sharing a dust channel --
@@ -851,8 +862,10 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
 
     def update_model_parameters(self, x):
         if isinstance(x, (list, np.ndarray)):
-            for name, value in zip(self._param_names, x):
+            core, kappas = self._split_parameters(x)
+            for name, value in zip(self._param_names, core):
                 setattr(self, name, value)
+            self._update_kappa_parameters(kappas)
         else:
             # Scalar: only used by the inherited fit_least_squares warm start, which
             # optimizes over the first mean parameter alone (mu_tilde, whenever the
@@ -862,54 +875,6 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
     # _negative_log_likelihood is inherited. It used to be overridden here only to avoid
     # extracting a single sigma positionally from `params`; the base version no longer does
     # that either, so the two bodies had become identical.
-
-    def transform_scale(self, x, likelihood_hessian=None, direction="inverse"):
-        if isinstance(x, (np.ndarray, list)):
-            x = np.array(x, dtype=float)
-            # Accepts either a full parameter vector (fit_mle) or the mean parameters alone
-            # (fit_ls, which estimates no sigmas). The means come first in the layout, so
-            # the leading slice of the mask is exactly the mean-only mask; any other length
-            # is a caller error worth catching here rather than in a broadcast further on.
-            if len(x) not in (len(self._mean_param_names), len(self._param_names)):
-                raise ValueError(
-                    f"Cannot transform a vector of {len(x)} parameter(s) for model '{self.model_name}': expected either "
-                    f"{len(self._mean_param_names)} (the mean parameters, {self._mean_param_names}) or "
-                    f"{len(self._param_names)} (every parameter, {self._param_names})."
-                )
-            mask = self._log_transform[: len(x)]
-            if direction == "inverse":
-                # np.where evaluates both branches elementwise, so np.exp(x) would
-                # otherwise run (and could overflow) at unmasked entries whose value
-                # is discarded anyway (the linear omega_* parameters). Zero those out
-                # before exp so no spurious overflow is produced -- mirroring the
-                # forward-direction safe_x guard below.
-                safe_x = np.where(mask, x, 0.0)
-                z = np.where(mask, np.exp(safe_x), x)
-            elif direction == "forward":
-                # np.where evaluates both branches elementwise, so np.log(x) would
-                # otherwise be computed (and warn) even at unmasked entries, which
-                # may legitimately be zero or negative (the omega_* parameters).
-                safe_x = np.where(mask, x, 1.0)
-                z = np.where(mask, np.log(safe_x), x)
-            else:
-                raise ValueError("Transformation direction not recognized.")
-
-            if not isinstance(likelihood_hessian, np.ndarray):
-                return z
-
-            # Jacobian of the (partially log) reparameterization. Same safe_x guard:
-            # exp only at the log-transformed entries, 1.0 (identity) elsewhere.
-            safe_x = np.where(mask, x, 0.0)
-            jac_diag = np.where(mask, np.exp(safe_x), 1.0)
-            J = np.diag(jac_diag)
-
-            if direction == "inverse":
-                Ji = np.linalg.inv(J)
-                H = Ji.transpose() @ likelihood_hessian @ Ji
-            elif direction == "forward":
-                H = J.transpose() @ likelihood_hessian @ J
-
-            return z, H
 
     def fit_map(self, *args, **kwargs):
         raise NotImplementedError(
@@ -923,6 +888,9 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
 
         n_mean = len(self._mean_param_names)
         n_sigma = len(self._sigma_param_names)
+        # Every common fraction starts at an even split: interior to [0, 1], so the search
+        # does not begin on a boundary.
+        kappa0 = [0.5] * len(self.fitted_kappa_names)
 
         if x0 is None:
             if "gravitational" in self._component_keys:
@@ -939,13 +907,13 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
                 mean_inits[0] = p0
 
                 def nloglike1d(s):
-                    return self._negative_log_likelihood(mean_inits + [s] * n_sigma, simulation_inputs, reflectance_data)
+                    return self._negative_log_likelihood(mean_inits + [s] * n_sigma + kappa0, simulation_inputs, reflectance_data)
 
                 s0 = minimize_scalar(nloglike1d, bounds=(smb.tol, sse), method="Bounded")
-                x0 = np.array(mean_inits + [s0.x] * n_sigma)
+                x0 = np.array(mean_inits + [s0.x] * n_sigma + kappa0)
             else:
                 _print_if("No gravitational component active; warm-starting all means at 0 and all sigmas at a small default (1e-4).", verbose)
-                x0 = np.array([0.0] * n_mean + [1e-4] * n_sigma)
+                x0 = np.array([0.0] * n_mean + [1e-4] * n_sigma + kappa0)
             _print_if("x0 = " + str(x0), verbose)
 
         _print_if("Getting MLE estimates ... ", verbose)
@@ -964,7 +932,7 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
             # measurement noise already predicts -- and raises LinAlgError there.
             # d(natural)/d(fitted) is exp(y) = x_hat at the log-transformed entries and 1 at
             # the linear ones, so with J diagonal the delta method is cov -> J cov J.
-            jacobian = np.where(self._log_transform[: len(y)], x_hat, 1.0)
+            jacobian = self.natural_scale_jacobian(y)
             x_hat_cov = (jacobian[:, None] * y_cov) * jacobian[None, :]
         else:
             x_hat = y
@@ -972,10 +940,16 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
 
         s = _std_errors_from_cov(x_hat_cov)
         x_ci = x_hat + 1.96 * s * np.array([[-1], [1]])
-        for i, name in enumerate(self._param_names):
-            label = name if transform_to_original_scale else f"log({name})" if self._log_transform[i] else name
+        for i, name in enumerate(self.parameter_names):
+            label = name if transform_to_original_scale else self._fitted_scale_label(name, i)
             _print_if(f"{label} = {x_hat[i]:.3e}", verbose)
-            _print_if(f"95% confidence interval for {label}: [{x_ci[0, i]:.3e}, {x_ci[1, i]:.3e}]", verbose)
+            if np.isfinite(s[i]):
+                _print_if(f"95% confidence interval for {label}: [{x_ci[0, i]:.3e}, {x_ci[1, i]:.3e}]", verbose)
+            else:
+                # A non-finite standard error means the curvature at the optimum is not
+                # usable -- what a variance parameter fitted to its bound produces. Saying
+                # so beats printing a NaN interval, which reads as a number.
+                _print_if(f"95% confidence interval for {label}: unavailable (estimate at or near a bound; the Wald interval is not defined there)", verbose)
 
         return x_hat, x_hat_cov
 
@@ -985,21 +959,6 @@ class ConstantMeanWindDeposition(ConstantMeanWindBase, ConstantMeanDeposition):
     # parameters); what is model-specific is only how those parameters are transformed
     # and which of them must stay positive.
     # ------------------------------------------------------------------
-
-    def _ls_lower_bounded(self):
-        """Only the log-transformed means are bounded below at 0. The omegas are carried
-        linearly and may legitimately fit negative, so they are left free."""
-        return self._log_transform[: len(self._mean_param_names)]
-
-    def _fitted_scale_jacobian(self, x):
-        # 1/x at the log-transformed means, 1 elsewhere. safe_x is 1 at the linear entries,
-        # so no division touches an omega that fitted to 0.
-        mask = self._log_transform[: len(self._mean_param_names)]
-        safe_x = np.where(mask, np.asarray(x, dtype=float), 1.0)
-        return np.where(mask, 1.0 / safe_x, 1.0)
-
-    def _fitted_scale_label(self, name, i):
-        return f"log({name})" if self._log_transform[i] else name
 
     def save(self, file_name, log_p_hat=None, log_p_hat_cov=None, training_simulation_data=None, training_reflectance_data=None):
         with open(file_name, "wb") as f:
