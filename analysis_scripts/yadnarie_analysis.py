@@ -28,18 +28,21 @@ cm_save_file = f"{main_directory}/results/cm_fitting_results_yadnarie.txt"
 reflectometer_incidence_angle = 15  # [deg] angle of incidence of reflectometer
 reflectometer_acceptance_angle = 12.5e-3  # [rad] half acceptance angle of reflectance measurements
 second_surf = True  # True if using the second-surface model. Otherwise, use first-surface
-d = f"{main_directory}/data/yadnarie/"
+d = f"{main_directory}/data/heliosoil-input/yadnarie/"
 time_to_remove_at_end = [0, 0, 0, 0, 0, 0]
-train_experiments = [0]  # indices for training experiments from 0 to len(files)-1
-train_mirrors = ["OSE_M2_T60", "OSE_M3_T30", "OSE_M4_T00"]  # which mirrors within the experiments are used for training
+train_experiments = [0, 1]  # indices for training experiments from 0 to len(files)-1
+train_mirrors = ["ONE_M2_T00", "OSW_M1_T180", "ONW_M1_T90", "ONW_M2_T60", "ONW_M3_T30",
+                 "ONW_M4_T00", "OSE_M1_T90", "OSE_M2_T60", "OSE_M3_T30", "OSE_M4_T00"]
+# train_mirrors = None
 k_factor = "import"  # None sets equal to 1.0, "import" imports from the file
 dust_type = "PM10"  # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
+ext_lookup_folder = None # "extinction_lookup_tables/yadnarie/"
 
 # %% Get file list and time intervals. Import training data.
 parameter_file = d + "parameters_yadnarie_experiments.xlsx"
 
 files, all_intervals, exp_mirrors, all_mirrors = smu.get_training_data(
-    d, "experiment_", time_to_remove_at_end=time_to_remove_at_end
+    d, "soiling_yadnarie", time_to_remove_at_end=time_to_remove_at_end
 )
 orientation = [[s[1:3] for s in mirrors] for mirrors in exp_mirrors]
 
@@ -47,9 +50,10 @@ orientation = [[s[1:3] for s in mirrors] for mirrors in exp_mirrors]
 # First set of mirrors
 all_intervals[0][0] = np.datetime64("2024-11-11T20:30:00")
 all_intervals[0][1] = np.datetime64("2024-11-16T07:30:00")
+
 # Second set of mirrors
-all_intervals[1][0] = np.datetime64("2024-11-12T11:40:00")
-all_intervals[1][1] = np.datetime64("2024-11-16T07:30:00")
+all_intervals[1][0] = np.datetime64("2025-02-06T14:00:00")
+all_intervals[1][1] = np.datetime64("2025-02-12T19:30:00")
 
 testing_intervals = all_intervals
 
@@ -408,13 +412,15 @@ for m, mir in enumerate(train_mirrors):
 
 # %% Set mirror angles and get extinction weights for fitting
 imodel.helios_angles(sim_data_train, reflect_data_train, second_surface=second_surf)
-imodel.helios.compute_extinction_weights(sim_data_train, imodel.loss_model, verbose=True)
+imodel.helios.compute_extinction_weights(sim_data_train, imodel.loss_model, 
+                                         verbose=True,lookup_table_file_folder=ext_lookup_folder)
 imodel.helios.plot_extinction_weights(sim_data_train, fig_kwargs={})
 ext_weights = imodel.helios.extinction_weighting[0].copy()
 
 imodel_constant.helios_angles(sim_data_train, reflect_data_train, second_surface=second_surf)
 file_inds = np.arange(len(files_train))
-imodel_constant = smu.set_extinction_coefficients(imodel_constant, ext_weights, file_inds)
+imodel_constant = smu.set_extinction_coefficients(imodel_constant,
+                                                  ext_weights, file_inds)
 
 # %% Fit semi-physical model
 log_param_hat, log_param_cov = imodel.fit_mle(
@@ -481,9 +487,8 @@ if DAILY_AVERAGE:
 # %%
 if DAILY_AVERAGE:
     imodel.helios_angles(sim_data_train, reflect_data_train, second_surface=second_surf)
-    imodel.helios.compute_extinction_weights(
-        sim_data_train, imodel.loss_model, verbose=True
-    )  # ASSESS HOW TO AVOID REPEATING COMPUTING THIS
+    imodel.helios.compute_extinction_weights(sim_data_train, imodel.loss_model, verbose=True, 
+                                             lookup_table_file_folder=ext_lookup_folder)  
     imodel_constant.helios_angles(sim_data_train, reflect_data_train, second_surface=second_surf)
     file_inds = np.arange(len(files_train))
     imodel_constant = smu.set_extinction_coefficients(imodel_constant, ext_weights, file_inds)
@@ -521,7 +526,10 @@ if DAILY_AVERAGE:
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total, reflect_data_total, second_surface=second_surf)
 file_inds = np.arange(len(reflect_data_total.files))
-imodel = smu.set_extinction_coefficients(imodel, ext_weights, file_inds)
+imodel.helios.compute_extinction_weights(sim_data_total, imodel.loss_model, verbose=True, 
+                                             lookup_table_file_folder=ext_lookup_folder)  
+# imodel = smu.set_extinction_coefficients(imodel, ext_weights,
+#                                           file_inds)
 # %% Plot semi-physical model results
 if HELIOSTATS:
     fig, ax = plot_for_heliostats(
@@ -563,7 +571,7 @@ if HELIOSTATS:
         train_mirrors,
         orientation,
         legend_shift=(0.04, 0),
-        yticks=(0.97, 0.98, 0.99, 1.02),
+        yticks=None # (0.97, 0.98, 0.99, 1.02),
     )
 else:
     fig, ax, ref = plot_for_paper(
@@ -574,7 +582,7 @@ else:
         train_mirrors,
         orientation,
         legend_shift=(0, 0),
-        yticks=(0.94, 0.96, 0.98, 1.0),
+        yticks= (0.75, 0.8, 0.85, 0.90, 0.95, 1.0),
     )
 
 fig.suptitle("Constant-Mean Model", fontsize=16, fontweight="bold", y=1.045)

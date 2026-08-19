@@ -32,6 +32,12 @@ class CommonFittingMethods:
     variance_model = "scalar"
     _endpoint_correction = None
 
+    # How to handle missing data: "error" refuses to fit; "drop" fits without the two 
+    # differences that touch it with a warning. Missing measurements at either END are 
+    # always dropped silently because nothing is lost. Class-level so that
+    # models built before this option existed behave as the stricter default.
+    missing_data = "error"
+
     # The variance split (common_variance_fraction, sigma_c, sigma_m) is declared on
     # SoilingBase, next to sigma_dep; update_model_parameters populates it here.
 
@@ -40,7 +46,9 @@ class CommonFittingMethods:
     _mean_parameter_transform = "log"
     _mean_parameter_name = "mu_tilde"
 
-    def set_variance_model(self, variance_model="scalar", endpoint_correction=None):
+    def set_variance_model(
+        self, variance_model="scalar", endpoint_correction=None, missing_data=None
+    ):
         """
         Choose how the deposition noise is modelled.
 
@@ -56,14 +64,29 @@ class CommonFittingMethods:
                 between consecutive reflectance differences created by the measurement
                 they share. Defaults to following ``variance_model``, so that "scalar"
                 reproduces earlier fits exactly.
+            missing_data (str, optional): "error" or "drop", for a measurement missing from
+                the middle of a mirror's series under the components model -- see
+                ``missing_data`` on the class. Ignored by "scalar", which handles any
+                pattern of missingness exactly. Defaults to leaving the current setting
+                alone.
 
         Raises:
-            ValueError: If ``variance_model`` is not recognised.
+            ValueError: If ``variance_model`` or ``missing_data`` is not recognised.
         """
         if variance_model not in ("scalar", "components"):
             raise ValueError(
                 f"variance_model must be 'scalar' or 'components', got {variance_model!r}."
             )
+        if missing_data is not None:
+            if missing_data not in ("error", "drop"):
+                raise ValueError(
+                    f"missing_data must be 'error' or 'drop', got {missing_data!r}. "
+                    "Imputation is deliberately not offered: filling an interior gap with "
+                    "the mean of its neighbours splits one observed difference into two "
+                    "likelihood terms, which invents a degree of freedom and biases "
+                    "sigma_dep. 'drop' is inefficient but unbiased."
+                )
+            self.missing_data = missing_data
         self.variance_model = variance_model
         self._endpoint_correction = endpoint_correction
 
@@ -471,6 +494,69 @@ class CommonFittingMethods:
 
         return cov.reshape(n_mirrors * n_diff, n_mirrors * n_diff)
 
+    def _describe_interior_gaps(self, reflectance_data):
+        """One human-readable line per mirror missing a measurement from mid-series.
+
+        Returns:
+            list[str]: e.g. ``"experiment 1, mirror ONW_M3_T30: 2025-02-09T19:30"``. Empty
+            when every gap is at an end of a mirror's series.
+        """
+        lines = []
+        for f in reflectance_data.times.keys():
+            observed = self._observed_rows(reflectance_data, f)
+            # Names and times are only for the message, so neither is allowed to be the
+            # reason a fit fails: fall back to positions if a dataset lacks them.
+            names = getattr(reflectance_data, "mirror_names", {}).get(f, [])
+            times = np.asarray(reflectance_data.times.get(f, [])).ravel()
+            for p in self._mirrors_with_interior_gaps(reflectance_data, f):
+                interior = np.setdiff1d(
+                    np.arange(observed[p][0], observed[p][-1] + 1), observed[p]
+                )
+                name = names[p] if p < len(names) else f"column {p}"
+                when = ", ".join(str(times[i]) for i in interior) if times.size else str(list(interior))
+                lines.append(f"experiment {f}, mirror {name}: {when}")
+        return lines
+
+    def _check_interior_gaps(self, reflectance_data):
+        """Apply ``missing_data`` to measurements missing from the middle of a series.
+
+        Called on every likelihood evaluation, so it stays O(mirrors x measurements) of
+        boolean work and warns at most once per dataset rather than once per iteration.
+
+        Raises:
+            ValueError: If there is an interior gap and ``missing_data`` is "error".
+        """
+        offenders = self._describe_interior_gaps(reflectance_data)
+        if not offenders:
+            return
+
+        listing = "; ".join(offenders)
+        if self.missing_data == "error":
+            raise ValueError(
+                "The components likelihood cannot use a measurement missing from the "
+                f"middle of a mirror's series ({listing}). Such a gap destroys the two "
+                "differences that touch it, while their sum -- the difference across the "
+                "gap -- stays observed and would need per-mirror deposition windows to "
+                "use, which this likelihood does not implement. Either trim the affected "
+                "rows, fit with set_variance_model('scalar') (which differences each "
+                "mirror over its own observed times and is exact for any missingness), or "
+                "accept the loss with set_variance_model(..., missing_data='drop')."
+            )
+
+        # Warn once per dataset, not once per likelihood evaluation: an optimiser makes
+        # thousands of calls and this must not be one line of output each.
+        if getattr(self, "_interior_gaps_reported", None) != listing:
+            self._interior_gaps_reported = listing
+            warnings.warn(
+                f"Dropping the reflectance differences either side of an interior gap ({listing}). "
+                "The difference ACROSS each gap is observed but unusable here. Deposition has "
+                "independent increments, so that across-gap difference carries nearly ALL the "
+                "information the two dropped ones held about the mean -- discarding it costs much "
+                "more than the one interval it looks like. Estimates stay consistent and the "
+                "intervals are honestly wider; set_variance_model('scalar') keeps that information.",
+                stacklevel=2,
+            )
+
     def _negative_log_likelihood_components(
         self,
         params,
@@ -483,8 +569,13 @@ class CommonFittingMethods:
 
         Generalises ``_negative_log_likelihood`` to mirrors observed simultaneously at one
         site, whose deposition noise is partly shared. Each experiment contributes one
-        multivariate normal over its stacked reflectance differences. Differences with a
-        missing endpoint measurement are dropped, which marginalises them exactly.
+        multivariate normal over its stacked reflectance differences.
+
+        Differences with a missing endpoint measurement are dropped and the covariance is
+        restricted to the retained rows. A missing rho_k in a middle measurement kills both 
+        differences that touch it to maintain the common time grid. ``missing_data="error"`` 
+        (default) will error for a missing data point in the middle of the campaign, while
+         ``missing_data="drop"`` proceeds without those differences and warns.
 
         Separating the two components requires at least two mirrors in some experiment;
         with one mirror the likelihood depends only on ``sigma_dep``.
@@ -500,9 +591,15 @@ class CommonFittingMethods:
 
         Returns:
             float: The negative log-likelihood.
+
+        Raises:
+            ValueError: If a mirror is missing a measurement from the middle of its series
+                and ``missing_data`` is "error".
         """
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs, reflectance_data)
+
+        self._check_interior_gaps(reflectance_data)
 
         sigma_dep, kappa = params[1], params[2]
         self.update_model_parameters(params[0:2])
@@ -524,6 +621,7 @@ class CommonFittingMethods:
                 endpoint_correction=endpoint_correction,
             )
 
+            # Take only the observed rows and columns
             observed_mask = np.isfinite(residual)
             if not observed_mask.all():
                 residual = residual[observed_mask]
@@ -701,6 +799,105 @@ class CommonFittingMethods:
 
         return s2total
 
+    @staticmethod
+    def _observed_rows(reflectance_data, f):
+        """Per mirror, the rows of ``average[f]`` that were actually measured.
+
+        Returns:
+            list[numpy.ndarray]: one index array per mirror, ascending.
+        """
+        finite = np.isfinite(reflectance_data.average[f])
+        return [np.flatnonzero(finite[:, p]) for p in range(finite.shape[1])]
+
+    @classmethod
+    def _mirrors_with_interior_gaps(cls, reflectance_data, f):
+        """Mirrors whose missing measurements are NOT confined to a leading/trailing run.
+
+        A mirror installed late (or removed early) has a run of NaN at one end, and losing
+        the differences that touch it costs nothing: there is no measurement on the far
+        side to difference against. A gap in the MIDDLE is different -- it destroys two
+        differences whose sum, the difference across the gap, is still observed.
+
+        The test is that the observed rows form one contiguous block. That handles runs of
+        several missing measurements at an end (Yadnarie's ``OSE_*`` mirrors, installed a
+        day into campaign 1) without treating them as interior.
+
+        Returns:
+            list[int]: mirror column indices, ascending. Mirrors with nothing observed at
+            all are not reported here -- they carry no difference either way.
+        """
+        return [
+            p
+            for p, obs in enumerate(cls._observed_rows(reflectance_data, f))
+            if obs.size and obs.size != obs[-1] - obs[0] + 1
+        ]
+
+    def _observed_difference_terms(
+        self, f, sigma_dep, simulation_inputs, reflectance_data, rho_prediction
+    ):
+        """
+        Residual and variance of every observed reflectance difference in experiment ``f``.
+
+        Each mirror is differenced over its own measured times rather than over the common
+        grid, so a missing measurement merges the two intervals that touch it into one
+        rather than losing both. 
+
+        Only valid where the mirrors do not couple, i.e. for the scalar variance model.
+
+        Args:
+            f: Experiment (file) key.
+            sigma_dep (float): Deposition noise standard deviation.
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            reflectance_data (ReflectanceMeasurements): Measurement data.
+            rho_prediction: Predicted reflectance at the measurement times, as returned by
+                ``_predicted_reflectance``.
+
+        Returns:
+            tuple[numpy.ndarray, numpy.ndarray]: residuals and their variances, both 1-D
+            and of equal length. Empty if no mirror has two measurements.
+        """
+        meas = reflectance_data.average[f]
+        b = self._reflectance_loss_factor(f)
+        c2t = np.cumsum(self._loading_matrix(f, simulation_inputs) ** 2, axis=0)
+        pif = np.asarray(reflectance_data.prediction_indices[f])
+        meas_sig = reflectance_data.sigma_of_the_mean[f]
+        s2_dep = sigma_dep**2
+
+        def terms(lo, hi, columns):
+            variance = (
+                s2_dep * b**2 * (c2t[pif[hi], columns] - c2t[pif[lo], columns])
+                + meas_sig[lo, columns] ** 2
+                + meas_sig[hi, columns] ** 2
+            )
+            residual = (meas[hi, columns] - meas[lo, columns]) - (
+                rho_prediction[hi, columns] - rho_prediction[lo, columns]
+            )
+            return residual, variance
+
+        n_measurements, n_mirrors = meas.shape
+        if np.isfinite(meas).all():
+            # Every mirror shares the common grid: one vectorised evaluation, identical to
+            # the historical code path. Kept because the likelihood is called thousands of
+            # times per fit and the per-mirror loop below is pure overhead when unused.
+            rows = np.arange(n_measurements)
+            lo, hi = rows[:-1, None], rows[1:, None]
+            residual, variance = terms(lo, hi, np.arange(n_mirrors)[None, :])
+            return residual.ravel(), variance.ravel()
+
+        residuals, variances = [], []
+        for p, obs in enumerate(self._observed_rows(reflectance_data, f)):
+            if obs.size < 2:
+                # One measurement yields no difference; none yields nothing at all. Either
+                # way this mirror contributes no term rather than a degenerate one.
+                continue
+            residual, variance = terms(obs[:-1], obs[1:], p)
+            residuals.append(residual)
+            variances.append(variance)
+
+        if not residuals:
+            return np.empty(0), np.empty(0)
+        return np.concatenate(residuals), np.concatenate(variances)
+
     def _sse(self, params, simulation_inputs, reflectance_data):
         # Computes the sum of squared errors between a soiling model and
         # the reflectance measurements.
@@ -711,12 +908,20 @@ class CommonFittingMethods:
         _check_keys(simulation_inputs, reflectance_data)
 
         sse = 0
+        n_terms = 0
         self.update_model_parameters(params)
         self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0, verbose=False)
         files = list(self.helios.soiling_factor.keys())
         for f in files:
             rho_prediction = self._predicted_reflectance(f, reflectance_data)
-            sse += np.sum((rho_prediction - meas[f]) ** 2)
+            # Skip missing measurements rather than letting one NaN make the whole sum NaN.
+            # np.nansum is NOT the right tool here: it returns 0.0 for an all-NaN input, and
+            # a zero SSE reads as a perfect fit to whatever is calling this.
+            observed = np.isfinite(meas[f])
+            n_terms += int(observed.sum())
+            sse += np.sum((rho_prediction[observed] - meas[f][observed]) ** 2)
+        if n_terms == 0:
+            raise ValueError("Every reflectance measurement is missing; there is nothing to fit.")
         return sse
 
     def _negative_log_likelihood(self, params, simulation_inputs, reflectance_data):
@@ -744,36 +949,46 @@ class CommonFittingMethods:
         )
 
     def _negative_log_likelihood_scalar(self, params, simulation_inputs, reflectance_data):
+        """
+        Negative log-likelihood with independent deposition noise on every mirror.
 
+        Missing measurements need no policy here. This likelihood factorises over mirrors
+        as well as over differences, so each mirror is differenced over ITS OWN observed
+        times: a gap becomes one longer interval instead of two lost ones, and the result
+        is the exact likelihood of everything that was measured. See
+        ``_observed_difference_terms``. The components model cannot do this -- it couples
+        mirrors within a difference -- which is why it needs ``missing_data``.
+        """
         # check to ensure that reflectance_data and simulation_input keys correspond to the same files
         _check_keys(simulation_inputs, reflectance_data)
 
         sim_in = simulation_inputs
         files = list(reflectance_data.times.keys())
-        meas = reflectance_data.average
 
         # define optimization objective function (negative log likelihood)
         sigma_dep = params[1]
         self.update_model_parameters(params)
         self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0, verbose=False)
 
-        # Compute variance in reflectance, not soiling factor
-        s2total = self._compute_variance_of_measurements(
-            sigma_dep, sim_in, reflectance_data=reflectance_data
-        )
-
-        # One Gaussian term per reflectance difference, per mirror, per experiment.
-        n_terms = sum(s2total[f].size for f in files)
-        loglike = -0.5 * n_terms * np.log(2 * np.pi)
+        n_terms = 0
+        loglike = 0.0
 
         for f in files:
-            delta_r = np.diff(meas[f], axis=0)
             rho_prediction = self._predicted_reflectance(f, reflectance_data)
-            mu_delta_r = np.diff(rho_prediction, axis=0)
-            loglike += np.sum(
-                -0.5 * np.log(s2total[f]) - (delta_r - mu_delta_r) ** 2 / (2 * s2total[f])
+            residual, variance = self._observed_difference_terms(
+                f, sigma_dep, sim_in, reflectance_data, rho_prediction
+            )
+            n_terms += residual.size
+            loglike += np.sum(-0.5 * np.log(variance) - residual**2 / (2 * variance))
+
+        if n_terms == 0:
+            raise ValueError(
+                "No reflectance difference is observed on any mirror; there is nothing to "
+                "fit. Check reflectance_data.average for all-NaN columns or a trim that "
+                "left fewer than two measurements."
             )
 
+        loglike += -0.5 * n_terms * np.log(2 * np.pi)
         return -loglike
 
     def _logpost(self, y, simulation_inputs, reflectance_data, priors):

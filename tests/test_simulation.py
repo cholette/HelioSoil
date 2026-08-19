@@ -17,6 +17,8 @@ comparison in test_variance_components.py does not: it only covers the common-ti
 """
 
 import types
+import warnings
+
 import numpy as np
 import pytest
 
@@ -277,3 +279,153 @@ def test_missing_fraction_is_validated():
     for bad in (-0.1, 1.0, 1.5):
         with pytest.raises(ValueError, match="missing_fraction"):
             _simulate(model, sim_in, 0.3, np.random.default_rng(1), missing_fraction=bad)
+
+
+# ---------------------------------------------------------------------------
+# 3. Missing measurements: where the gap sits decides what it costs
+# ---------------------------------------------------------------------------
+
+
+def _complete_dataset(seed=3):
+    """A simulated dataset with no gaps, plus the model that made it."""
+    model, sim_in = _model(), _sim_in()
+    data = _simulate(model, sim_in, 0.3, np.random.default_rng(seed))
+    assert np.isfinite(data.average[F]).all()
+    return model, sim_in, data
+
+
+def _blank(data, row, mirror):
+    """Copy of `data` with one measurement removed."""
+    import copy
+
+    holed = copy.deepcopy(data)
+    holed.average[F] = data.average[F].copy()
+    holed.average[F][row, mirror] = np.nan
+    return holed
+
+
+# --- the scalar path: exact for any pattern, no policy needed --------------
+
+
+def test_regridding_matches_the_common_grid_when_complete():
+    """With nothing missing, per-mirror differencing must reproduce the historical
+    common-grid formula exactly -- not approximately. This is what lets the regrid be
+    unconditional rather than a special case that could drift from the fast path."""
+    model, sim_in, data = _complete_dataset()
+    model.set_variance_model("scalar")
+    model.update_model_parameters([MU_TILDE, SIGMA_DEP])
+    model.predict_soiling_factor(sim_in, rho0=data.rho0, verbose=False)
+
+    prediction = model._predicted_reflectance(F, data)
+    residual, variance = model._observed_difference_terms(
+        F, SIGMA_DEP, sim_in, data, prediction
+    )
+
+    reference = model._compute_variance_of_measurements(SIGMA_DEP, sim_in, reflectance_data=data)[F]
+    expected = np.diff(data.average[F], axis=0) - np.diff(prediction, axis=0)
+
+    np.testing.assert_array_equal(variance, reference.ravel())
+    np.testing.assert_array_equal(residual, expected.ravel())
+
+
+def test_scalar_likelihood_merges_an_interior_gap_instead_of_losing_two_terms():
+    """A missing middle measurement costs ONE difference, not two: the two intervals it
+    touches merge into the interval across it, which is still observed."""
+    model, sim_in, data = _complete_dataset()
+    model.set_variance_model("scalar")
+    model.update_model_parameters([MU_TILDE, SIGMA_DEP])
+    model.predict_soiling_factor(sim_in, rho0=data.rho0, verbose=False)
+    prediction = model._predicted_reflectance(F, data)
+
+    complete, _ = model._observed_difference_terms(F, SIGMA_DEP, sim_in, data, prediction)
+    holed = _blank(data, row=1, mirror=0)
+    gapped, variance = model._observed_difference_terms(F, SIGMA_DEP, sim_in, holed, prediction)
+
+    assert gapped.size == complete.size - 1
+    assert np.isfinite(variance).all()
+
+    # The merged term is the difference straight across the gap.
+    merged = (holed.average[F][2, 0] - holed.average[F][0, 0]) - (prediction[2, 0] - prediction[0, 0])
+    assert np.isclose(gapped[0], merged)
+
+
+def test_scalar_likelihood_is_finite_for_endpoint_and_interior_gaps():
+    model, sim_in, data = _complete_dataset()
+    model.set_variance_model("scalar")
+    baseline = model._negative_log_likelihood([MU_TILDE, SIGMA_DEP], sim_in, data)
+    assert np.isfinite(baseline)
+
+    for row, mirror in [(0, 0), (N_DIFF, 1), (1, 2)]:  # first, last, middle
+        value = model._negative_log_likelihood(
+            [MU_TILDE, SIGMA_DEP], sim_in, _blank(data, row, mirror)
+        )
+        assert np.isfinite(value), f"NaN likelihood for a gap at row {row}, mirror {mirror}"
+
+
+def test_scalar_likelihood_rejects_a_dataset_with_nothing_left():
+    model, sim_in, data = _complete_dataset()
+    model.set_variance_model("scalar")
+    data.average[F] = np.full_like(data.average[F], np.nan)
+    with pytest.raises(ValueError, match="nothing to fit"):
+        model._negative_log_likelihood([MU_TILDE, SIGMA_DEP], sim_in, data)
+
+
+# --- the components path: endpoints free, interior a policy decision -------
+
+
+@pytest.mark.parametrize("row", [0, N_DIFF])
+def test_components_drops_endpoint_gaps_without_complaint(row, recwarn):
+    """A mirror installed late (or removed early) loses one difference and nothing more --
+    there is no measurement on the far side to difference against -- so this must neither
+    raise nor warn, whatever missing_data says."""
+    model, sim_in, data = _complete_dataset()
+    holed = _blank(data, row=row, mirror=1)
+
+    value = model._negative_log_likelihood([MU_TILDE, SIGMA_DEP, 0.3], sim_in, holed)
+    assert np.isfinite(value)
+    assert not [w for w in recwarn.list if "interior gap" in str(w.message)]
+
+
+def test_components_treats_a_leading_run_as_an_endpoint_not_an_interior_gap():
+    """Several missing measurements at the start are still an endpoint case. Yadnarie's
+    OSE_* mirrors were installed a day into campaign 1, which is exactly this."""
+    model, sim_in, data = _complete_dataset()
+    holed = _blank(data, row=0, mirror=2)
+    holed.average[F][1, 2] = np.nan
+
+    assert model._mirrors_with_interior_gaps(holed, F) == []
+    assert np.isfinite(model._negative_log_likelihood([MU_TILDE, SIGMA_DEP, 0.3], sim_in, holed))
+
+
+def test_components_refuses_an_interior_gap_by_default():
+    model, sim_in, data = _complete_dataset()
+    assert model.missing_data == "error"
+    holed = _blank(data, row=1, mirror=0)
+
+    with pytest.raises(ValueError, match="middle of a mirror's series"):
+        model._negative_log_likelihood([MU_TILDE, SIGMA_DEP, 0.3], sim_in, holed)
+
+
+def test_components_drop_option_fits_and_warns_once():
+    model, sim_in, data = _complete_dataset()
+    model.set_variance_model("components", missing_data="drop")
+    holed = _blank(data, row=1, mirror=0)
+
+    with pytest.warns(UserWarning, match="interior gap"):
+        first = model._negative_log_likelihood([MU_TILDE, SIGMA_DEP, 0.3], sim_in, holed)
+    assert np.isfinite(first)
+
+    # An optimiser makes thousands of calls; the warning must not be one line each.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(5):
+            model._negative_log_likelihood([MU_TILDE, SIGMA_DEP, 0.3], sim_in, holed)
+    assert not [w for w in caught if "interior gap" in str(w.message)]
+
+
+def test_missing_data_rejects_imputation():
+    """Imputing an interior gap splits one observed difference into two likelihood terms,
+    so it is refused rather than offered with a caveat."""
+    model = _model()
+    with pytest.raises(ValueError, match="Imputation is deliberately not offered"):
+        model.set_variance_model("components", missing_data="impute")
