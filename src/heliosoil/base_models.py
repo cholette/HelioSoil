@@ -2374,6 +2374,8 @@ class Heliostats:
                 ext_weights, acc_angles, diameters = self._load_from_lookup_table(lookup_path)
 
                 for f in files:
+                    # add small number so that acc_angles is strictly increasing for interpolation
+                    acc_angles[f] += 1e-6*np.mean(acc_angles[f])*np.cumsum(np.ones_like(acc_angles[f]))
                     interpolator = RegularGridInterpolator(
                         (acc_angles[f], diameters),
                         np.array(ext_weights[f]),
