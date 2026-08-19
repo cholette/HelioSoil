@@ -1,5 +1,10 @@
 import heliosoil.base_models as smb
-from heliosoil.utilities import _print_if, _check_keys, _parse_dust_str, cosd
+from heliosoil.utilities import (
+    _print_if,
+    _check_keys,
+    _parse_dust_str,
+    gravitational_settling_factor,
+)
 import numpy as np
 from numpy import radians as rad
 from numpy.linalg import inv
@@ -32,9 +37,10 @@ class CommonFittingMethods:
     variance_model = "scalar"
     _endpoint_correction = None
 
-    # How to handle missing data: "error" refuses to fit; "drop" fits without the two 
-    # differences that touch it with a warning. Missing measurements at either END are 
-    # always dropped silently because nothing is lost. Class-level so that
+    # What the components likelihood does about a measurement missing from the MIDDLE of a
+    # mirror's series. "error" refuses to fit; "drop" fits without the two differences that
+    # touch it, and says what that costs. Missing measurements at either END are always
+    # dropped, silently, because dropping them there loses nothing. Class-level so that
     # models built before this option existed behave as the stricter default.
     missing_data = "error"
 
@@ -331,7 +337,7 @@ class CommonFittingMethods:
 
     def _loading_matrix(self, f, simulation_inputs):
         """
-        Deposition loading ``alpha_j * cos(tilt_j)`` on the simulation grid.
+        Deposition loading ``alpha_j * max(0, cos(tilt_j))`` on the simulation grid.
 
         ``alpha`` is the airborne dust concentration relative to the prototype
         distribution, and is a site quantity shared by all mirrors; the tilt history is
@@ -358,7 +364,10 @@ class CommonFittingMethods:
             )
 
         alpha = sim_in.dust_concentration[f] / den[f]
-        return (alpha[None, :] * cosd(self.helios.tilt[f])).transpose()
+        # Clipped, matching ConstantMeanBase.calculate_delta_soiled_area: a mirror past
+        # vertical collects nothing. This enters the likelihood squared, so the raw
+        # cosine gave a face-down mirror the deposition variance of a horizontal one.
+        return (alpha[None, :] * gravitational_settling_factor(self.helios.tilt[f])).transpose()
 
     def _difference_windows(self, f, reflectance_data):
         """
@@ -621,7 +630,6 @@ class CommonFittingMethods:
                 endpoint_correction=endpoint_correction,
             )
 
-            # Take only the observed rows and columns
             observed_mask = np.isfinite(residual)
             if not observed_mask.all():
                 residual = residual[observed_mask]
@@ -840,7 +848,7 @@ class CommonFittingMethods:
 
         Each mirror is differenced over its own measured times rather than over the common
         grid, so a missing measurement merges the two intervals that touch it into one
-        rather than losing both. 
+        rather than losing both.
 
         Only valid where the mirrors do not couple, i.e. for the scalar variance model.
 

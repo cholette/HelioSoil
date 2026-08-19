@@ -25,6 +25,7 @@ from heliosoil.utilities import (
     _to_dict_of_lists,
     get_project_root,
     cosd,
+    gravitational_settling_factor,
     sind
 )
 from heliosoil.dust_distributions import GaussianMixtureModel, NumberDistribution
@@ -346,12 +347,13 @@ class PhysicalBase(SoilingBase):
             for idx in range(helios.tilt[f].shape[0]):
                 
                 # Flux per unit concentration at each time, for each heliostat [m/s] (Eq. 28 in [1] without Cd)
-                Fd = (cosd(helios.tilt[f][idx, :]) * vz)  
-                
-                if Fd.min() < 0:
+                # A mirror past vertical collects no settled dust
+                Fd = gravitational_settling_factor(helios.tilt[f][idx, :]) * vz
+
+                if vz.min() < 0:
                     warnings.warn(
-                        "Deposition velocity is negative (min value: "
-                        + str(Fd.min())
+                        "Deposition velocity vz is negative (min value: "
+                        + str(vz.min())
                         + "). Setting negative components to zero."
                     )
                     Fd[Fd < 0] = 0
@@ -409,7 +411,10 @@ class PhysicalBase(SoilingBase):
                         mom_removal= (sind(helios.tilt[f][h, k])*F_gravity*np.sqrt((D_meters**2)/4
                                                                                     - radius_sep**2))  
 
-                        # [Nm] adhesion moment
+                        # [Nm] adhesion moment. RAW cosine on purpose -- this is a force
+                        # component, not a deposition geometry. Past vertical it must go
+                        # negative, because gravity then pulls the dust off the face rather
+                        # than holding it on. Do not swap in gravitational_settling_factor.
                         mom_adhesion= (F_adhesion+F_gravity*cosd(helios.tilt[f][h, k]))*radius_sep
 
                         # ALL dust desposited at this diameter up to this point falls off
@@ -500,15 +505,14 @@ class PhysicalBase(SoilingBase):
             integral = np.trapezoid(integrand, np.log10(dust.D[f]), axis=2)
             helios.delta_soiled_area[f] = alpha[None, :] * np.pi / 4 * integral
 
-            # variance of noise for each measurement
+            # variance of noise for each measurement. Clipped like the mean: a mirror past
+            # vertical collects nothing, so it carries no deposition variance either.
             if sigma_dep is not None:
-                theta = np.radians(self.helios.tilt[f])
-                helios.delta_soiled_area_variance[f]= sigma_dep**2 * (alpha**2 * np.cos(theta)**2)
+                helios.delta_soiled_area_variance[f]= sigma_dep**2 * (alpha**2 * gravitational_settling_factor(self.helios.tilt[f])**2)
 
             elif self.sigma_dep is not None:
-                theta = np.radians(self.helios.tilt[f])
                 sigma_dep = self.sigma_dep
-                helios.delta_soiled_area_variance[f]= sigma_dep**2 * (alpha**2 * np.cos(theta)**2)
+                helios.delta_soiled_area_variance[f]= sigma_dep**2 * (alpha**2 * gravitational_settling_factor(self.helios.tilt[f])**2)
 
         self.helios = helios
 
@@ -666,12 +670,16 @@ class ConstantMeanBase(SoilingBase):
             # Area coverage by dust at each time step, over all mirrors at once. This is
             # evaluated once per likelihood evaluation during fitting, so the elementwise
             # loop it replaces dominated the cost of a fit.
-            helios.delta_soiled_area[f] = alpha[None, :] * cosd(helios.tilt[f]) * mu_tilde
+            # max(0, cos): a mirror past vertical collects no settled dust.
+            helios.delta_soiled_area[f] = (
+                alpha[None, :] * gravitational_settling_factor(helios.tilt[f]) * mu_tilde
+            )
 
             # Predict confidence interval if sigma_dep is defined. Fixed tilt assumed in this class.
             if sigma_dep is not None:
-                theta = np.radians(self.helios.tilt[f])
-                dsav = sigma_dep**2 * (alpha**2 * np.cos(theta) ** 2)
+                dsav = sigma_dep**2 * (
+                    alpha**2 * gravitational_settling_factor(self.helios.tilt[f]) ** 2
+                )
                 helios.delta_soiled_area_variance[f] = dsav
 
         self.helios = helios

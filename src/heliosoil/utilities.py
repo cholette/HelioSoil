@@ -15,6 +15,14 @@ def sind(theta):
 def cosd(theta):
     return np.cos(np.deg2rad(theta))
 
+
+def gravitational_settling_factor(theta):
+    """
+    Horizontal projection of a surface available to gravitational settling,
+    max(0, cos(theta)), for theta in degrees.
+    """
+    return np.maximum(0.0, cosd(theta))
+
 def get_project_root(subdir: str = None) -> Path:
     """
     Get the root directory of the project.
