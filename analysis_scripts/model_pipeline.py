@@ -151,6 +151,7 @@ class PipelineConfig:
     """
 
     location: str = "mountisa"  # "mountisa" | "carwarp" | "yadnarie" | "qut" | "ablrf" | "wodonga"
+    data_subdir: str = ""
     # Indices (into the sorted file list) used for training. None -> leave-one-campaign-out
     # cross-validation: `simulate` fits one model per campaign, each trained on every other one.
     train_experiments: list | None = None
@@ -176,7 +177,9 @@ class PipelineConfig:
 
     @property
     def data_dir(self):
-        return f"{smu.get_project_root()}/data/{self.location}/"
+        # os.path.join drops an empty component, so the default reproduces the old
+        # data/<location>/ path exactly rather than emitting a doubled separator.
+        return os.path.join(smu.get_project_root(), "data", self.data_subdir, self.location) + os.sep
 
     @property
     def file_prefix(self):
@@ -189,6 +192,7 @@ class PipelineConfig:
 
     @property
     def site_name(self):
+        # The results folder is keyed on the SITE, not on which copy of its data was read
         return os.path.basename(os.path.normpath(self.data_dir))
 
 

@@ -37,6 +37,27 @@ statistic.
 
 ---
 
+## `--data-subdir` — reading a different copy of a site's data
+
+`--location yadnarie` reads `data/yadnarie/`. `--data-subdir` inserts one folder level
+before the location, so
+
+```bash
+python -m analysis_scripts.cli simulate --location yadnarie --data-subdir heliosoil-input
+```
+
+reads `data/heliosoil-input/yadnarie/`. Nested paths (`--data-subdir archive/2025`) work.
+File names inside are unchanged — `soiling_yadnarie_*.xlsx` and
+`parameters_yadnarie_experiments.xlsx` either way — so the same `--location` selects the
+same site in whichever copy this points at.
+
+**The results folder is keyed on the site, not the copy.** Both of the above write to
+`results/simulate/yadnarie/{run_name}/`, so **give runs from different copies different
+`--run-name`** or the second overwrites the first. Every run records its resolved
+`data_dir` in `run_config.json`, so a folder always says which copy produced it.
+
+---
+
 ## The four options that actually change the answer
 
 ### `--daily-average`
@@ -62,22 +83,35 @@ in their means → one bounded linear solve; `semi_physical` uses a bounded scal
 
 ### `--variance-model {independent,shared_kappa,per_mechanism}`
 
-How the deposition noise is correlated across mirrors. Mirrors at one site are measured together and soil under the same weather, so their noise is not independent.
+How the deposition noise is correlated across mirrors. Mirrors at one site are measured
+together and soil under the same weather, so their noise is not independent; on Yadnarie the
+common fraction fits at **κ̂ = 0.84**, meaning ten mirrors carry roughly the information of
+1.2 independent ones.
 
-- `independent` (default) — the historical model. Every mirror's deposition noise is its own, and the reflectance differences are treated as independent. Unchanged numbers for unchanged commands.
-- `shared_kappa` — one common fraction across all mechanisms, one extra parameter. 
-- `per_mechanism` — one fraction per mechanism. Might have identifiability issues with limited mirrors / campaigns. 
+- `independent` (default) — the historical model. Every mirror's deposition noise is its own,
+  and the reflectance differences are treated as independent. Unchanged numbers for unchanged
+  commands.
+- `shared_kappa` — one common fraction across all mechanisms, one extra parameter. On Yadnarie
+  this beats `independent` by a likelihood ratio of 146 against a boundary critical value of
+  2.71 (the null sits on κ = 0, so the reference is ½χ²₀ + ½χ²₁, **not** χ²₁).
+- `per_mechanism` — one fraction per mechanism. The step-9 study says **do not use this on
+  Yadnarie**: normal wind carries only ~4% of the deposition variance, so its κ is unestimable
+  and pins at a bound in the majority of replicates, whatever the mirror count.
 
 MLE only — least squares fits no noise parameters, so the flag has no effect on `--fit-method
 ls` or on `select`. Recorded in `run_config.json`; any fitted κ appears as its own row in
 `fitted_parameters.csv`.
 
-Training-mirror default under `mle`: with `shared_kappa` or `per_mechanism` **all mirrors
+Training-mirror default under `mle`: with `shared_kappa` or `per_mechanism` **all 10 mirrors
 are used**, because the likelihood models the between-mirror correlation directly and the
 shared part is no longer counted once per mirror. With `independent` the older rule stands: a
 gravitational-only / constant-mean model trains on the single lowest-tilt representative
 (`ONE_M2_T00`), and a model with an active `normal_wind`, `tangential_wind` or
-`impaction_retention` term uses all mirrors. Prefer `shared_kappa` for new work. 
+`impaction_retention` term uses all 10. That last case is known to under-cover its mean
+parameters by about 2.5× at Yadnarie — the justification was that each mirror's geometry
+contributes independent information, which the study measured to be false — and it is kept
+only so that existing runs stay comparable. Prefer `shared_kappa` for new work. Evaluation
+always scores all 10 whatever was trained on, so runs stay comparable.
 `--train-mirrors NAME [NAME ...]` overrides all of this.
 
 ### `--model-type {constant_mean,constant_mean_wind,semi_physical,all}`

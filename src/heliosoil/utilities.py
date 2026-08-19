@@ -841,6 +841,8 @@ def get_training_data(
             - common (list[str]): The names of mirrors that are common to all training data files.
     """
     files = [f for f in os.listdir(d) if f.startswith(file_start) if ("parameters" not in f)]
+    if not files:
+        raise FileNotFoundError(f"No training files starting with {file_start!r} in {d!r} (found: {sorted(os.listdir(d))}).")
 
     # get training time intervals
     if np.isscalar(time_to_remove_at_end):

@@ -72,9 +72,17 @@ def _k_factor(value: str):
 
 
 def _add_location(group, defaults) -> None:
-    """--location is the one site option every subcommand takes (experiment takes only it), so it is
-    registered from one place rather than duplicated across the parent parsers."""
+    """--location and --data-subdir are the site options every subcommand takes (experiment takes
+    only these), so they are registered from one place rather than duplicated across the parent
+    parsers."""
     group.add_argument("--location", default=defaults.location, help='dataset name, e.g. "mountisa", "carwarp", "yadnarie" (default: %(default)s)')
+    group.add_argument(
+        "--data-subdir",
+        default=defaults.data_subdir,
+        metavar="PATH",
+        help='folder between data/ and the location, e.g. "heliosoil-input" reads data/heliosoil-input/<location>/. '
+        "File names inside are unchanged. Default: read data/<location>/ directly.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -212,6 +220,7 @@ def _build_config(args) -> mp.PipelineConfig:
     train_experiments = getattr(args, "train_experiments", None)
     return mp.PipelineConfig(
         location=args.location,
+        data_subdir=args.data_subdir,
         train_experiments=list(train_experiments) if train_experiments else None,
         train_mirrors=args.train_mirrors,
         fit_method=args.fit_method,
@@ -231,7 +240,17 @@ def _run_metadata(args, cfg: mp.PipelineConfig, **extra) -> dict:
     """Reproducibility snapshot written to run_config.json (versions/timestamp added by
     write_run_metadata). Drop the subparser dispatch func so the dict stays serializable."""
     args_dict = {k: v for k, v in vars(args).items() if k != "func"}
-    return {"argv": sys.argv, "command": args.command, "args": args_dict, "config": dataclasses.asdict(cfg), **extra}
+    # asdict() records fields, not properties, so the resolved directory is added explicitly:
+    # the results folder is keyed on the site alone, and with --data-subdir in play this is
+    # the only thing in the run folder that says WHICH copy of the site's data was read.
+    return {
+        "argv": sys.argv,
+        "command": args.command,
+        "args": args_dict,
+        "config": dataclasses.asdict(cfg),
+        "data_dir": cfg.data_dir,
+        **extra,
+    }
 
 
 def _run_simulate(args) -> None:

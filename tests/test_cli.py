@@ -6,6 +6,7 @@ Everything here is pure -- no Excel I/O and no fitting -- so it covers the parts
 contract that are cheap to get wrong and expensive to discover in the middle of a sweep.
 """
 
+import os
 import pytest
 
 from heliosoil.horizontal_impaction import COMPONENT_KEYS, describe_components, parse_model_expression
@@ -492,3 +493,49 @@ def test_explicit_train_mirrors_still_override_every_fit_method():
     cfg = mp.PipelineConfig(location="yadnarie", fit_method="ls", train_mirrors=["OE_M2_T30"])
 
     assert mp.resolve_training_mirrors(cfg, MIRRORS, "constant_mean_wind", ["gravitational"]) == ["OE_M2_T30"]
+
+
+# --------------------------------------------------------------------------- #
+# --data-subdir: an optional folder level between data/ and the location
+# --------------------------------------------------------------------------- #
+
+
+def test_data_subdir_defaults_to_the_historical_layout():
+    """The default must reproduce data/<location>/ exactly -- os.path.join drops the empty
+    component rather than emitting a doubled separator."""
+    cfg = mp.PipelineConfig(location="yadnarie")
+    assert cfg.data_subdir == ""
+    assert os.path.normpath(cfg.data_dir).endswith(os.path.join("data", "yadnarie"))
+    assert "data" + os.sep + os.sep not in cfg.data_dir
+
+
+def test_data_subdir_inserts_one_folder_level_and_leaves_the_names_alone():
+    cfg = mp.PipelineConfig(location="yadnarie", data_subdir="heliosoil-input")
+    assert os.path.normpath(cfg.data_dir).endswith(os.path.join("data", "heliosoil-input", "yadnarie"))
+    # The file-naming convention is keyed on the location, not on where the folder sits.
+    assert cfg.file_prefix == "soiling_yadnarie"
+    assert os.path.basename(cfg.parameter_file) == "parameters_yadnarie_experiments.xlsx"
+
+
+def test_data_subdir_accepts_a_nested_path():
+    cfg = mp.PipelineConfig(location="qut", data_subdir="archive/2025")
+    assert os.path.normpath(cfg.data_dir).endswith(os.path.join("data", "archive", "2025", "qut"))
+
+
+def test_site_name_ignores_the_subdir_so_results_stay_keyed_on_the_site():
+    """Two copies of one site's data report into the same results folder; --run-name is what
+    separates them. Asserted rather than assumed, since it is a collision risk."""
+    plain = mp.PipelineConfig(location="yadnarie")
+    nested = mp.PipelineConfig(location="yadnarie", data_subdir="heliosoil-input")
+    assert plain.site_name == nested.site_name == "yadnarie"
+
+
+def test_cli_passes_data_subdir_through_to_the_config():
+    parser = build_parser()
+    args = parser.parse_args(["simulate", "--location", "yadnarie", "--data-subdir", "heliosoil-input"])
+    cfg = _build_config(args)
+    assert cfg.data_subdir == "heliosoil-input"
+    assert os.path.normpath(cfg.data_dir).endswith(os.path.join("data", "heliosoil-input", "yadnarie"))
+
+    default = _build_config(parser.parse_args(["simulate", "--location", "yadnarie"]))
+    assert default.data_subdir == ""
