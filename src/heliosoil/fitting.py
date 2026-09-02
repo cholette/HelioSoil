@@ -17,6 +17,8 @@ from scipy.special import expit, logit
 import numdifftools as ndt
 import pickle
 import warnings
+from collections import OrderedDict
+from contextlib import contextmanager
 
 
 def _experiment_value(value, f):
@@ -43,6 +45,18 @@ class CommonFittingMethods:
     # dropped, silently, because dropping them there loses nothing. Class-level so that
     # models built before this option existed behave as the stricter default.
     missing_data = "error"
+
+    # Memo for the forward model, held open only for the duration of a fit. The predicted
+    # soiling factor depends on the MEAN parameter alone -- hrz0 here, mu_tilde for the
+    # constant-mean model -- while the likelihood covariance depends only on sigma_dep and
+    # (for the components model) kappa. A derivative-based fit therefore asks for the same
+    # forward model over and over: a finite-difference gradient perturbs sigma_dep and
+    # kappa without touching the mean parameter, and numdifftools' Hessian needs the same
+    # set of mean-parameter values whether it is differentiating two parameters or three.
+    # None means "not fitting", in which case nothing is cached and nothing is reused.
+    _forward_model_cache = None
+    _forward_model_stale = None
+    forward_model_cache_size = 16
 
     # The variance split (common_variance_fraction, sigma_c, sigma_m) is declared on
     # SoilingBase, next to sigma_dep; update_model_parameters populates it here.
@@ -188,6 +202,69 @@ class CommonFittingMethods:
             H = J.transpose() @ likelihood_hessian @ J
 
         return z, H
+
+    @contextmanager
+    def _forward_model_memo(self):
+        """
+        Reuse forward-model runs that repeat a recent value of the mean parameter.
+
+        Inside the block, ``_predict_soiling_factor`` serves ``helios.soiling_factor``
+        from a small cache keyed on the mean parameter instead of re-running the forward
+        model; see the ``_forward_model_cache`` note on the class for why so many
+        evaluations repeat. The memo assumes the simulation inputs, the tilts and
+        ``rho0`` are held fixed, which is true within a single fit and is why it is
+        opened there rather than being on by default.
+
+        On leaving the block the forward model is re-run if the last evaluation was
+        served from the cache, so the model is left in the state it would have been in
+        without the memo.
+        """
+        previous_cache, previous_stale = self._forward_model_cache, self._forward_model_stale
+        self._forward_model_cache, self._forward_model_stale = OrderedDict(), None
+        try:
+            yield
+        finally:
+            stale = self._forward_model_stale
+            self._forward_model_cache, self._forward_model_stale = previous_cache, previous_stale
+            if stale is not None:
+                simulation_inputs, rho0 = stale
+                self.predict_soiling_factor(simulation_inputs, rho0=rho0, verbose=False)
+
+    def _predict_soiling_factor(self, simulation_inputs, rho0):
+        """
+        Populate ``helios.soiling_factor``, reusing a memoised run where possible.
+
+        Equivalent to calling ``predict_soiling_factor`` directly unless a
+        ``_forward_model_memo`` block is open, so the likelihoods and the sum of squares
+        can call it unconditionally.
+
+        Args:
+            simulation_inputs (SimulationInputs): Simulation inputs.
+            rho0: Per-mirror initial reflectance, as carried by the reflectance data.
+        """
+        cache = self._forward_model_cache
+        if cache is None:
+            self.predict_soiling_factor(simulation_inputs, rho0=rho0, verbose=False)
+            return
+
+        # Only the mean parameter is keyed on. A NaN proposed by the optimiser simply
+        # never matches, so it costs a forward-model run rather than a wrong answer.
+        key = float(getattr(self, self._mean_parameter_name))
+        cached = cache.get(key)
+        if cached is not None:
+            cache.move_to_end(key)
+            self.helios.soiling_factor = {f: v.copy() for f, v in cached.items()}
+            # The intermediates left on helios (pdfqN, delta_soiled_area and the
+            # sigma_dep-dependent variances) still belong to the last full run, so the
+            # memo owes a recomputation when it closes.
+            self._forward_model_stale = (simulation_inputs, rho0)
+            return
+
+        self.predict_soiling_factor(simulation_inputs, rho0=rho0, verbose=False)
+        self._forward_model_stale = None
+        cache[key] = {f: v.copy() for f, v in self.helios.soiling_factor.items()}
+        if len(cache) > self.forward_model_cache_size:
+            cache.popitem(last=False)
 
     def _set_variance_components(self, kappa):
         """
@@ -522,7 +599,11 @@ class CommonFittingMethods:
                     np.arange(observed[p][0], observed[p][-1] + 1), observed[p]
                 )
                 name = names[p] if p < len(names) else f"column {p}"
-                when = ", ".join(str(times[i]) for i in interior) if times.size else str(list(interior))
+                when = (
+                    ", ".join(str(times[i]) for i in interior)
+                    if times.size
+                    else str(list(interior))
+                )
                 lines.append(f"experiment {f}, mirror {name}: {when}")
         return lines
 
@@ -581,8 +662,8 @@ class CommonFittingMethods:
         multivariate normal over its stacked reflectance differences.
 
         Differences with a missing endpoint measurement are dropped and the covariance is
-        restricted to the retained rows. A missing rho_k in a middle measurement kills both 
-        differences that touch it to maintain the common time grid. ``missing_data="error"`` 
+        restricted to the retained rows. A missing rho_k in a middle measurement kills both
+        differences that touch it to maintain the common time grid. ``missing_data="error"``
         (default) will error for a missing data point in the middle of the campaign, while
          ``missing_data="drop"`` proceeds without those differences and warns.
 
@@ -612,7 +693,7 @@ class CommonFittingMethods:
 
         sigma_dep, kappa = params[1], params[2]
         self.update_model_parameters(params[0:2])
-        self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0, verbose=False)
+        self._predict_soiling_factor(simulation_inputs, reflectance_data.rho0)
 
         nll = 0.0
         for f in list(reflectance_data.times.keys()):
@@ -752,9 +833,7 @@ class CommonFittingMethods:
             sigma=sigma,
             time_grids=[np.asarray(sim_in.time[f]) for f in files],
             tilts=tilts,
-            number_of_measurements=[
-                _experiment_value(number_of_measurements, f) for f in files
-            ],
+            number_of_measurements=[_experiment_value(number_of_measurements, f) for f in files],
             reflectometer_incidence_angle=angles,
             names=names,
         )
@@ -918,7 +997,7 @@ class CommonFittingMethods:
         sse = 0
         n_terms = 0
         self.update_model_parameters(params)
-        self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0, verbose=False)
+        self._predict_soiling_factor(simulation_inputs, reflectance_data.rho0)
         files = list(self.helios.soiling_factor.keys())
         for f in files:
             rho_prediction = self._predicted_reflectance(f, reflectance_data)
@@ -952,9 +1031,7 @@ class CommonFittingMethods:
                 reflectance_data,
                 endpoint_correction=self.endpoint_correction,
             )
-        return self._negative_log_likelihood_scalar(
-            params, simulation_inputs, reflectance_data
-        )
+        return self._negative_log_likelihood_scalar(params, simulation_inputs, reflectance_data)
 
     def _negative_log_likelihood_scalar(self, params, simulation_inputs, reflectance_data):
         """
@@ -976,7 +1053,7 @@ class CommonFittingMethods:
         # define optimization objective function (negative log likelihood)
         sigma_dep = params[1]
         self.update_model_parameters(params)
-        self.predict_soiling_factor(simulation_inputs, rho0=reflectance_data.rho0, verbose=False)
+        self._predict_soiling_factor(simulation_inputs, reflectance_data.rho0)
 
         n_terms = 0
         loglike = 0.0
@@ -1107,44 +1184,50 @@ class CommonFittingMethods:
         if self.variance_model == "components":
             self._check_variance_components_identifiable(ref_dat)
 
-        if np.all(x0 is None):  # intialize using least squares and 1D MLE
-            _print_if("Getting initial deposition parameter guess via least squares", verbose)
-            p0, sse = self.fit_least_squares(simulation_inputs, reflectance_data, verbose=False)
-
-            _print_if(
-                "Getting initial sigma_dep guess via MLE (at least-squares value for deposition parameters)",
-                verbose,
-            )
-
-            # Start from an even split of the deposition variance, which is interior to
-            # the admissible range of kappa and so avoids starting on a boundary.
-            def nloglike1D(y):
-                return self._negative_log_likelihood(
-                    [p0, y, 0.5][0 : self.n_parameters], sim_in, ref_dat
+        # Everything below evaluates the objective at a fixed set of inputs, so the
+        # forward model can be memoised on the mean parameter for the whole fit. Most of
+        # the evaluations below repeat one: see ``_forward_model_memo``.
+        with self._forward_model_memo():
+            if np.all(x0 is None):  # intialize using least squares and 1D MLE
+                _print_if("Getting initial deposition parameter guess via least squares", verbose)
+                p0, sse = self.fit_least_squares(
+                    simulation_inputs, reflectance_data, verbose=False
                 )
 
-            s0 = minimize_scalar(
-                nloglike1D, bounds=(smb.tol, sse), method="Bounded"
-            )  # use bounded to prevent evaluation at values <=1
-            x0 = np.array([p0, s0.x, 0.5][0 : self.n_parameters])
-            _print_if("x0 = [" + ", ".join(f"{v}" for v in x0) + "]", verbose)
+                _print_if(
+                    "Getting initial sigma_dep guess via MLE (at least-squares value for deposition parameters)",
+                    verbose,
+                )
 
-        # MLE. Transform to logs to ensure parameters are positive
-        _print_if("Maximizing likelihood ...", verbose)
-        y0 = self.transform_scale(x0, direction="forward")
+                # Start from an even split of the deposition variance, which is interior to
+                # the admissible range of kappa and so avoids starting on a boundary.
+                def nloglike1D(y):
+                    return self._negative_log_likelihood(
+                        [p0, y, 0.5][0 : self.n_parameters], sim_in, ref_dat
+                    )
 
-        def nloglike(y):
-            return self._negative_log_likelihood(self.transform_scale(y), sim_in, ref_dat)
+                s0 = minimize_scalar(
+                    nloglike1D, bounds=(smb.tol, sse), method="Bounded"
+                )  # use bounded to prevent evaluation at values <=1
+                x0 = np.array([p0, s0.x, 0.5][0 : self.n_parameters])
+                _print_if("x0 = [" + ", ".join(f"{v}" for v in x0) + "]", verbose)
 
-        res = minimize(nloglike, y0, **optim_kwargs)
-        y = res.x
-        _print_if("  " + res.message, verbose)
+            # MLE. Transform to logs to ensure parameters are positive
+            _print_if("Maximizing likelihood ...", verbose)
+            y0 = self.transform_scale(x0, direction="forward")
 
-        _print_if(
-            "Estimating parameter covariance using numerical approximation of Hessian ... ",
-            verbose,
-        )
-        H_log = ndt.Hessian(nloglike)(y)  # Hessian is in the log transformed space
+            def nloglike(y):
+                return self._negative_log_likelihood(self.transform_scale(y), sim_in, ref_dat)
+
+            res = minimize(nloglike, y0, **optim_kwargs)
+            y = res.x
+            _print_if("  " + res.message, verbose)
+
+            _print_if(
+                "Estimating parameter covariance using numerical approximation of Hessian ... ",
+                verbose,
+            )
+            H_log = ndt.Hessian(nloglike)(y)  # Hessian is in the log transformed space
 
         try:
             y_cov = np.linalg.inv(H_log)  # Parameter covariance in the log space
