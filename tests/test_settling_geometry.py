@@ -21,7 +21,7 @@ from heliosoil.utilities import cosd, gravitational_settling_factor
     [
         (0.0, 1.0),
         (60.0, 0.5),
-        (90.0, 0.0),      # to atol; cosd(90) is 6.1e-17, not 0
+        (90.0, 0.0),  # to atol; cosd(90) is 6.1e-17, not 0
         (90.1, 0.0),
         (120.0, 0.0),
         (180.0, 0.0),
@@ -47,7 +47,7 @@ def test_settling_factor_is_the_raw_cosine_below_vertical():
 
 def test_settling_factor_is_zero_not_negative_past_vertical():
     tilt = np.array([90.1, 120.0, 180.0, 269.9])
-    assert (cosd(tilt) < 0).all()                                  # what it used to be
+    assert (cosd(tilt) < 0).all()  # what it used to be
     np.testing.assert_array_equal(gravitational_settling_factor(tilt), 0.0)
 
 

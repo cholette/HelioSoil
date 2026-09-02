@@ -5,13 +5,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import scipy.stats as sps
-from heliosoil.paper_specific_utilities import (
-    plot_for_paper,
-    plot_for_heliostats,
-    daily_soiling_rate,
-    fit_quality_plots,
-    summarize_fit_quality,
-)
+from heliosoil.paper_specific_utilities import plot_for_paper, plot_for_heliostats, daily_soiling_rate, fit_quality_plots, summarize_fit_quality
 import heliosoil.base_models as smb
 import heliosoil.fitting as smf
 import heliosoil.utilities as smu
@@ -31,19 +25,27 @@ second_surf = True  # True if using the second-surface model. Otherwise, use fir
 d = f"{main_directory}/data/heliosoil-input/yadnarie/"
 time_to_remove_at_end = [0, 0, 0, 0, 0, 0]
 train_experiments = [0, 1]  # indices for training experiments from 0 to len(files)-1
-train_mirrors = ["ONE_M2_T00", "OSW_M1_T180", "ONW_M1_T90", "ONW_M2_T60", "ONW_M3_T30",
-                 "ONW_M4_T00", "OSE_M1_T90", "OSE_M2_T60", "OSE_M3_T30", "OSE_M4_T00"]
+train_mirrors = [
+    "ONE_M2_T00",
+    "OSW_M1_T180",
+    "ONW_M1_T90",
+    "ONW_M2_T60",
+    "ONW_M3_T30",
+    "ONW_M4_T00",
+    "OSE_M1_T90",
+    "OSE_M2_T60",
+    "OSE_M3_T30",
+    "OSE_M4_T00",
+]
 # train_mirrors = None
 k_factor = "import"  # None sets equal to 1.0, "import" imports from the file
 dust_type = "PM10"  # choose PM fraction to use for analysis --> PMT, PM10, PM2.5
-ext_lookup_folder = None # "extinction_lookup_tables/yadnarie/"
+ext_lookup_folder = None  # "extinction_lookup_tables/yadnarie/"
 
 # %% Get file list and time intervals. Import training data.
 parameter_file = d + "parameters_yadnarie_experiments.xlsx"
 
-files, all_intervals, exp_mirrors, all_mirrors = smu.get_training_data(
-    d, "soiling_yadnarie", time_to_remove_at_end=time_to_remove_at_end
-)
+files, all_intervals, exp_mirrors, all_mirrors = smu.get_training_data(d, "soiling_yadnarie", time_to_remove_at_end=time_to_remove_at_end)
 orientation = [[s[1:3] for s in mirrors] for mirrors in exp_mirrors]
 
 # November 2024 (first experiments --- nothing to remove)
@@ -86,22 +88,16 @@ reflect_data_train = smb.ReflectanceMeasurements(
     imported_column_names=train_mirrors,
 )
 # %% Trim training data
-sim_data_train, reflect_data_train = smu.trim_experiment_data(
-    sim_data_train, reflect_data_train, training_intervals
-)
+sim_data_train, reflect_data_train = smu.trim_experiment_data(sim_data_train, reflect_data_train, training_intervals)
 
-sim_data_train, reflect_data_train = smu.trim_experiment_data(
-    sim_data_train, reflect_data_train, "reflectance_data"
-)
+sim_data_train, reflect_data_train = smu.trim_experiment_data(sim_data_train, reflect_data_train, "reflectance_data")
 # %% Plot training data
 
 for ii, experiment in enumerate(train_experiments):
     if any("augusta".lower() in value.lower() for value in sim_data_train.files):
         fig, ax = smu.plot_experiment_PA(sim_data_train, reflect_data_train, ii, figsize=(10, 15))
     else:
-        fig, ax = smu.plot_experiment_data(
-            sim_data_train, reflect_data_train, ii, figsize=(10, 15)
-        )
+        fig, ax = smu.plot_experiment_data(sim_data_train, reflect_data_train, ii, figsize=(10, 15))
 
     # fig.suptitle(f"Training Data for file {files[experiment]}")
     # fig,ax = smu.wind_rose(sim_data_train,ii)
@@ -110,9 +106,7 @@ for ii, experiment in enumerate(train_experiments):
 # %% Load total simulation data
 
 if HELIOSTATS:
-    files, all_intervals, exp_mirrors, all_mirrors = smu.get_training_data(
-        d, "hel_experiment_", time_to_remove_at_end=time_to_remove_at_end
-    )
+    files, all_intervals, exp_mirrors, all_mirrors = smu.get_training_data(d, "hel_experiment_", time_to_remove_at_end=time_to_remove_at_end)
 
 
 sim_data_total = smb.SimulationInputs(files, k_factors=k_factor, dust_type=dust_type)
@@ -134,17 +128,13 @@ reflect_data_total = smb.ReflectanceMeasurements(
 )
 
 # %% Trim data and plot
-sim_data_total, reflect_data_total = smu.trim_experiment_data(
-    sim_data_total, reflect_data_total, "reflectance_data"
-)
+sim_data_total, reflect_data_total = smu.trim_experiment_data(sim_data_total, reflect_data_total, "reflectance_data")
 
 for ii, experiment in enumerate(sim_data_total.dt.keys()):
     if any("augusta".lower() in value.lower() for value in sim_data_total.files):
         fig, ax = smu.plot_experiment_PA(sim_data_total, reflect_data_total, ii, figsize=(10, 15))
     else:
-        fig, ax = smu.plot_experiment_data(
-            sim_data_total, reflect_data_total, ii, figsize=(10, 15)
-        )
+        fig, ax = smu.plot_experiment_data(sim_data_total, reflect_data_total, ii, figsize=(10, 15))
     # fig.suptitle(f"Testing Data for file {files[experiment]}")
     # fig,ax = smu.wind_rose(sim_data_total,ii)
     # ax.set_title(f"Wind for file {files[experiment]}")
@@ -162,9 +152,7 @@ if DAILY_AVERAGE:
 # %% Daily average of reflectance values and trimming of simulation inputs (Total data)
 
 if DAILY_AVERAGE:
-    reflect_data_total = smu.daily_average(
-        reflect_data_total, sim_data_total.time, sim_data_total.dt
-    )
+    reflect_data_total = smu.daily_average(reflect_data_total, sim_data_total.time, sim_data_total.dt)
     # sim_data_total , _ = smu.trim_experiment_data(      sim_data_total,
     #                                                 reflect_data_total,
     #                                                 "reflectance_data" )
@@ -201,23 +189,11 @@ std = reflect_data_total.sigma[f]
 lgd_label = [lg[:6].replace("O", "").replace("_M", "") for lg in exp_mirrors[f]]
 for ii in range(ave.shape[1]):
     if lgd_label[ii] == "W1":
-        ax[0].errorbar(
-            t,
-            ave[:, ii],
-            yerr=1.96 * std[:, ii],
-            label=lgd_label[ii],
-            linestyle="dashed",
-            marker="o",
-            capsize=4.0,
-        )
+        ax[0].errorbar(t, ave[:, ii], yerr=1.96 * std[:, ii], label=lgd_label[ii], linestyle="dashed", marker="o", capsize=4.0)
     else:
-        ax[0].errorbar(
-            t, ave[:, ii], yerr=1.96 * std[:, ii], label=lgd_label[ii], marker="o", capsize=4.0
-        )
+        ax[0].errorbar(t, ave[:, ii], yerr=1.96 * std[:, ii], label=lgd_label[ii], marker="o", capsize=4.0)
 ax[0].grid(True)
-label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(
-    reflect_data_total.reflectometer_incidence_angle[0]
-)
+label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0])
 ax[0].set_ylabel(label_str)
 ax[0].legend(fontsize=lgd_size, loc="center right", bbox_to_anchor=(1.15, 0.5))
 title_Jan = "Raygen Experiments Summary - November 2024"
@@ -225,12 +201,7 @@ if DAILY_AVERAGE:
     title_Jan += " - Daily Average"
 plt.suptitle(title_Jan, fontsize=20, x=0.5, y=0.92)
 
-ax[1].plot(
-    sim_data_total.time[f],
-    sim_data_total.dust_concentration[f],
-    color="brown",
-    label="Measurements",
-)
+ax[1].plot(sim_data_total.time[f], sim_data_total.dust_concentration[f], color="brown", label="Measurements")
 # label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
 ax[1].axhline(
     y=np.nanmean(sim_data_total.dust_concentration[f]),
@@ -245,14 +216,9 @@ ax[1].grid(True)
 ax[1].legend(fontsize=lgd_size)
 ax[1].set_ylim(0, 150)
 
-ax[2].plot(
-    sim_data_total.time[f], sim_data_total.wind_speed[f], color="green", label="Measurements"
-)
+ax[2].plot(sim_data_total.time[f], sim_data_total.wind_speed[f], color="green", label="Measurements")
 ax[2].axhline(
-    y=np.nanmean(sim_data_total.wind_speed[f]),
-    color="green",
-    ls="--",
-    label=r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean()),
+    y=np.nanmean(sim_data_total.wind_speed[f]), color="green", ls="--", label=r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean())
 )
 label_str = r"Wind Speed [$m\,/\,s$]"
 ax[2].set_ylabel(label_str, color="green")
@@ -260,9 +226,7 @@ ax[2].tick_params(axis="y", labelcolor="green")
 ax[2].grid(True)
 ax[2].legend(fontsize=lgd_size)
 
-ax[3].plot(
-    sim_data_total.time[f], sim_data_total.relative_humidity[f], color="blue", label="Measurements"
-)
+ax[3].plot(sim_data_total.time[f], sim_data_total.relative_humidity[f], color="blue", label="Measurements")
 ax[3].axhline(
     y=np.nanmean(sim_data_total.relative_humidity[f]),
     color="blue",
@@ -286,23 +250,11 @@ std = reflect_data_total.sigma[f]
 lgd_label = [lg[:5].replace("O", "").replace("_M", "") for lg in exp_mirrors[f]]
 for ii in range(ave.shape[1]):
     if lgd_label[ii] == "W2":
-        ax[0].errorbar(
-            t,
-            ave[:, ii],
-            yerr=1.96 * std[:, ii],
-            label=lgd_label[ii],
-            linestyle="dashed",
-            marker="o",
-            capsize=4.0,
-        )
+        ax[0].errorbar(t, ave[:, ii], yerr=1.96 * std[:, ii], label=lgd_label[ii], linestyle="dashed", marker="o", capsize=4.0)
     else:
-        ax[0].errorbar(
-            t, ave[:, ii], yerr=1.96 * std[:, ii], label=lgd_label[ii], marker="o", capsize=4.0
-        )
+        ax[0].errorbar(t, ave[:, ii], yerr=1.96 * std[:, ii], label=lgd_label[ii], marker="o", capsize=4.0)
 ax[0].grid(True)
-label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(
-    reflect_data_total.reflectometer_incidence_angle[0]
-)
+label_str = r"Reflectance at {0:.0f} $^{{\circ}}$".format(reflect_data_total.reflectometer_incidence_angle[0])
 ax[0].set_ylabel(label_str)
 ax[0].legend(fontsize=lgd_size, loc="center right", bbox_to_anchor=(1.15, 0.5))
 title_Jun = "Raygen Experiments Summary - June 2024"
@@ -310,12 +262,7 @@ if DAILY_AVERAGE:
     title_Jun += " - Daily Average"
 plt.suptitle(title_Jun, fontsize=20, x=0.5, y=0.92)
 
-ax[1].plot(
-    sim_data_total.time[f],
-    sim_data_total.dust_concentration[f],
-    color="brown",
-    label="Measurements",
-)
+ax[1].plot(sim_data_total.time[f], sim_data_total.dust_concentration[f], color="brown", label="Measurements")
 # label_PM10 = r"Average = {0.2f}".format(sim_data_total.dust_concentration[f].mean())
 ax[1].axhline(
     y=sim_data_total.dust_concentration[f].mean(),
@@ -330,29 +277,17 @@ ax[1].grid(True)
 ax[1].legend(fontsize=lgd_size)
 ax[1].set_ylim(0, 100)
 
-ax[2].plot(
-    sim_data_total.time[f], sim_data_total.wind_speed[f], color="green", label="Measurements"
-)
-ax[2].axhline(
-    y=sim_data_total.wind_speed[f].mean(),
-    color="green",
-    ls="--",
-    label=r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean()),
-)
+ax[2].plot(sim_data_total.time[f], sim_data_total.wind_speed[f], color="green", label="Measurements")
+ax[2].axhline(y=sim_data_total.wind_speed[f].mean(), color="green", ls="--", label=r"Average = {0:.2f}".format(sim_data_total.wind_speed[f].mean()))
 label_str = r"Wind Speed [$m\,/\,s$]"
 ax[2].set_ylabel(label_str, color="green")
 ax[2].tick_params(axis="y", labelcolor="green")
 ax[2].grid(True)
 ax[2].legend(fontsize=lgd_size)
 
-ax[3].plot(
-    sim_data_total.time[f], sim_data_total.relative_humidity[f], color="blue", label="Measurements"
-)
+ax[3].plot(sim_data_total.time[f], sim_data_total.relative_humidity[f], color="blue", label="Measurements")
 ax[3].axhline(
-    y=sim_data_total.relative_humidity[f].mean(),
-    color="blue",
-    ls="--",
-    label=r"Average = {0:.3f}".format(sim_data_total.relative_humidity[f].mean()),
+    y=sim_data_total.relative_humidity[f].mean(), color="blue", ls="--", label=r"Average = {0:.3f}".format(sim_data_total.relative_humidity[f].mean())
 )
 label_str = r"Relative Humidity [%]"
 ax[3].set_ylabel(label_str, color="blue")
@@ -370,39 +305,19 @@ for m, mir in enumerate(train_mirrors):
             diff_days = -diff_array_times.astype("timedelta64[s]").astype("int") / 3600 / 24
             idx_mir = reflect_data_total.mirror_names[exp].index(mir)
             diff_ref = -np.diff(reflect_data_total.average[exp][:, idx_mir], axis=0)
-            diff_rates = (
-                diff_ref * 100 / diff_days
-            )  # contain soiling rates for mir in training_mirrors
+            diff_rates = diff_ref * 100 / diff_days  # contain soiling rates for mir in training_mirrors
 
-            df_dust = pd.DataFrame(
-                {"Time": sim_data_total.time[exp], "Value": sim_data_total.dust_concentration[exp]}
-            )
-            retiming_vector = pd.to_datetime(
-                reflect_data_total.times[exp].astype("datetime64[ns]")
-            )
-            df_dust["Interval"] = pd.cut(
-                df_dust["Time"], bins=retiming_vector, right=False, labels=False
-            )
+            df_dust = pd.DataFrame({"Time": sim_data_total.time[exp], "Value": sim_data_total.dust_concentration[exp]})
+            retiming_vector = pd.to_datetime(reflect_data_total.times[exp].astype("datetime64[ns]"))
+            df_dust["Interval"] = pd.cut(df_dust["Time"], bins=retiming_vector, right=False, labels=False)
             df_dust_retime = pd.DataFrame(
-                {
-                    "Time": retiming_vector[1:],
-                    "Mean_Dust_Conc": df_dust.groupby("Interval")["Value"].mean().values,
-                    "Soiling_Rate": diff_rates,
-                }
+                {"Time": retiming_vector[1:], "Mean_Dust_Conc": df_dust.groupby("Interval")["Value"].mean().values, "Soiling_Rate": diff_rates}
             )
             df_sorted = df_dust_retime.sort_values(by="Mean_Dust_Conc")
             print(df_dust_retime)
             print(df_sorted)
-            df_filtered = df_sorted.dropna(
-                subset=["Soiling_Rate"]
-            )  # remove NaNs that would make the plot incomplete
-            plt.plot(
-                df_filtered["Mean_Dust_Conc"],
-                df_filtered["Soiling_Rate"],
-                marker="o",
-                linestyle="-",
-                color="b",
-            )
+            df_filtered = df_sorted.dropna(subset=["Soiling_Rate"])  # remove NaNs that would make the plot incomplete
+            plt.plot(df_filtered["Mean_Dust_Conc"], df_filtered["Soiling_Rate"], marker="o", linestyle="-", color="b")
             # plt.plot(df_sorted['Mean_Dust_Conc'], df_sorted['Soiling_Rate'], marker='o', linestyle='-', color='b')
             # plt.hist(df_sorted['Soiling_Rate'], bins='auto', edgecolor='black')
             plt.xlabel(f"Mean_{dust_type}, µg/m3")
@@ -412,20 +327,16 @@ for m, mir in enumerate(train_mirrors):
 
 # %% Set mirror angles and get extinction weights for fitting
 imodel.helios_angles(sim_data_train, reflect_data_train, second_surface=second_surf)
-imodel.helios.compute_extinction_weights(sim_data_train, imodel.loss_model, 
-                                         verbose=True,lookup_table_file_folder=ext_lookup_folder)
+imodel.helios.compute_extinction_weights(sim_data_train, imodel.loss_model, verbose=True, lookup_table_file_folder=ext_lookup_folder)
 imodel.helios.plot_extinction_weights(sim_data_train, fig_kwargs={})
 ext_weights = imodel.helios.extinction_weighting[0].copy()
 
 imodel_constant.helios_angles(sim_data_train, reflect_data_train, second_surface=second_surf)
 file_inds = np.arange(len(files_train))
-imodel_constant = smu.set_extinction_coefficients(imodel_constant,
-                                                  ext_weights, file_inds)
+imodel_constant = smu.set_extinction_coefficients(imodel_constant, ext_weights, file_inds)
 
 # %% Fit semi-physical model
-log_param_hat, log_param_cov = imodel.fit_mle(
-    sim_data_train, reflect_data_train, transform_to_original_scale=False
-)
+log_param_hat, log_param_cov = imodel.fit_mle(sim_data_train, reflect_data_train, transform_to_original_scale=False)
 
 s = np.sqrt(np.diag(log_param_cov))
 param_ci = log_param_hat + 1.96 * s * np.array([[-1], [1]])
@@ -450,9 +361,7 @@ imodel.save(
 )
 
 # %% Fit constant mean model
-log_param_hat_con, log_param_cov_con = imodel_constant.fit_mle(
-    sim_data_train, reflect_data_train, transform_to_original_scale=False
-)
+log_param_hat_con, log_param_cov_con = imodel_constant.fit_mle(sim_data_train, reflect_data_train, transform_to_original_scale=False)
 s_con = np.sqrt(np.diag(log_param_cov_con))
 param_ci_con = log_param_hat_con + 1.96 * s_con * np.array([[-1], [1]])
 lower_ci_con = imodel_constant.transform_scale(param_ci_con[0, :])
@@ -460,12 +369,9 @@ upper_ci_con = imodel_constant.transform_scale(param_ci_con[1, :])
 param_hat_con = imodel_constant.transform_scale(log_param_hat_con)
 mu_tilde, sigma_dep_con = param_hat_con[0], param_hat_con[1]
 print(f"mu_tilde: {mu_tilde:.2e} [{lower_ci_con[0]:.2e},{upper_ci_con[0]:.2e}] [p.p./day]")
-print(
-    f"sigma_dep (constant mean model): {sigma_dep_con:.2e} [{lower_ci_con[1]:.2e},{upper_ci_con[1]:.2e}] [p.p./day]"
-)
+print(f"sigma_dep (constant mean model): {sigma_dep_con:.2e} [{lower_ci_con[1]:.2e},{upper_ci_con[1]:.2e}] [p.p./day]")
 if imodel_constant.variance_model == "components":
-    print(f"kappa (constant mean model): {param_hat_con[2]:.2e} "
-          f"[{lower_ci_con[2]:.2e},{upper_ci_con[2]:.2e}]")
+    print(f"kappa (constant mean model): {param_hat_con[2]:.2e} [{lower_ci_con[2]:.2e},{upper_ci_con[2]:.2e}]")
 
 imodel_constant.update_model_parameters(param_hat_con)
 imodel_constant.save(
@@ -487,8 +393,7 @@ if DAILY_AVERAGE:
 # %%
 if DAILY_AVERAGE:
     imodel.helios_angles(sim_data_train, reflect_data_train, second_surface=second_surf)
-    imodel.helios.compute_extinction_weights(sim_data_train, imodel.loss_model, verbose=True, 
-                                             lookup_table_file_folder=ext_lookup_folder)  
+    imodel.helios.compute_extinction_weights(sim_data_train, imodel.loss_model, verbose=True, lookup_table_file_folder=ext_lookup_folder)
     imodel_constant.helios_angles(sim_data_train, reflect_data_train, second_surface=second_surf)
     file_inds = np.arange(len(files_train))
     imodel_constant = smu.set_extinction_coefficients(imodel_constant, ext_weights, file_inds)
@@ -526,21 +431,13 @@ if DAILY_AVERAGE:
 # %% Performance of semi-physical model on total data
 imodel.helios_angles(sim_data_total, reflect_data_total, second_surface=second_surf)
 file_inds = np.arange(len(reflect_data_total.files))
-imodel.helios.compute_extinction_weights(sim_data_total, imodel.loss_model, verbose=True, 
-                                             lookup_table_file_folder=ext_lookup_folder)  
+imodel.helios.compute_extinction_weights(sim_data_total, imodel.loss_model, verbose=True, lookup_table_file_folder=ext_lookup_folder)
 # imodel = smu.set_extinction_coefficients(imodel, ext_weights,
 #                                           file_inds)
 # %% Plot semi-physical model results
 if HELIOSTATS:
     fig, ax = plot_for_heliostats(
-        imodel,
-        reflect_data_total,
-        sim_data_total,
-        train_experiments,
-        train_mirrors,
-        orientation,
-        legend_shift=(0.04, 0),
-        yticks=(0.98, 0.99, 1.01),
+        imodel, reflect_data_total, sim_data_total, train_experiments, train_mirrors, orientation, legend_shift=(0.04, 0), yticks=(0.98, 0.99, 1.01)
     )  # 0.97,0.98,
     fig.set_size_inches(10, 20)
     plt.show()
@@ -571,7 +468,7 @@ if HELIOSTATS:
         train_mirrors,
         orientation,
         legend_shift=(0.04, 0),
-        yticks=None # (0.97, 0.98, 0.99, 1.02),
+        yticks=None,  # (0.97, 0.98, 0.99, 1.02),
     )
 else:
     fig, ax, ref = plot_for_paper(
@@ -582,7 +479,7 @@ else:
         train_mirrors,
         orientation,
         legend_shift=(0, 0),
-        yticks= (0.75, 0.8, 0.85, 0.90, 0.95, 1.0),
+        yticks=(0.75, 0.8, 0.85, 0.90, 0.95, 1.0),
     )
 
 fig.suptitle("Constant-Mean Model", fontsize=16, fontweight="bold", y=1.045)
@@ -594,9 +491,7 @@ labels = ["Low", "Medium", "High", "Maximum"]
 colors = ["blue", "green", "purple", "black"]
 fsz = 16
 
-sims, a, a2 = daily_soiling_rate(
-    sim_data_total, cm_save_file, M=100000, percents=pers, dust_type=dust_type
-)
+sims, a, a2 = daily_soiling_rate(sim_data_total, cm_save_file, M=100000, percents=pers, dust_type=dust_type)
 # xL,xU = np.percentile(sims,[0.1,99.9])
 xL, xU = -0.25, 3.0
 lg = np.linspace(xL, xU, 1000)
@@ -618,9 +513,7 @@ ax.set_xlabel("Loss (percentage points)", fontsize=fsz + 2)
 ax.legend(fontsize=fsz)
 
 fig.set_size_inches(5, 4)
-fig.savefig(
-    f"{main_directory}/results/losses_yadnarie.pdf", dpi=300, bbox_inches="tight", pad_inches=0
-)
+fig.savefig(f"{main_directory}/results/losses_yadnarie.pdf", dpi=300, bbox_inches="tight", pad_inches=0)
 
 # %% Highest only
 
@@ -642,12 +535,7 @@ ax.set_xlabel("Loss (percentage points)", fontsize=fsz + 2)
 # ax.legend(fontsize=fsz)
 
 fig.set_size_inches(5, 4)
-fig.savefig(
-    f"{main_directory}/results/highest_losses_yadnarie.pdf",
-    dpi=300,
-    bbox_inches="tight",
-    pad_inches=0,
-)
+fig.savefig(f"{main_directory}/results/highest_losses_yadnarie.pdf", dpi=300, bbox_inches="tight", pad_inches=0)
 
 # %% Fit quality plots (semi-physical)
 mirror_idxs = list(range(len(all_mirrors)))

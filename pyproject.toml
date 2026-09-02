@@ -48,13 +48,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "ipython",
-    "pytest",
-    "nbstripout",
-    "nbconvert",
-    "black[jupyter]",
-    "pre-commit",
-    "flake8",
+    "ipykernel>=6.31.0",
+    "nbconvert>=7.17.1",
+    "nbstripout>=0.8.2",
+    "pre-commit>=4.3.0",
+    "pytest>=8.4.2",
+    "ruff>=0.16.5",
 ]
 docs = [
     "sphinx",
@@ -77,29 +76,30 @@ exclude = ["tests*", "docs*"]
 [tool.setuptools.package-data]
 heliosoil = ["*.txt", "*.md"]
 
-# Add black configuration
-[tool.black]
-line-length = 99
-include = '\.pyi?$'
-exclude = '''
-/(
-    \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | _build
-  | buck-out
-  | build
-  | dist
-  | data
-  | results
-  | examples\woomera_demo
-  | docs
-  | heliosoil.egg-info
-)/
-'''
+# Ruff configuration
+[tool.ruff]
+line-length = 150
+extend-exclude = [
+    "data",
+    "results",
+    "examples/",
+    "docs",
+    "heliosoil.egg-info",
+    "copylot.py",
+]
+
+[tool.ruff.format]
+skip-magic-trailing-comma = true # Ruff's default is to add a trailing comma to multi-line collections, but this can be annoying when editing code. This option disables that behavior.
+quote-style = "double" # Ruff's default is to use single quotes for strings, but this project prefers double quotes.
+indent-style = "space" # Ruff's default is to use tabs for indentation, but this project prefers spaces.
+
+[tool.ruff.lint]
+# Ruff's historical default set; widen later if you want flake8-style coverage.
+select = ["E4", "E7", "E9", "F"]
+ignore = ["E501", "E731", "E402"]  # Ignore line length, lambda assignment, and module level import not at top of file.
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false # Ruff's default is to split imports on trailing commas, but this project prefers to keep imports on a single line when possible.
 
 # Development tools configuration
 [tool.nbstripout]

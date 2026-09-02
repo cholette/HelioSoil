@@ -44,8 +44,7 @@ def _constant_mean_model(tilt=None):
     model.helios.nominal_reflectance = NOMINAL_REFLECTANCE
     model.helios.tilt = {F: np.zeros((2, T_GRID)) if tilt is None else tilt}
     model.helios.inc_ref_factor = {F: np.array(INC_REF_FACTOR)}
-    for name in ("delta_soiled_area", "delta_soiled_area_variance",
-                 "soiling_factor", "soiling_factor_prediction_variance"):
+    for name in ("delta_soiled_area", "delta_soiled_area_variance", "soiling_factor", "soiling_factor_prediction_variance"):
         setattr(model.helios, name, {})
     return model
 

@@ -1,4 +1,4 @@
-# %% 
+# %%
 
 """Analysis of geometry reflectance model and comparison with models from [1] and [2]
 
@@ -20,9 +20,7 @@ def cosd(x):
     return np.cos(np.deg2rad(x))
 
 
-fig, ax = plt.subplots(
-    nrows=len(normal_cleanliness), figsize=(5, 8 / 3.0 * len(normal_cleanliness))
-)
+fig, ax = plt.subplots(nrows=len(normal_cleanliness), figsize=(5, 8 / 3.0 * len(normal_cleanliness)))
 for ii, nc in enumerate(normal_cleanliness):
     AR = (1 - nc) / 2
     for jj, dd in enumerate(d):

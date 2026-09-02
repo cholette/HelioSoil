@@ -1,10 +1,5 @@
 import heliosoil.base_models as smb
-from heliosoil.utilities import (
-    _print_if,
-    _check_keys,
-    _parse_dust_str,
-    gravitational_settling_factor,
-)
+from heliosoil.utilities import _print_if, _check_keys, _parse_dust_str, gravitational_settling_factor
 import numpy as np
 from numpy import radians as rad
 from numpy.linalg import inv
@@ -31,7 +26,6 @@ def _experiment_value(value, f):
 
 
 class CommonFittingMethods:
-
     # Deposition noise model. "scalar" is the historical two-parameter model;
     # "components" splits the deposition variance into a site-common part and a
     # mirror-specific part and takes a third parameter. Declared at class level so that
@@ -66,9 +60,7 @@ class CommonFittingMethods:
     _mean_parameter_transform = "log"
     _mean_parameter_name = "mu_tilde"
 
-    def set_variance_model(
-        self, variance_model="scalar", endpoint_correction=None, missing_data=None
-    ):
+    def set_variance_model(self, variance_model="scalar", endpoint_correction=None, missing_data=None):
         """
         Choose how the deposition noise is modelled.
 
@@ -94,9 +86,7 @@ class CommonFittingMethods:
             ValueError: If ``variance_model`` or ``missing_data`` is not recognised.
         """
         if variance_model not in ("scalar", "components"):
-            raise ValueError(
-                f"variance_model must be 'scalar' or 'components', got {variance_model!r}."
-            )
+            raise ValueError(f"variance_model must be 'scalar' or 'components', got {variance_model!r}.")
         if missing_data is not None:
             if missing_data not in ("error", "drop"):
                 raise ValueError(
@@ -178,18 +168,13 @@ class CommonFittingMethods:
             raise ValueError("Transformation direction not recognized.")
         z = np.array(values)
 
-        if not isinstance(
-            likelihood_hessian, np.ndarray
-        ):  # can't use likelihood_hessian is None because it is an array if supplied
+        if not isinstance(likelihood_hessian, np.ndarray):  # can't use likelihood_hessian is None because it is an array if supplied
             return z
 
         # Jacobian d(natural)/d(fitting), evaluated at the point on the fitting scale.
         # See Reparameterization at https://en.wikipedia.org/wiki/Fisher_information
         y = x if direction == "inverse" else z
-        derivatives = [
-            np.exp(y[0] + np.exp(y[0])) if log_log_mean else np.exp(y[0]),
-            np.exp(y[1]),
-        ]
+        derivatives = [np.exp(y[0] + np.exp(y[0])) if log_log_mean else np.exp(y[0]), np.exp(y[1])]
         if x.size > 2:
             fraction = expit(y[2])
             derivatives.append(fraction * (1.0 - fraction))
@@ -322,24 +307,14 @@ class CommonFittingMethods:
             dict: Maps "sigma_c" and "sigma_m" to (estimate, lower, upper).
         """
         kappa = expit(y_hat[2])
-        gradients = {
-            "sigma_c": np.array([0.0, 1.0, 0.5 * (1.0 - kappa)]),
-            "sigma_m": np.array([0.0, 1.0, -0.5 * kappa]),
-        }
-        logs = {
-            "sigma_c": y_hat[1] + 0.5 * np.log(kappa),
-            "sigma_m": y_hat[1] + 0.5 * np.log1p(-kappa),
-        }
+        gradients = {"sigma_c": np.array([0.0, 1.0, 0.5 * (1.0 - kappa)]), "sigma_m": np.array([0.0, 1.0, -0.5 * kappa])}
+        logs = {"sigma_c": y_hat[1] + 0.5 * np.log(kappa), "sigma_m": y_hat[1] + 0.5 * np.log1p(-kappa)}
 
         summary = {}
         for name, gradient in gradients.items():
             sd = np.sqrt(max(gradient @ y_cov @ gradient, 0.0))
             with np.errstate(over="ignore"):
-                summary[name] = (
-                    np.exp(logs[name]),
-                    np.exp(logs[name] - 1.96 * sd),
-                    np.exp(logs[name] + 1.96 * sd),
-                )
+                summary[name] = (np.exp(logs[name]), np.exp(logs[name] - 1.96 * sd), np.exp(logs[name] + 1.96 * sd))
         return summary
 
     def compute_soiling_factor(self, rho0=None):
@@ -356,15 +331,11 @@ class CommonFittingMethods:
                 cumulative_soil0 = np.zeros(N_helios)  # start from clean
             else:
                 inc_factor = self.helios.inc_ref_factor[f].squeeze()
-                cumulative_soil0 = (
-                    1 - rho0[f] / self.helios.nominal_reflectance
-                ) / inc_factor  # back-calculated soiled area from measurement
+                cumulative_soil0 = (1 - rho0[f] / self.helios.nominal_reflectance) / inc_factor  # back-calculated soiled area from measurement
 
             cumulative_soil = np.c_[cumulative_soil0, helios.delta_soiled_area[f]]
             cumulative_soil = np.cumsum(cumulative_soil, axis=1)  # accumulate soiling
-            helios.soiling_factor[f] = (
-                1 - cumulative_soil[:, 1::] * helios.inc_ref_factor[f]
-            )  # soiling factor, still to be multiplied by rho0
+            helios.soiling_factor[f] = 1 - cumulative_soil[:, 1::] * helios.inc_ref_factor[f]  # soiling factor, still to be multiplied by rho0
 
         self.helios = helios
 
@@ -520,15 +491,7 @@ class CommonFittingMethods:
                 cov[p, diag[:-1] + 1, diag[:-1]] = shared
         return cov
 
-    def _experiment_covariance(
-        self,
-        f,
-        sigma_dep,
-        kappa,
-        simulation_inputs,
-        reflectance_data,
-        endpoint_correction=True,
-    ):
+    def _experiment_covariance(self, f, sigma_dep, kappa, simulation_inputs, reflectance_data, endpoint_correction=True):
         """
         Covariance of all reflectance differences in one experiment.
 
@@ -554,9 +517,7 @@ class CommonFittingMethods:
             numpy.ndarray: Covariance, shape (n_mirrors * n_differences, same).
         """
         cross_products = self._deposition_cross_products(f, simulation_inputs, reflectance_data)
-        meas_cov = self._differenced_measurement_covariance(
-            f, reflectance_data, endpoint_correction=endpoint_correction
-        )
+        meas_cov = self._differenced_measurement_covariance(f, reflectance_data, endpoint_correction=endpoint_correction)
         n_diff, n_mirrors = cross_products.shape[0], cross_products.shape[1]
 
         s2_common = kappa * sigma_dep**2
@@ -595,15 +556,9 @@ class CommonFittingMethods:
             names = getattr(reflectance_data, "mirror_names", {}).get(f, [])
             times = np.asarray(reflectance_data.times.get(f, [])).ravel()
             for p in self._mirrors_with_interior_gaps(reflectance_data, f):
-                interior = np.setdiff1d(
-                    np.arange(observed[p][0], observed[p][-1] + 1), observed[p]
-                )
+                interior = np.setdiff1d(np.arange(observed[p][0], observed[p][-1] + 1), observed[p])
                 name = names[p] if p < len(names) else f"column {p}"
-                when = (
-                    ", ".join(str(times[i]) for i in interior)
-                    if times.size
-                    else str(list(interior))
-                )
+                when = ", ".join(str(times[i]) for i in interior) if times.size else str(list(interior))
                 lines.append(f"experiment {f}, mirror {name}: {when}")
         return lines
 
@@ -647,13 +602,7 @@ class CommonFittingMethods:
                 stacklevel=2,
             )
 
-    def _negative_log_likelihood_components(
-        self,
-        params,
-        simulation_inputs,
-        reflectance_data,
-        endpoint_correction=True,
-    ):
+    def _negative_log_likelihood_components(self, params, simulation_inputs, reflectance_data, endpoint_correction=True):
         """
         Negative log-likelihood with the deposition noise split into variance components.
 
@@ -702,14 +651,7 @@ class CommonFittingMethods:
 
             # mirror-major ordering, matching _experiment_covariance
             residual = (observed - predicted).transpose().ravel()
-            cov = self._experiment_covariance(
-                f,
-                sigma_dep,
-                kappa,
-                simulation_inputs,
-                reflectance_data,
-                endpoint_correction=endpoint_correction,
-            )
+            cov = self._experiment_covariance(f, sigma_dep, kappa, simulation_inputs, reflectance_data, endpoint_correction=endpoint_correction)
 
             observed_mask = np.isfinite(residual)
             if not observed_mask.all():
@@ -717,11 +659,7 @@ class CommonFittingMethods:
                 cov = cov[np.ix_(observed_mask, observed_mask)]
 
             factor = cho_factor(cov, lower=True)
-            nll += 0.5 * (
-                residual.size * np.log(2 * np.pi)
-                + 2 * np.sum(np.log(np.diag(factor[0])))
-                + residual @ cho_solve(factor, residual)
-            )
+            nll += 0.5 * (residual.size * np.log(2 * np.pi) + 2 * np.sum(np.log(np.diag(factor[0]))) + residual @ cho_solve(factor, residual))
 
         return nll
 
@@ -781,10 +719,7 @@ class CommonFittingMethods:
         if not isinstance(measurement_indices, dict):
             measurement_indices = {f: list(measurement_indices) for f in files}
         if rho0 is None:
-            rho0 = {
-                f: np.full(self.helios.tilt[f].shape[0], self.helios.nominal_reflectance)
-                for f in files
-            }
+            rho0 = {f: np.full(self.helios.tilt[f].shape[0], self.helios.nominal_reflectance) for f in files}
 
         self.update_model_parameters(params)
 
@@ -838,9 +773,7 @@ class CommonFittingMethods:
             names=names,
         )
 
-    def _compute_variance_of_measurements(
-        self, sigma_dep, simulation_inputs, reflectance_data=None
-    ):
+    def _compute_variance_of_measurements(self, sigma_dep, simulation_inputs, reflectance_data=None):
         """ "
         Computes the total variance of the reflectance measurements, including both the measurement error and the variance due to the soiling model parameters.
 
@@ -859,7 +792,6 @@ class CommonFittingMethods:
         s2_dep = sigma_dep**2
         s2total = dict.fromkeys(files)
         for f in files:
-
             if reflectance_data is None:
                 pif = range(0, len(sim_in.time[f]))
             else:
@@ -878,11 +810,7 @@ class CommonFittingMethods:
             c2t = np.cumsum(m**2, axis=0)
             ind1 = pif[0:-1]
             ind2 = pif[1::]
-            s2total[f] = (
-                s2_dep * b**2 * (c2t[ind2, :] - c2t[ind1, :])
-                + meas_sig[0:-1, :] ** 2
-                + meas_sig[1::, :] ** 2
-            )
+            s2total[f] = s2_dep * b**2 * (c2t[ind2, :] - c2t[ind1, :]) + meas_sig[0:-1, :] ** 2 + meas_sig[1::, :] ** 2
 
         return s2total
 
@@ -913,15 +841,9 @@ class CommonFittingMethods:
             list[int]: mirror column indices, ascending. Mirrors with nothing observed at
             all are not reported here -- they carry no difference either way.
         """
-        return [
-            p
-            for p, obs in enumerate(cls._observed_rows(reflectance_data, f))
-            if obs.size and obs.size != obs[-1] - obs[0] + 1
-        ]
+        return [p for p, obs in enumerate(cls._observed_rows(reflectance_data, f)) if obs.size and obs.size != obs[-1] - obs[0] + 1]
 
-    def _observed_difference_terms(
-        self, f, sigma_dep, simulation_inputs, reflectance_data, rho_prediction
-    ):
+    def _observed_difference_terms(self, f, sigma_dep, simulation_inputs, reflectance_data, rho_prediction):
         """
         Residual and variance of every observed reflectance difference in experiment ``f``.
 
@@ -951,14 +873,8 @@ class CommonFittingMethods:
         s2_dep = sigma_dep**2
 
         def terms(lo, hi, columns):
-            variance = (
-                s2_dep * b**2 * (c2t[pif[hi], columns] - c2t[pif[lo], columns])
-                + meas_sig[lo, columns] ** 2
-                + meas_sig[hi, columns] ** 2
-            )
-            residual = (meas[hi, columns] - meas[lo, columns]) - (
-                rho_prediction[hi, columns] - rho_prediction[lo, columns]
-            )
+            variance = s2_dep * b**2 * (c2t[pif[hi], columns] - c2t[pif[lo], columns]) + meas_sig[lo, columns] ** 2 + meas_sig[hi, columns] ** 2
+            residual = (meas[hi, columns] - meas[lo, columns]) - (rho_prediction[hi, columns] - rho_prediction[lo, columns])
             return residual, variance
 
         n_measurements, n_mirrors = meas.shape
@@ -1025,12 +941,7 @@ class CommonFittingMethods:
             float: The negative log-likelihood.
         """
         if self.variance_model == "components":
-            return self._negative_log_likelihood_components(
-                params,
-                simulation_inputs,
-                reflectance_data,
-                endpoint_correction=self.endpoint_correction,
-            )
+            return self._negative_log_likelihood_components(params, simulation_inputs, reflectance_data, endpoint_correction=self.endpoint_correction)
         return self._negative_log_likelihood_scalar(params, simulation_inputs, reflectance_data)
 
     def _negative_log_likelihood_scalar(self, params, simulation_inputs, reflectance_data):
@@ -1060,9 +971,7 @@ class CommonFittingMethods:
 
         for f in files:
             rho_prediction = self._predicted_reflectance(f, reflectance_data)
-            residual, variance = self._observed_difference_terms(
-                f, sigma_dep, sim_in, reflectance_data, rho_prediction
-            )
+            residual, variance = self._observed_difference_terms(f, sigma_dep, sim_in, reflectance_data, rho_prediction)
             n_terms += residual.size
             loglike += np.sum(-0.5 * np.log(variance) - residual**2 / (2 * variance))
 
@@ -1109,8 +1018,7 @@ class CommonFittingMethods:
             NotImplementedError: Always, in the base class.
         """
         raise NotImplementedError(
-            f"{type(self).__name__} must define _mean_parameter_bounds so that "
-            "fit_least_squares searches a range appropriate to its mean parameter."
+            f"{type(self).__name__} must define _mean_parameter_bounds so that fit_least_squares searches a range appropriate to its mean parameter."
         )
 
     def fit_least_squares(self, simulation_inputs, reflectance_data, verbose=True):
@@ -1128,9 +1036,7 @@ class CommonFittingMethods:
         # Resolve the optimum far more finely than the edge test below. The default
         # absolute tolerance is 1e-5 regardless of the bracket, which on a narrow
         # bracket is coarser than the edge test and would hide a pinned result.
-        res = minimize_scalar(
-            fun, bounds=(xL, xU), method="Bounded", options={"xatol": 1e-9 * width}
-        )
+        res = minimize_scalar(fun, bounds=(xL, xU), method="Bounded", options={"xatol": 1e-9 * width})
 
         # A bounded search stops near an endpoint when the optimum lies outside the
         # bracket, which is otherwise indistinguishable from a converged fit.
@@ -1145,16 +1051,7 @@ class CommonFittingMethods:
         _print_if("... done! \n estimated parameter is = " + str(res.x), verbose)
         return res.x, res.fun
 
-    def fit_mle(
-        self,
-        simulation_inputs,
-        reflectance_data,
-        verbose=True,
-        x0=None,
-        transform_to_original_scale=False,
-        save_file=None,
-        **optim_kwargs,
-    ):
+    def fit_mle(self, simulation_inputs, reflectance_data, verbose=True, x0=None, transform_to_original_scale=False, save_file=None, **optim_kwargs):
         """
         Fits the soiling model parameters using maximum likelihood estimation (MLE).
 
@@ -1190,25 +1087,16 @@ class CommonFittingMethods:
         with self._forward_model_memo():
             if np.all(x0 is None):  # intialize using least squares and 1D MLE
                 _print_if("Getting initial deposition parameter guess via least squares", verbose)
-                p0, sse = self.fit_least_squares(
-                    simulation_inputs, reflectance_data, verbose=False
-                )
+                p0, sse = self.fit_least_squares(simulation_inputs, reflectance_data, verbose=False)
 
-                _print_if(
-                    "Getting initial sigma_dep guess via MLE (at least-squares value for deposition parameters)",
-                    verbose,
-                )
+                _print_if("Getting initial sigma_dep guess via MLE (at least-squares value for deposition parameters)", verbose)
 
                 # Start from an even split of the deposition variance, which is interior to
                 # the admissible range of kappa and so avoids starting on a boundary.
                 def nloglike1D(y):
-                    return self._negative_log_likelihood(
-                        [p0, y, 0.5][0 : self.n_parameters], sim_in, ref_dat
-                    )
+                    return self._negative_log_likelihood([p0, y, 0.5][0 : self.n_parameters], sim_in, ref_dat)
 
-                s0 = minimize_scalar(
-                    nloglike1D, bounds=(smb.tol, sse), method="Bounded"
-                )  # use bounded to prevent evaluation at values <=1
+                s0 = minimize_scalar(nloglike1D, bounds=(smb.tol, sse), method="Bounded")  # use bounded to prevent evaluation at values <=1
                 x0 = np.array([p0, s0.x, 0.5][0 : self.n_parameters])
                 _print_if("x0 = [" + ", ".join(f"{v}" for v in x0) + "]", verbose)
 
@@ -1223,10 +1111,7 @@ class CommonFittingMethods:
             y = res.x
             _print_if("  " + res.message, verbose)
 
-            _print_if(
-                "Estimating parameter covariance using numerical approximation of Hessian ... ",
-                verbose,
-            )
+            _print_if("Estimating parameter covariance using numerical approximation of Hessian ... ", verbose)
             H_log = ndt.Hessian(nloglike)(y)  # Hessian is in the log transformed space
 
         try:
@@ -1256,27 +1141,14 @@ class CommonFittingMethods:
         if verbose and self.variance_model == "components":
             # Reported on the natural scale in both cases: the split is what the
             # components model exists to estimate, and it is not one of the coordinates.
-            for name, (estimate, lower, upper) in self._variance_component_summary(
-                y, y_cov
-            ).items():
+            for name, (estimate, lower, upper) in self._variance_component_summary(y, y_cov).items():
                 _print_if(fmt.format(name, estimate, lower, upper), verbose)
 
         _print_if("", verbose)
         return p_hat, p_cov
 
-    def save_data(
-        self,
-        log_p_hat=None,
-        log_p_hat_cov=None,
-        training_simulation_data=None,
-        training_reflectance_data=None,
-    ):
-        save_data = {
-            "model": self,
-            "type": None,
-            "variance_model": self.variance_model,
-            "endpoint_correction": self.endpoint_correction,
-        }
+    def save_data(self, log_p_hat=None, log_p_hat_cov=None, training_simulation_data=None, training_reflectance_data=None):
+        save_data = {"model": self, "type": None, "variance_model": self.variance_model, "endpoint_correction": self.endpoint_correction}
         if log_p_hat is not None:
             save_data["transformed_parameters"] = log_p_hat
         if log_p_hat_cov is not None:
@@ -1333,18 +1205,14 @@ class CommonFittingMethods:
         if np.all(N_mirrors == N_mirrors[0]):
             N_mirrors = N_mirrors[0]
         else:
-            raise ValueError(
-                "Number of mirrors must be the same for each experiment to use this function."
-            )
+            raise ValueError("Number of mirrors must be the same for each experiment to use this function.")
 
         if reflectance_data is not None:
             # check to ensure that reflectance_data and simulation_input keys correspond to the same files
             _check_keys(sim_in, reflectance_data)
 
         N_experiments = sim_in.N_simulations
-        ws_max = max(
-            [max(sim_in.wind_speed[f]) for f in files]
-        )  # max wind speed for setting y-axes
+        ws_max = max([max(sim_in.wind_speed[f]) for f in files])  # max wind speed for setting y-axes
         mean_predictions = {f: np.array([]) for f in files}
         CI_upper_predictions = {f: np.array([]) for f in files}
         CI_lower_predictions = {f: np.array([]) for f in files}
@@ -1395,11 +1263,7 @@ class CommonFittingMethods:
                     elif reflectance_std == "mean":
                         s = reflectance_data.sigma_of_the_mean[f][:, jj]
                     else:
-                        raise ValueError(
-                            "reflectance_std="
-                            + reflectance_std
-                            + ' not recognized. Must be either "measurements" or "mean" '
-                        )
+                        raise ValueError("reflectance_std=" + reflectance_std + ' not recognized. Must be either "measurements" or "mean" ')
 
                     # measurement plots
                     error_two_sigma = 1.96 * s
@@ -1412,12 +1276,7 @@ class CommonFittingMethods:
                     else:
                         y = r0 * samples[f][jj, :, :]
                         ym = y.mean(axis=1)
-                        a.plot(
-                            sim_in.time[f],
-                            ym,
-                            label="Reflectance Prediction (Bayesian)",
-                            color="red",
-                        )
+                        a.plot(sim_in.time[f], ym, label="Reflectance Prediction (Bayesian)", color="red")
 
                     tilt = reflectance_data.tilts[f][jj]
                     if all(tilt == tilt[0]):
@@ -1449,20 +1308,14 @@ class CommonFittingMethods:
                     Lp = ym - 1.96 * sigma_predict
                     Up = ym + 1.96 * sigma_predict
                     a.fill_between(ts, Lp, Up, color="black", alpha=0.1, label=r"$\pm 2\sigma$ CI")
-                elif (
-                    samples is not None
-                ):  # use percentiles of posterior predictive samples for confidence intervals
+                elif samples is not None:  # use percentiles of posterior predictive samples for confidence intervals
                     Lp = np.percentile(y, 2.5, axis=1)
                     Up = np.percentile(y, 97.5, axis=1)
                     a.fill_between(ts, Lp, Up, color="red", alpha=0.1, label=r"95% Bayesian CI")
 
-                a.xaxis.set_major_locator(
-                    mdates.DayLocator(interval=1)
-                )  # sets x ticks to day interval
+                a.xaxis.set_major_locator(mdates.DayLocator(interval=1))  # sets x ticks to day interval
 
-                if (
-                    reflectance_data is not None
-                ):  # reflectance is computed at reflectometer incidence angle
+                if reflectance_data is not None:  # reflectance is computed at reflectometer incidence angle
                     if repeat_y_labels or (ii == 0):
                         ang = reflectance_data.reflectometer_incidence_angle[f]
                         s = a.set_ylabel(r"$\rho(t)$ at " + str(ang) + r"$^{\circ}$")
@@ -1472,9 +1325,7 @@ class CommonFittingMethods:
                 else:  # reflectance is computed at heliostat incidence angle. Put average incidence angle on axis label
                     if repeat_y_labels or (ii > 0):
                         ang = np.mean(self.helios.incidence_angle[f])
-                        s = a.set_ylabel(
-                            r"soiling factor at " + str(ang) + r"$^{{\circ}}$ \n (average)"
-                        )
+                        s = a.set_ylabel(r"soiling factor at " + str(ang) + r"$^{{\circ}}$ \n (average)")
                     else:
                         a.set_yticklabels([])
 
@@ -1489,17 +1340,13 @@ class CommonFittingMethods:
             am.legend(fontsize=16)
             label_str = dust_type + r" (mean = {0:.2f} $\mu g$/$m^3$)"
             a2.plot(ts, dust_conc, label=label_str.format(dust_conc.mean()), color="blue")
-            a2.xaxis.set_major_locator(
-                mdates.DayLocator(interval=1)
-            )  # sets x ticks to day interval
+            a2.xaxis.set_major_locator(mdates.DayLocator(interval=1))  # sets x ticks to day interval
             myFmt = mdates.DateFormatter("%d-%m-%Y")
             a2.xaxis.set_major_formatter(myFmt)
             a2.tick_params(axis="y", labelcolor="blue")
 
             a2a = a2.twinx()
-            a2a.plot(
-                ts, ws, color="green", label="Wind Speed (mean = {0:.2f} m/s)".format(ws.mean())
-            )
+            a2a.plot(ts, ws, color="green", label="Wind Speed (mean = {0:.2f} m/s)".format(ws.mean()))
             ax_wind.append(a2a)
             a2a.tick_params(axis="y", labelcolor="green")
             a2a.set_ylim((0, ws_max))
@@ -1515,14 +1362,9 @@ class CommonFittingMethods:
             else:
                 a2a.set_yticklabels([])
 
-            a2.set_title(
-                label_str.format(dust_conc.mean())
-                + ", \n Wind Speed (mean = {0:.2f} m/s)".format(ws.mean()),
-                fontsize=20,
-            )
+            a2.set_title(label_str.format(dust_conc.mean()) + ", \n Wind Speed (mean = {0:.2f} m/s)".format(ws.mean()), fontsize=20)
 
         if N_experiments > 1:
-
             # share y axes for all reflectance measurments
             ymax = max([x.get_ylim()[1] for x in ax[0:-1, :].flatten()])
             ymin = min([x.get_ylim()[0] for x in ax[0:-1, :].flatten()])
@@ -1555,7 +1397,6 @@ class CommonFittingMethods:
 
 
 class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
-
     _mean_parameter_transform = "log_log"
     _mean_parameter_name = "hrz0"
 
@@ -1568,9 +1409,7 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
         self.helios.poisson = float(table.loc["poisson_glass"].Value)
         self.helios.youngs_modulus = float(table.loc["youngs_modulus_glass"].Value)
         self.helios.nominal_reflectance = float(table.loc["nominal_reflectance"].Value)
-        if not (isinstance(self.helios.stow_tilt, float)) and not (
-            isinstance(self.helios.stow_tilt, int)
-        ):
+        if not (isinstance(self.helios.stow_tilt, float)) and not (isinstance(self.helios.stow_tilt, int)):
             self.helios.stow_tilt = None
 
     def helios_angles(
@@ -1603,12 +1442,8 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
             ]  # THIS CANNOT MANAGE THE TRANSFORMATION OF SIM_IN WITH DAILY AVERAGE WHEN CHANGING START TIME (IF APPLIED AT THE BEGINNING)
             N_times = len(sim_in.time[f])
             N_helios = tilts.shape[0]
-            self.helios.acceptance_angles[f] = [
-                ref_dat.reflectometer_acceptance_angle[ii]
-            ] * N_helios
-            self.helios.extinction_weighting[f] = (
-                []
-            )  # reset extinction weighting since heliostats are "new" - WHY?? THIS DEPENDS ONLY ON DUST! NOT?
+            self.helios.acceptance_angles[f] = [ref_dat.reflectometer_acceptance_angle[ii]] * N_helios
+            self.helios.extinction_weighting[f] = []  # reset extinction weighting since heliostats are "new" - WHY?? THIS DEPENDS ONLY ON DUST! NOT?
 
             helios.tilt[f] = np.zeros((0, N_times))
             for jj in range(N_helios):
@@ -1619,15 +1454,11 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
             helios.incidence_angle[f] = reflectance_data.reflectometer_incidence_angle[f]
 
             if not second_surface:
-                helios.inc_ref_factor[f] = (1 + np.sin(rad(helios.incidence_angle[f]))) / np.cos(
-                    rad(helios.incidence_angle[f])
-                )  # first surface
+                helios.inc_ref_factor[f] = (1 + np.sin(rad(helios.incidence_angle[f]))) / np.cos(rad(helios.incidence_angle[f]))  # first surface
                 helios.aoi_model = "first_surface"
                 _print_if("First surface model", verbose)
             elif second_surface:
-                helios.inc_ref_factor[f] = 2 / np.cos(
-                    rad(helios.incidence_angle[f])
-                )  # second surface model
+                helios.inc_ref_factor[f] = 2 / np.cos(rad(helios.incidence_angle[f]))  # second surface model
                 helios.aoi_model = "second_surface"
                 _print_if("Second surface model", verbose)
             else:
@@ -1635,9 +1466,7 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
 
         self.helios = helios
 
-    def predict_soiling_factor(
-        self, simulation_inputs, rho0=None, hrz0=None, sigma_dep=None, verbose=True
-    ) -> None:
+    def predict_soiling_factor(self, simulation_inputs, rho0=None, hrz0=None, sigma_dep=None, verbose=True) -> None:
         # Uses simulation inputs and model parameters to predict the soiling
         # factor and the prediction variance (stored in
         # helios.soiling_factor and helios.soiling_factor_prediction_variance,
@@ -1653,9 +1482,7 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
             for f in self.helios.soiling_factor.keys():
                 inc_factor = self.helios.inc_ref_factor[f]
                 dsav = self.helios.delta_soiled_area_variance[f]
-                self.helios.soiling_factor_prediction_variance[f] = inc_factor**2 * np.cumsum(
-                    dsav, axis=1
-                )
+                self.helios.soiling_factor_prediction_variance[f] = inc_factor**2 * np.cumsum(dsav, axis=1)
         else:
             self.helios.soiling_factor_prediction_variance = {}
 
@@ -1690,14 +1517,7 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
             self.hrz0 = x
             self.sigma_dep = None
 
-    def save(
-        self,
-        file_name,
-        log_p_hat=None,
-        log_p_hat_cov=None,
-        training_simulation_data=None,
-        training_reflectance_data=None,
-    ):
+    def save(self, file_name, log_p_hat=None, log_p_hat_cov=None, training_simulation_data=None, training_reflectance_data=None):
         """
         Saves the model and associated data to a file using pickle.
 
@@ -1712,7 +1532,6 @@ class SemiPhysical(smb.PhysicalBase, CommonFittingMethods):
             None
         """
         with open(file_name, "wb") as f:
-
             save_data = {
                 "model": self,
                 "type": "semi-physical",
@@ -1746,11 +1565,7 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
         self.helios.nominal_reflectance = float(table.loc["nominal_reflectance"].Value)
 
     def helios_angles(
-        self,
-        simulation_inputs: smb.SimulationInputs,
-        reflectance_data: smb.ReflectanceMeasurements,
-        verbose=True,
-        second_surface=True,
+        self, simulation_inputs: smb.SimulationInputs, reflectance_data: smb.ReflectanceMeasurements, verbose=True, second_surface=True
     ):
 
         sim_in = simulation_inputs
@@ -1770,17 +1585,11 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
             # start_idx = ref_dat.prediction_indices[f][0]        # Define the start index
             # end_idx = ref_dat.prediction_indices[f][-1]         # Define the start last index
             # tilts = ref_dat.tilts[f][:, start_idx:end_idx + 1]  # Extract the subset of tilts (end_idx + 1 include the last index)
-            tilts = ref_dat.tilts[
-                f
-            ]  # THIS COULD NOT MANAGE THE TRANSFORMATION OF SIM_IN WITH DAILY AVERAGE WHEN CHANGING START TIME
+            tilts = ref_dat.tilts[f]  # THIS COULD NOT MANAGE THE TRANSFORMATION OF SIM_IN WITH DAILY AVERAGE WHEN CHANGING START TIME
             N_times = len(sim_in.time[f])
             N_helios = tilts.shape[0]
-            self.helios.acceptance_angles[f] = [
-                ref_dat.reflectometer_acceptance_angle[ii]
-            ] * N_helios
-            self.helios.extinction_weighting[f] = (
-                []
-            )  # reset extinction weighting since heliostats are "new"
+            self.helios.acceptance_angles[f] = [ref_dat.reflectometer_acceptance_angle[ii]] * N_helios
+            self.helios.extinction_weighting[f] = []  # reset extinction weighting since heliostats are "new"
 
             helios.tilt[f] = np.zeros((0, N_times))
             for jj in range(N_helios):
@@ -1791,15 +1600,11 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
             helios.incidence_angle[f] = reflectance_data.reflectometer_incidence_angle[f]
 
             if not second_surface:
-                helios.inc_ref_factor[f] = (1 + np.sin(rad(helios.incidence_angle[f]))) / np.cos(
-                    rad(helios.incidence_angle[f])
-                )  # first surface
+                helios.inc_ref_factor[f] = (1 + np.sin(rad(helios.incidence_angle[f]))) / np.cos(rad(helios.incidence_angle[f]))  # first surface
                 helios.aoi_model = "first_surface"
                 _print_if("First surface model", verbose)
             elif second_surface:
-                helios.inc_ref_factor[f] = 2 / np.cos(
-                    rad(helios.incidence_angle[f])
-                )  # second surface model
+                helios.inc_ref_factor[f] = 2 / np.cos(rad(helios.incidence_angle[f]))  # second surface model
                 helios.aoi_model = "second_surface"
                 _print_if("Second surface model", verbose)
             else:
@@ -1807,19 +1612,10 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
 
         self.helios = helios
 
-    def predict_soiling_factor(
-        self,
-        simulation_inputs: smb.SimulationInputs,
-        rho0=None,
-        mu_tilde=None,
-        sigma_dep=None,
-        verbose=True,
-    ):
+    def predict_soiling_factor(self, simulation_inputs: smb.SimulationInputs, rho0=None, mu_tilde=None, sigma_dep=None, verbose=True):
 
         sim_in = simulation_inputs
-        self.calculate_delta_soiled_area(
-            sim_in, mu_tilde=mu_tilde, sigma_dep=sigma_dep, verbose=verbose
-        )
+        self.calculate_delta_soiled_area(sim_in, mu_tilde=mu_tilde, sigma_dep=sigma_dep, verbose=verbose)
         self.compute_soiling_factor(rho0=rho0)
 
         # prediction variance
@@ -1827,32 +1623,14 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
             for f in self.helios.soiling_factor.keys():
                 inc_factor = self.helios.inc_ref_factor[f]
                 dsav = self.helios.delta_soiled_area_variance[f]
-                self.helios.soiling_factor_prediction_variance[f] = inc_factor**2 * np.cumsum(
-                    dsav, axis=1
-                )
+                self.helios.soiling_factor_prediction_variance[f] = inc_factor**2 * np.cumsum(dsav, axis=1)
         else:
             self.helios.soiling_factor_prediction_variance = {}
 
-    def fit_map(
-        self,
-        simulation_inputs,
-        reflectance_data,
-        priors,
-        verbose=True,
-        x0=None,
-        transform_to_original_scale=False,
-        save_file=None,
-    ):
+    def fit_map(self, simulation_inputs, reflectance_data, priors, verbose=True, x0=None, transform_to_original_scale=False, save_file=None):
 
         _print_if("Getting MAP estimates ... ", verbose)
-        y, y_cov = super().fit_map(
-            simulation_inputs,
-            reflectance_data,
-            priors,
-            verbose=False,
-            x0=x0,
-            transform_to_original_scale=False,
-        )
+        y, y_cov = super().fit_map(simulation_inputs, reflectance_data, priors, verbose=False, x0=x0, transform_to_original_scale=False)
 
         _print_if("========== MAP Estimates ======== ", verbose)
         if transform_to_original_scale:
@@ -1942,14 +1720,7 @@ class ConstantMeanDeposition(smb.ConstantMeanBase, CommonFittingMethods):
         else:
             self.mu_tilde = x
 
-    def save(
-        self,
-        file_name,
-        log_p_hat=None,
-        log_p_hat_cov=None,
-        training_simulation_data=None,
-        training_reflectance_data=None,
-    ):
+    def save(self, file_name, log_p_hat=None, log_p_hat_cov=None, training_simulation_data=None, training_reflectance_data=None):
         """
         Saves the soiling model and associated data to a file.
 

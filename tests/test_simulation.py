@@ -55,8 +55,7 @@ def _model(seed=0):
     model.helios.tilt = {F: rng.uniform(0.0, 60.0, size=(N_MIRRORS, T_GRID))}
     model.helios.incidence_angle = {F: INCIDENCE_ANGLE}
     model.helios.inc_ref_factor = {F: np.array(2.0 / np.cos(np.radians(INCIDENCE_ANGLE)))}
-    for name in ("delta_soiled_area", "delta_soiled_area_variance",
-                 "soiling_factor", "soiling_factor_prediction_variance"):
+    for name in ("delta_soiled_area", "delta_soiled_area_variance", "soiling_factor", "soiling_factor_prediction_variance"):
         setattr(model.helios, name, {})
     return model
 
@@ -71,8 +70,7 @@ def _sim_in():
     )
 
 
-def _simulate(model, sim_in, kappa, rng, missing_fraction=0.0,
-              measurement_sigma=MEASUREMENT_SIGMA, n_measurements=NUMBER_OF_MEASUREMENTS):
+def _simulate(model, sim_in, kappa, rng, missing_fraction=0.0, measurement_sigma=MEASUREMENT_SIGMA, n_measurements=NUMBER_OF_MEASUREMENTS):
     return model.simulate_reflectance_data(
         sim_in,
         [MU_TILDE, SIGMA_DEP, kappa],
@@ -108,9 +106,7 @@ def test_covariance_of_simulated_data_matches_the_assembly():
         data = _simulate(model, sim_in, kappa, rng)
         differences[draw] = np.diff(data.average[F], axis=0).transpose().ravel()
 
-    expected = model._experiment_covariance(
-        F, SIGMA_DEP, kappa, sim_in, _simulate(model, sim_in, kappa, rng)
-    )
+    expected = model._experiment_covariance(F, SIGMA_DEP, kappa, sim_in, _simulate(model, sim_in, kappa, rng))
     empirical = np.cov(differences, rowvar=False)
 
     # The standard error of a covariance entry is at most sqrt(2 S_ii S_jj / n), so
@@ -135,9 +131,7 @@ def test_covariance_of_simulated_data_is_diagonal_without_a_common_component():
         data = _simulate(model, sim_in, 0.0, rng)
         differences[draw] = np.diff(data.average[F], axis=0).transpose().ravel()
 
-    expected = model._experiment_covariance(
-        F, SIGMA_DEP, 0.0, sim_in, _simulate(model, sim_in, 0.0, rng)
-    )
+    expected = model._experiment_covariance(F, SIGMA_DEP, 0.0, sim_in, _simulate(model, sim_in, 0.0, rng))
     empirical = np.cov(differences, rowvar=False)
     tolerance = 6 * np.sqrt(2.0) * np.max(np.diag(expected)) / np.sqrt(n_draws)
 
@@ -148,9 +142,7 @@ def test_covariance_of_simulated_data_is_diagonal_without_a_common_component():
 
     # The tolerance must be tight enough for the absence of correlation to mean
     # something: a moderate kappa would put the cross-mirror block well above it.
-    with_common = model._experiment_covariance(
-        F, SIGMA_DEP, 0.4, sim_in, _simulate(model, sim_in, 0.0, rng)
-    )
+    with_common = model._experiment_covariance(F, SIGMA_DEP, 0.4, sim_in, _simulate(model, sim_in, 0.0, rng))
     assert np.max(np.abs(with_common[0:N_DIFF, N_DIFF : 2 * N_DIFF])) > 2 * tolerance
 
 
@@ -169,14 +161,11 @@ def test_covariance_of_simulated_data_shows_the_shared_endpoint_correlation():
 
     differences = np.empty((n_draws, N_MIRRORS * N_DIFF))
     for draw in range(n_draws):
-        data = _simulate(
-            model, sim_in, kappa, rng, measurement_sigma=loud_sigma, n_measurements=1.0
-        )
+        data = _simulate(model, sim_in, kappa, rng, measurement_sigma=loud_sigma, n_measurements=1.0)
         differences[draw] = np.diff(data.average[F], axis=0).transpose().ravel()
 
     expected = model._experiment_covariance(
-        F, SIGMA_DEP, kappa, sim_in,
-        _simulate(model, sim_in, kappa, rng, measurement_sigma=loud_sigma, n_measurements=1.0),
+        F, SIGMA_DEP, kappa, sim_in, _simulate(model, sim_in, kappa, rng, measurement_sigma=loud_sigma, n_measurements=1.0)
     )
     empirical = np.cov(differences, rowvar=False)
     tolerance = 6 * np.sqrt(2.0) * np.max(np.diag(expected)) / np.sqrt(n_draws)
@@ -204,11 +193,7 @@ def test_simulated_data_is_a_usable_reflectance_object():
     assert list(data.prediction_indices[F]) == MEASUREMENT_INDICES
     assert data.tilts[F].shape == (N_MIRRORS, T_GRID)
     assert data.reflectometer_incidence_angle[F] == INCIDENCE_ANGLE
-    np.testing.assert_allclose(
-        data.sigma_of_the_mean[F],
-        MEASUREMENT_SIGMA / np.sqrt(NUMBER_OF_MEASUREMENTS),
-        rtol=RTOL,
-    )
+    np.testing.assert_allclose(data.sigma_of_the_mean[F], MEASUREMENT_SIGMA / np.sqrt(NUMBER_OF_MEASUREMENTS), rtol=RTOL)
     # Reflectance declines from a clean start and stays physical.
     assert np.all(data.average[F] < 1.0)
     assert data.average[F][-1].mean() < data.average[F][0].mean()
@@ -248,9 +233,7 @@ def test_missing_measurements_appear_at_the_requested_rate():
         missing += np.isnan(data.average[F]).mean()
 
     n_values = n_repeats * data.average[F].size
-    np.testing.assert_allclose(
-        missing / n_repeats, 0.25, atol=5 * np.sqrt(0.25 * 0.75 / n_values)
-    )
+    np.testing.assert_allclose(missing / n_repeats, 0.25, atol=5 * np.sqrt(0.25 * 0.75 / n_values))
 
 
 def test_missing_measurements_are_marginalised_by_the_likelihood():
@@ -317,9 +300,7 @@ def test_regridding_matches_the_common_grid_when_complete():
     model.predict_soiling_factor(sim_in, rho0=data.rho0, verbose=False)
 
     prediction = model._predicted_reflectance(F, data)
-    residual, variance = model._observed_difference_terms(
-        F, SIGMA_DEP, sim_in, data, prediction
-    )
+    residual, variance = model._observed_difference_terms(F, SIGMA_DEP, sim_in, data, prediction)
 
     reference = model._compute_variance_of_measurements(SIGMA_DEP, sim_in, reflectance_data=data)[F]
     expected = np.diff(data.average[F], axis=0) - np.diff(prediction, axis=0)
@@ -356,9 +337,7 @@ def test_scalar_likelihood_is_finite_for_endpoint_and_interior_gaps():
     assert np.isfinite(baseline)
 
     for row, mirror in [(0, 0), (N_DIFF, 1), (1, 2)]:  # first, last, middle
-        value = model._negative_log_likelihood(
-            [MU_TILDE, SIGMA_DEP], sim_in, _blank(data, row, mirror)
-        )
+        value = model._negative_log_likelihood([MU_TILDE, SIGMA_DEP], sim_in, _blank(data, row, mirror))
         assert np.isfinite(value), f"NaN likelihood for a gap at row {row}, mirror {mirror}"
 
 

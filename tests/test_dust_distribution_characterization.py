@@ -65,24 +65,9 @@ GRID_D = np.logspace(-3.0, 4.0, 2000)
 # Mixture cases: number conc. Nd [1/cm^3], mode diameters mu [um],
 # geometric widths sigma [-], particle density rho [kg/m^3].
 CASES = {
-    "trimodal_silica": {
-        "Nd": [3000.0, 999.875, 0.125],
-        "mu": [0.0117, 0.051231, 0.8226],
-        "sigma": [1.71061, 2.239, 2.512],
-        "rho": 2000.0,
-    },
-    "trimodal_mineral": {
-        "Nd": [1200.0, 480.0, 6.0],
-        "mu": [0.02, 0.15, 2.0],
-        "sigma": [1.6, 1.8, 2.2],
-        "rho": 2650.0,
-    },
-    "single_mode": {
-        "Nd": [800.0],
-        "mu": [0.3],
-        "sigma": [2.0],
-        "rho": 2650.0,
-    },
+    "trimodal_silica": {"Nd": [3000.0, 999.875, 0.125], "mu": [0.0117, 0.051231, 0.8226], "sigma": [1.71061, 2.239, 2.512], "rho": 2000.0},
+    "trimodal_mineral": {"Nd": [1200.0, 480.0, 6.0], "mu": [0.02, 0.15, 2.0], "sigma": [1.6, 1.8, 2.2], "rho": 2650.0},
+    "single_mode": {"Nd": [800.0], "mu": [0.3], "sigma": [2.0], "rho": 2650.0},
 }
 
 # --- Dust now emits standard units natively (Phase 3b); these conversions are
@@ -148,15 +133,7 @@ def _standard_integrals(dust):
 
 def _git_sha():
     try:
-        return (
-            subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],
-                cwd=str(get_project_root()),
-                stderr=subprocess.DEVNULL,
-            )
-            .decode()
-            .strip()
-        )
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(get_project_root()), stderr=subprocess.DEVNULL).decode().strip()
     except Exception:
         return None
 
@@ -220,17 +197,15 @@ def test_dust_distribution_pdfs(case):
 
     assert list(computed.columns) == list(expected.columns), "pdf columns changed vs baseline"
     np.testing.assert_allclose(
-        computed["D_um"].to_numpy(), expected["D_um"].to_numpy(), rtol=RTOL, atol=0.0,
-        err_msg="diameter grid changed vs baseline",
+        computed["D_um"].to_numpy(), expected["D_um"].to_numpy(), rtol=RTOL, atol=0.0, err_msg="diameter grid changed vs baseline"
     )
-    pdf_cols = (
-        "pdfN_per_cm3_per_dlog10D",
-        "pdfM_ug_per_m3_per_dlog10D",
-        "pdfA_um2_per_cm3_per_dlog10D",
-    )
+    pdf_cols = ("pdfN_per_cm3_per_dlog10D", "pdfM_ug_per_m3_per_dlog10D", "pdfA_um2_per_cm3_per_dlog10D")
     for col in pdf_cols:
         np.testing.assert_allclose(
-            computed[col].to_numpy(), expected[col].to_numpy(), rtol=RTOL, atol=ATOL,
+            computed[col].to_numpy(),
+            expected[col].to_numpy(),
+            rtol=RTOL,
+            atol=ATOL,
             err_msg=f"{col} drifted from the committed baseline for '{case}'",
         )
 
@@ -245,10 +220,7 @@ def test_dust_distribution_integrals(case):
 
     ref_meta = _meta_json(case)
     if not ref_meta.exists():
-        pytest.fail(
-            f"Missing baseline {ref_meta}. Generate it with HELIOSOIL_UPDATE_REFERENCES=1 "
-            "(see test_dust_distribution_pdfs)."
-        )
+        pytest.fail(f"Missing baseline {ref_meta}. Generate it with HELIOSOIL_UPDATE_REFERENCES=1 (see test_dust_distribution_pdfs).")
 
     expected = json.loads(ref_meta.read_text())["expected_integrals_ug_per_m3"]
     computed = _standard_integrals(dust)
@@ -256,6 +228,5 @@ def test_dust_distribution_integrals(case):
     assert set(computed) == set(expected), "integral set changed vs baseline"
     for name in expected:
         np.testing.assert_allclose(
-            computed[name], expected[name], rtol=RTOL, atol=ATOL,
-            err_msg=f"{name} drifted from the committed baseline for '{case}'",
+            computed[name], expected[name], rtol=RTOL, atol=ATOL, err_msg=f"{name} drifted from the committed baseline for '{case}'"
         )

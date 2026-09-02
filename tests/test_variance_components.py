@@ -47,8 +47,7 @@ def _model(tilt, sigma_dep=None):
     model.helios.nominal_reflectance = NOMINAL_REFLECTANCE
     model.helios.tilt = {F: tilt}
     model.helios.inc_ref_factor = {F: np.array(INC_REF_FACTOR)}
-    for name in ("delta_soiled_area", "delta_soiled_area_variance",
-                 "soiling_factor", "soiling_factor_prediction_variance"):
+    for name in ("delta_soiled_area", "delta_soiled_area_variance", "soiling_factor", "soiling_factor_prediction_variance"):
         setattr(model.helios, name, {})
     return model
 
@@ -80,8 +79,7 @@ def _fixture(n_mirrors, common_tilt=False, common_sigma=False, seed=0):
     exact = model._predicted_reflectance(F, stub)
 
     if common_sigma:
-        sigma = np.tile(np.linspace(1e-3, 2e-3, len(PREDICTION_INDICES))[:, None],
-                        (1, n_mirrors))
+        sigma = np.tile(np.linspace(1e-3, 2e-3, len(PREDICTION_INDICES))[:, None], (1, n_mirrors))
     else:
         sigma = rng.uniform(5e-4, 2e-3, size=exact.shape)
 
@@ -107,9 +105,7 @@ def test_reduces_to_scalar_likelihood_when_kappa_is_zero():
     sigma_dep = 8e-4
 
     scalar = model._negative_log_likelihood([MU_TILDE, sigma_dep], sim_in, ref_dat)
-    components = model._negative_log_likelihood_components(
-        [MU_TILDE, sigma_dep, 0.0], sim_in, ref_dat, endpoint_correction=False
-    )
+    components = model._negative_log_likelihood_components([MU_TILDE, sigma_dep, 0.0], sim_in, ref_dat, endpoint_correction=False)
 
     np.testing.assert_allclose(components, scalar, rtol=1e-11, atol=ATOL)
 
@@ -120,9 +116,7 @@ def test_single_mirror_likelihood_does_not_depend_on_kappa():
     sigma_dep = 8e-4
 
     values = [
-        model._negative_log_likelihood_components(
-            [MU_TILDE, sigma_dep, kappa], sim_in, ref_dat, endpoint_correction=True
-        )
+        model._negative_log_likelihood_components([MU_TILDE, sigma_dep, kappa], sim_in, ref_dat, endpoint_correction=True)
         for kappa in (0.0, 0.25, 0.5, 1.0)
     ]
     for value in values[1:]:
@@ -146,10 +140,7 @@ def test_covariance_matches_kronecker_form_for_common_tilt():
     # Independent reference: per-difference dust loading S_i and tridiagonal R.
     m = model._loading_matrix(F, sim_in)
     b = model._reflectance_loss_factor(F)
-    S = np.diag([
-        b**2 * np.sum(m[PREDICTION_INDICES[i] + 1 : PREDICTION_INDICES[i + 1] + 1, 0] ** 2)
-        for i in range(N_DIFF)
-    ])
+    S = np.diag([b**2 * np.sum(m[PREDICTION_INDICES[i] + 1 : PREDICTION_INDICES[i + 1] + 1, 0] ** 2) for i in range(N_DIFF)])
 
     s2 = ref_dat.sigma_of_the_mean[F][:, 0] ** 2
     R = np.diag(s2[1:] + s2[:-1])
@@ -157,9 +148,7 @@ def test_covariance_matches_kronecker_form_for_common_tilt():
         R[i, i + 1] = R[i + 1, i] = -s2[i + 1]
 
     ones = np.ones((n_mirrors, n_mirrors))
-    expected = np.kron(s2_common * ones + s2_mirror * np.eye(n_mirrors), S) + np.kron(
-        np.eye(n_mirrors), R
-    )
+    expected = np.kron(s2_common * ones + s2_mirror * np.eye(n_mirrors), S) + np.kron(np.eye(n_mirrors), R)
 
     np.testing.assert_allclose(got, expected, rtol=RTOL, atol=1e-300)
 

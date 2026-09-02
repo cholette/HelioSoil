@@ -8,12 +8,7 @@ import scipy.stats as sps
 import heliosoil.base_models as smb
 import heliosoil.fitting as smf
 import heliosoil.utilities as smu
-from heliosoil.paper_specific_utilities import (
-    plot_for_paper,
-    daily_soiling_rate,
-    fit_quality_plots,
-    summarize_fit_quality,
-)
+from heliosoil.paper_specific_utilities import plot_for_paper, daily_soiling_rate, fit_quality_plots, summarize_fit_quality
 
 rcParams["figure.figsize"] = (10, 7)
 main_directory = smu.get_project_root()
@@ -26,8 +21,10 @@ second_surf = True  # True if using the second-surface model. Otherwise, use fir
 d = f"{main_directory}/data/wodonga/"
 time_to_remove_at_end = [0, 0, 0, 0, 0, 0]
 train_experiments = [0]  # indices for training experiments from 0 to len(files)-1
-train_mirrors = ["OE_M1_T00","OE_M2_T05","OE_M3_T30","OW_M4_T30","OW_M5_T60"]  # which mirrors within the experiments are used for
-test_mirrors = None # ["ON_M1_T00","ON_M3_T30","OE_M4_T30","OS_M2_T30","ON_M5_T85","OE_M2_T85"] # None will paradoxially yield all mirrors for testing
+train_mirrors = ["OE_M1_T00", "OE_M2_T05", "OE_M3_T30", "OW_M4_T30", "OW_M5_T60"]  # which mirrors within the experiments are used for
+test_mirrors = (
+    None  # ["ON_M1_T00","ON_M3_T30","OE_M4_T30","OS_M2_T30","ON_M5_T85","OE_M2_T85"] # None will paradoxially yield all mirrors for testing
+)
 k_factor = None  # None sets equal to 1.0, "import" imports from the file
 dust_type = "PM10"
 use_fitted_dust_distributions = False
@@ -39,9 +36,7 @@ parameter_file = d + "parameters_wodonga_experiments.xlsx"
 if use_fitted_dust_distributions:
     d += "fitted/"
 
-files, all_intervals, exp_mirrors, all_mirrors = smu.get_training_data(
-    d, "experiment_", time_to_remove_at_end=time_to_remove_at_end
-)
+files, all_intervals, exp_mirrors, all_mirrors = smu.get_training_data(d, "experiment_", time_to_remove_at_end=time_to_remove_at_end)
 orientation = [[s[1] for s in mirrors] for mirrors in exp_mirrors]
 # if test_mirrors is None:
 #     orientation = [[s[1] for s in mirrors] for mirrors in exp_mirrors]
@@ -93,25 +88,17 @@ reflect_data_train = smb.ReflectanceMeasurements(
 )
 # %%
 # Trim data and plot
-sim_data_train, reflect_data_train = smu.trim_experiment_data(
-    sim_data_train, reflect_data_train, training_intervals
-)
+sim_data_train, reflect_data_train = smu.trim_experiment_data(sim_data_train, reflect_data_train, training_intervals)
 
-sim_data_train, reflect_data_train = smu.trim_experiment_data(
-    sim_data_train, reflect_data_train, "reflectance_data"
-)
+sim_data_train, reflect_data_train = smu.trim_experiment_data(sim_data_train, reflect_data_train, "reflectance_data")
 for ii, experiment in enumerate(train_experiments):
     fig, ax = smu.plot_experiment_data(sim_data_train, reflect_data_train, ii)
     fig.suptitle(f"Training Data for file {files[experiment]}")
 
 # %% Set mirror angles and get extinction weights
 imodel.helios_angles(sim_data_train, reflect_data_train, second_surface=second_surf)
-imodel.helios.compute_extinction_weights(
-    sim_data_train, imodel.loss_model, verbose=True, options={"grid_size_x": 1000}
-)
-fig_weights, ax_weights = imodel.helios.plot_extinction_weights(
-    sim_data_train, fig_kwargs={"figsize": (5, 7)}
-)
+imodel.helios.compute_extinction_weights(sim_data_train, imodel.loss_model, verbose=True, options={"grid_size_x": 1000})
+fig_weights, ax_weights = imodel.helios.plot_extinction_weights(sim_data_train, fig_kwargs={"figsize": (5, 7)})
 ext_weights = imodel.helios.extinction_weighting[0].copy()
 
 imodel_constant.helios_angles(sim_data_train, reflect_data_train, second_surface=second_surf)
@@ -119,16 +106,14 @@ file_inds = np.arange(len(files_train))
 # imodel_constant = smu.set_extinction_coefficients(imodel_constant,ext_weights,file_inds)
 
 # %% Fit semi-physical model & plot on training data
-log_param_hat, log_param_cov = imodel.fit_mle(
-    sim_data_train, reflect_data_train, transform_to_original_scale=False
-)
+log_param_hat, log_param_cov = imodel.fit_mle(sim_data_train, reflect_data_train, transform_to_original_scale=False)
 
 s = np.sqrt(np.diag(log_param_cov))
 param_ci = log_param_hat + 1.96 * s * np.array([[-1], [1]])
 lower_ci = imodel.transform_scale(param_ci[0, :])
 upper_ci = imodel.transform_scale(param_ci[1, :])
 param_hat = imodel.transform_scale(log_param_hat)
-hrz0_mle, sigma_dep_mle,kappa_mle = param_hat
+hrz0_mle, sigma_dep_mle, kappa_mle = param_hat
 print(f"hrz0: {hrz0_mle:.2e} [{lower_ci[0]:.2e}, {upper_ci[0]:.2e}]")
 print(f"sigma_dep: {sigma_dep_mle:.2e} [{lower_ci[1]:.2e},{upper_ci[1]:.2e}] [p.p./day]")
 print(f"kappa: {kappa_mle:.2e} [{lower_ci[2]:.2e},{upper_ci[2]:.2e}]")
@@ -153,20 +138,16 @@ _, _, _ = imodel.plot_soiling_factor(
 )
 
 # %% Fit constant mean model & plot on training data
-log_param_hat_con, log_param_cov_con = imodel_constant.fit_mle(
-    sim_data_train, reflect_data_train, transform_to_original_scale=False
-)
+log_param_hat_con, log_param_cov_con = imodel_constant.fit_mle(sim_data_train, reflect_data_train, transform_to_original_scale=False)
 
 s_con = np.sqrt(np.diag(log_param_cov_con))
 param_ci_con = log_param_hat_con + 1.96 * s_con * np.array([[-1], [1]])
 lower_ci_con = imodel_constant.transform_scale(param_ci_con[0, :])
 upper_ci_con = imodel_constant.transform_scale(param_ci_con[1, :])
 param_hat_con = imodel_constant.transform_scale(log_param_hat_con)
-mu_tilde, sigma_dep_con,kappa_con = param_hat_con
+mu_tilde, sigma_dep_con, kappa_con = param_hat_con
 print(f"mu_tilde: {mu_tilde:.2e} [{lower_ci_con[0]:.2e}, {upper_ci_con[0]:.2e}] [p.p./day]")
-print(
-    f"sigma_dep (constant mean model): {sigma_dep_con:.2e} [{lower_ci_con[1]:.2e},{upper_ci_con[1]:.2e}] [p.p./day]"
-)
+print(f"sigma_dep (constant mean model): {sigma_dep_con:.2e} [{lower_ci_con[1]:.2e},{upper_ci_con[1]:.2e}] [p.p./day]")
 print(f"kappa (constant mean model): {kappa_con:.2e} [{lower_ci_con[2]:.2e},{upper_ci_con[2]:.2e}]")
 
 imodel_constant.update_model_parameters(param_hat_con)
@@ -200,17 +181,11 @@ reflect_data_total = smb.ReflectanceMeasurements(
     import_tilts=True,
     imported_column_names=all_mirrors,
 )
-sim_data_total, reflect_data_total = smu.trim_experiment_data(
-    sim_data_total, reflect_data_total, testing_intervals
-)
+sim_data_total, reflect_data_total = smu.trim_experiment_data(sim_data_total, reflect_data_total, testing_intervals)
 
-sim_data_total, reflect_data_total = smu.trim_experiment_data(
-    sim_data_total, reflect_data_total, "reflectance_data"
-)
+sim_data_total, reflect_data_total = smu.trim_experiment_data(sim_data_total, reflect_data_total, "reflectance_data")
 
-sim_data_total, reflect_data_total = smu.trim_experiment_data(
-    sim_data_total, reflect_data_total, "simulation_inputs"
-)
+sim_data_total, reflect_data_total = smu.trim_experiment_data(sim_data_total, reflect_data_total, "simulation_inputs")
 
 # %% Plot Experiments
 for ii, experiment in enumerate(sim_data_total.dt.keys()):
@@ -253,9 +228,7 @@ else:
     sim_data_total_constant = sim_data_total
 
 
-imodel_constant.helios_angles(
-    sim_data_total_constant, reflect_data_total, second_surface=second_surf
-)
+imodel_constant.helios_angles(sim_data_total_constant, reflect_data_total, second_surface=second_surf)
 
 fig, ax, ref_output = plot_for_paper(
     imodel_constant,
@@ -284,9 +257,7 @@ labels = ["Low", "Medium", "High", "Maximum"]
 colors = ["blue", "green", "purple", "black"]
 fsz = 16
 
-sims, a, a2 = daily_soiling_rate(
-    sim_data_total, cm_save_file, M=100000, percents=pers, dust_type=dust_type
-)
+sims, a, a2 = daily_soiling_rate(sim_data_total, cm_save_file, M=100000, percents=pers, dust_type=dust_type)
 # xL,xU = np.percentile(sims,[0.1,99.9])
 xL, xU = -0.25, 3.0
 
@@ -309,9 +280,7 @@ ax.set_xlabel("Loss (percentage points)", fontsize=fsz + 2)
 ax.legend(fontsize=fsz)
 
 fig.set_size_inches(5, 4)
-fig.savefig(
-    f"{main_directory}/results/losses_wodonga.pdf", dpi=300, bbox_inches="tight", pad_inches=0
-)
+fig.savefig(f"{main_directory}/results/losses_wodonga.pdf", dpi=300, bbox_inches="tight", pad_inches=0)
 
 
 # %% Fit quality plots (semi-physical)

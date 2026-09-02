@@ -72,11 +72,8 @@ def build_experiment(n_experiments, n_mirrors, rng):
     keys = range(n_experiments)
     model.helios.tilt = {f: rng.uniform(0.0, 60.0, size=(n_mirrors, TIMESTEPS)) for f in keys}
     model.helios.incidence_angle = {f: INCIDENCE_ANGLE for f in keys}
-    model.helios.inc_ref_factor = {
-        f: np.array(2.0 / np.cos(np.radians(INCIDENCE_ANGLE))) for f in keys
-    }
-    for name in ("delta_soiled_area", "delta_soiled_area_variance",
-                 "soiling_factor", "soiling_factor_prediction_variance"):
+    model.helios.inc_ref_factor = {f: np.array(2.0 / np.cos(np.radians(INCIDENCE_ANGLE))) for f in keys}
+    for name in ("delta_soiled_area", "delta_soiled_area_variance", "soiling_factor", "soiling_factor_prediction_variance"):
         setattr(model.helios, name, {})
 
     simulation_inputs = types.SimpleNamespace(
@@ -84,10 +81,7 @@ def build_experiment(n_experiments, n_mirrors, rng):
         time={f: np.arange(TIMESTEPS, dtype=float) for f in keys},
         dust=types.SimpleNamespace(PM10={f: DUST_DENSITY for f in keys}),
         # A diurnal-looking dust signal, so the loading varies within an experiment.
-        dust_concentration={
-            f: 40.0 + 25.0 * np.sin(np.arange(TIMESTEPS) / 6.0) + rng.uniform(0, 10, TIMESTEPS)
-            for f in keys
-        },
+        dust_concentration={f: 40.0 + 25.0 * np.sin(np.arange(TIMESTEPS) / 6.0) + rng.uniform(0, 10, TIMESTEPS) for f in keys},
         dust_type={f: "PM10" for f in keys},
     )
     indices = np.linspace(0, TIMESTEPS - 1, N_MEASUREMENTS + 1).astype(int).tolist()
@@ -106,12 +100,7 @@ def fit_once(n_experiments, n_mirrors, kappa, rng):
     truth = [MU_TILDE, SIGMA_DEP, kappa]
 
     data = model.simulate_reflectance_data(
-        simulation_inputs,
-        truth,
-        indices,
-        MEASUREMENT_SIGMA,
-        number_of_measurements=NUMBER_OF_MEASUREMENTS,
-        rng=rng,
+        simulation_inputs, truth, indices, MEASUREMENT_SIGMA, number_of_measurements=NUMBER_OF_MEASUREMENTS, rng=rng
     )
 
     result = {}
@@ -122,9 +111,7 @@ def fit_once(n_experiments, n_mirrors, kappa, rng):
         result["components"] = (estimate, errors)
 
         model.set_variance_model("scalar")
-        scalar_estimate, scalar_covariance = model.fit_mle(
-            simulation_inputs, data, verbose=False
-        )
+        scalar_estimate, scalar_covariance = model.fit_mle(simulation_inputs, data, verbose=False)
         result["scalar"] = (scalar_estimate, np.sqrt(np.diag(scalar_covariance)))
     except (np.linalg.LinAlgError, ValueError, RuntimeError):
         return None
@@ -141,9 +128,7 @@ def covers(estimate, error, true_value):
 def run_configuration(n_experiments, n_mirrors, kappa, replicates, seed):
     """Fit ``replicates`` synthetic datasets and summarise estimates and coverage."""
     rng = np.random.default_rng(seed)
-    true_transformed = np.array(
-        [np.log(MU_TILDE), np.log(SIGMA_DEP), np.log(kappa) - np.log1p(-kappa)]
-    )
+    true_transformed = np.array([np.log(MU_TILDE), np.log(SIGMA_DEP), np.log(kappa) - np.log1p(-kappa)])
 
     rows, failures = [], 0
     for _ in range(replicates):
@@ -164,9 +149,7 @@ def run_configuration(n_experiments, n_mirrors, kappa, replicates, seed):
                 "covers_kappa": covers(estimate[2], error[2], true_transformed[2]),
                 "half_width_mu_tilde": CONFIDENCE * error[0],
                 "scalar_log_mu_tilde": scalar_estimate[0],
-                "scalar_covers_mu_tilde": covers(
-                    scalar_estimate[0], scalar_error[0], true_transformed[0]
-                ),
+                "scalar_covers_mu_tilde": covers(scalar_estimate[0], scalar_error[0], true_transformed[0]),
                 "scalar_half_width_mu_tilde": CONFIDENCE * scalar_error[0],
             }
         )
@@ -221,12 +204,10 @@ def plot_results(consistency, coverage, mirrors, output_dir):
 
     axes[1].axhline(0.95, color="0.6", lw=0.8, label="nominal")
     axes[1].errorbar(
-        coverage["kappa"], coverage["coverage_mu_tilde"],
-        yerr=CONFIDENCE * coverage["coverage_mu_tilde_se"], fmt="o-", label="components",
+        coverage["kappa"], coverage["coverage_mu_tilde"], yerr=CONFIDENCE * coverage["coverage_mu_tilde_se"], fmt="o-", label="components"
     )
     axes[1].errorbar(
-        coverage["kappa"], coverage["scalar_coverage_mu_tilde"],
-        yerr=CONFIDENCE * coverage["scalar_coverage_mu_tilde_se"], fmt="s--", label="scalar",
+        coverage["kappa"], coverage["scalar_coverage_mu_tilde"], yerr=CONFIDENCE * coverage["scalar_coverage_mu_tilde_se"], fmt="s--", label="scalar"
     )
     axes[1].set_xlabel(r"true $\kappa$")
     axes[1].set_ylabel(r"coverage of the 95% interval for $\log\tilde\mu$")
@@ -250,9 +231,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--replicates", type=int, default=200)
     parser.add_argument("--seed", type=int, default=20260804)
-    parser.add_argument(
-        "--output", type=Path, default=Path("results/variance_components_study")
-    )
+    parser.add_argument("--output", type=Path, default=Path("results/variance_components_study"))
     arguments = parser.parse_args()
 
     arguments.output.mkdir(parents=True, exist_ok=True)
@@ -260,37 +239,18 @@ def main():
 
     # 1. Consistency: bias against the number of experiments, at a moderate kappa.
     print("Consistency sweep over L ...")
-    consistency = pd.DataFrame(
-        [
-            run_configuration(L, 6, 0.45, arguments.replicates, arguments.seed + L)
-            for L in (1, 2, 4, 8)
-        ]
-    )
+    consistency = pd.DataFrame([run_configuration(L, 6, 0.45, arguments.replicates, arguments.seed + L) for L in (1, 2, 4, 8)])
 
     # 2. Coverage across the range of kappa, including near the boundaries where the
     #    split is hardest to identify.
     print("Coverage sweep over kappa ...")
-    coverage = pd.DataFrame(
-        [
-            run_configuration(4, 6, k, arguments.replicates, arguments.seed + int(1000 * k))
-            for k in (0.1, 0.5, 0.9)
-        ]
-    )
+    coverage = pd.DataFrame([run_configuration(4, 6, k, arguments.replicates, arguments.seed + int(1000 * k)) for k in (0.1, 0.5, 0.9)])
 
     # 3. How many mirrors are needed: kappa is identified only by across-mirror contrasts.
     print("Mirror-count sweep over P ...")
-    mirrors = pd.DataFrame(
-        [
-            run_configuration(4, P, 0.45, arguments.replicates, arguments.seed + 10 * P)
-            for P in (2, 4, 8)
-        ]
-    )
+    mirrors = pd.DataFrame([run_configuration(4, P, 0.45, arguments.replicates, arguments.seed + 10 * P) for P in (2, 4, 8)])
 
-    for name, frame in (
-        ("consistency", consistency),
-        ("coverage", coverage),
-        ("mirrors", mirrors),
-    ):
+    for name, frame in (("consistency", consistency), ("coverage", coverage), ("mirrors", mirrors)):
         frame.to_csv(arguments.output / f"{name}.csv", index=False)
 
     plot_results(consistency, coverage, mirrors, arguments.output)
@@ -299,17 +259,17 @@ def main():
     print(f"Elapsed {time.time() - started:.0f}s. Written to {arguments.output}\n")
 
     print("Consistency (kappa = 0.45, P = 6):")
-    print(consistency[["n_experiments", "bias_log_mu_tilde", "sd_log_mu_tilde",
-                       "coverage_mu_tilde", "failures"]].to_string(index=False))
+    print(consistency[["n_experiments", "bias_log_mu_tilde", "sd_log_mu_tilde", "coverage_mu_tilde", "failures"]].to_string(index=False))
 
     print("\nCoverage of log(mu_tilde), components vs scalar (L = 4, P = 6):")
-    print(coverage[["kappa", "coverage_mu_tilde", "scalar_coverage_mu_tilde",
-                    "median_half_width_mu_tilde", "scalar_median_half_width_mu_tilde"]]
-          .to_string(index=False))
+    print(
+        coverage[
+            ["kappa", "coverage_mu_tilde", "scalar_coverage_mu_tilde", "median_half_width_mu_tilde", "scalar_median_half_width_mu_tilde"]
+        ].to_string(index=False)
+    )
 
     print("\nIdentification against mirror count (L = 4, kappa = 0.45):")
-    print(mirrors[["n_mirrors", "bias_logit_kappa", "coverage_kappa",
-                   "coverage_mu_tilde"]].to_string(index=False))
+    print(mirrors[["n_mirrors", "bias_logit_kappa", "coverage_kappa", "coverage_mu_tilde"]].to_string(index=False))
 
 
 if __name__ == "__main__":

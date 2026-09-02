@@ -1,4 +1,4 @@
-# %% 
+# %%
 """Analysis of Mildura data"""
 
 import numpy as np
@@ -7,12 +7,7 @@ import scipy.stats as sps
 import heliosoil.base_models as smb
 import heliosoil.fitting as smf
 import heliosoil.utilities as smu
-from heliosoil.paper_specific_utilities import (
-    plot_for_paper,
-    daily_soiling_rate,
-    fit_quality_plots,
-    summarize_fit_quality,
-)
+from heliosoil.paper_specific_utilities import plot_for_paper, daily_soiling_rate, fit_quality_plots, summarize_fit_quality
 
 main_directory = smu.get_project_root()
 pad = 0.05
@@ -24,16 +19,21 @@ second_surf = True  # True if using the second-surface model. Otherwise, use fir
 d = f"{main_directory}/data/mildura/"
 time_to_remove_at_end = [0, 0, 0, 0, 0, 0]
 train_experiments = [0]  # indices for training experiments from 0 to len(files)-1
-train_mirrors = [ "ON_M1_T00", "ON_M2_T30", "ON_M3_T60",
-                  "OS_M4_T90", "OS_M3_T60", "OS_M2_T30", "OS_M1_T00" ]  # which mirrors within the experiments are used for
+train_mirrors = [
+    "ON_M1_T00",
+    "ON_M2_T30",
+    "ON_M3_T60",
+    "OS_M4_T90",
+    "OS_M3_T60",
+    "OS_M2_T30",
+    "OS_M1_T00",
+]  # which mirrors within the experiments are used for
 k_factor = "import"  # None sets equal to 1.0, "import" imports from the file
 dust_type = "PM10"
 
 # %% Get file list and time intervals. Import training data.
 parameter_file = d + "parameters_mildura_experiments.xlsx"
-files, training_intervals, mirror_name_list, all_mirrors = smu.get_training_data(
-    d, "experiment_", time_to_remove_at_end=time_to_remove_at_end
-)
+files, training_intervals, mirror_name_list, all_mirrors = smu.get_training_data(d, "experiment_", time_to_remove_at_end=time_to_remove_at_end)
 orientation = [[s[1] for s in mirrors] for mirrors in mirror_name_list]
 
 Nfiles = len(files)
@@ -64,13 +64,9 @@ reflect_data_train = smb.ReflectanceMeasurements(
     imported_column_names=train_mirrors,
 )
 # Trim data and plot
-sim_data_train, reflect_data_train = smu.trim_experiment_data(
-    sim_data_train, reflect_data_train, training_intervals
-)
+sim_data_train, reflect_data_train = smu.trim_experiment_data(sim_data_train, reflect_data_train, training_intervals)
 
-sim_data_train, reflect_data_train = smu.trim_experiment_data(
-    sim_data_train, reflect_data_train, "reflectance_data"
-)
+sim_data_train, reflect_data_train = smu.trim_experiment_data(sim_data_train, reflect_data_train, "reflectance_data")
 for ii, experiment in enumerate(train_experiments):
     fig, ax = smu.plot_experiment_data(sim_data_train, reflect_data_train, ii)
     fig.suptitle(f"Training Data for file {files[experiment]}")
@@ -88,9 +84,7 @@ file_inds = np.arange(len(files_train))
 imodel_constant = smu.set_extinction_coefficients(imodel_constant, ext_weights, file_inds)
 
 # %% Fit semi-physical model & plot on training data
-log_param_hat, log_param_cov = imodel.fit_mle(
-    sim_data_train, reflect_data_train, transform_to_original_scale=False
-)
+log_param_hat, log_param_cov = imodel.fit_mle(sim_data_train, reflect_data_train, transform_to_original_scale=False)
 
 s = np.sqrt(np.diag(log_param_cov))
 param_ci = log_param_hat + 1.96 * s * np.array([[-1], [1]])
@@ -124,9 +118,7 @@ _, _, _ = imodel.plot_soiling_factor(
 )
 
 # %% Fit constant mean model & plot on training data
-log_param_hat_con, log_param_cov_con = imodel_constant.fit_mle(
-    sim_data_train, reflect_data_train, transform_to_original_scale=False
-)
+log_param_hat_con, log_param_cov_con = imodel_constant.fit_mle(sim_data_train, reflect_data_train, transform_to_original_scale=False)
 s_con = np.sqrt(np.diag(log_param_cov_con))
 param_ci_con = log_param_hat_con + 1.96 * s_con * np.array([[-1], [1]])
 lower_ci_con = imodel_constant.transform_scale(param_ci_con[0, :])
@@ -134,12 +126,9 @@ upper_ci_con = imodel_constant.transform_scale(param_ci_con[1, :])
 param_hat_con = imodel_constant.transform_scale(log_param_hat_con)
 mu_tilde, sigma_dep_con = param_hat_con[0], param_hat_con[1]
 print(f"mu_tilde: {mu_tilde:.2e} [{lower_ci_con[0]:.2e},{upper_ci_con[0]:.2e}] [p.p./day]")
-print(
-    f"sigma_dep (constant mean model): {sigma_dep_con:.2e} [{lower_ci_con[1]:.2e},{upper_ci_con[1]:.2e}] [p.p./day]"
-)
+print(f"sigma_dep (constant mean model): {sigma_dep_con:.2e} [{lower_ci_con[1]:.2e},{upper_ci_con[1]:.2e}] [p.p./day]")
 if imodel_constant.variance_model == "components":
-    print(f"kappa (constant mean model): {param_hat_con[2]:.2e} "
-          f"[{lower_ci_con[2]:.2e},{upper_ci_con[2]:.2e}]")
+    print(f"kappa (constant mean model): {param_hat_con[2]:.2e} [{lower_ci_con[2]:.2e},{upper_ci_con[2]:.2e}]")
 
 imodel_constant.update_model_parameters(param_hat_con)
 imodel_constant.save(
@@ -173,9 +162,7 @@ reflect_data_total = smb.ReflectanceMeasurements(
 )
 
 # Trim data and plot
-sim_data_total, reflect_data_total = smu.trim_experiment_data(
-    sim_data_total, reflect_data_total, "reflectance_data"
-)
+sim_data_total, reflect_data_total = smu.trim_experiment_data(sim_data_total, reflect_data_total, "reflectance_data")
 
 for ii, experiment in enumerate(sim_data_total.dt.keys()):
     fig, ax = smu.plot_experiment_data(sim_data_total, reflect_data_total, ii)
@@ -190,14 +177,7 @@ file_inds = np.arange(len(files))
 imodel.helios.compute_extinction_weights(sim_data_total, imodel.loss_model, verbose=True)
 
 fig, ax, ref = plot_for_paper(
-    imodel,
-    reflect_data_total,
-    sim_data_total,
-    train_experiments,
-    train_mirrors,
-    orientation,
-    legend_shift=(0.04, 0),
-    yticks=(0.88, 0.92, 0.96, 1.0),
+    imodel, reflect_data_total, sim_data_total, train_experiments, train_mirrors, orientation, legend_shift=(0.04, 0), yticks=(0.88, 0.92, 0.96, 1.0)
 )
 
 fig.savefig(sp_save_file + ".pdf", bbox_inches="tight")
@@ -224,9 +204,7 @@ labels = ["Low", "Medium", "High", "Maximum"]
 colors = ["blue", "green", "purple", "black"]
 fsz = 16
 
-sims, a, a2 = daily_soiling_rate(
-    sim_data_total, cm_save_file, M=100000, percents=pers, dust_type=dust_type
-)
+sims, a, a2 = daily_soiling_rate(sim_data_total, cm_save_file, M=100000, percents=pers, dust_type=dust_type)
 # xL,xU = np.percentile(sims,[0.1,99.9])
 xL, xU = -0.25, 3.0
 lg = np.linspace(xL, xU, 1000)
@@ -248,9 +226,7 @@ ax.set_xlabel("Loss (percentage points)", fontsize=fsz + 2)
 ax.legend(fontsize=fsz)
 
 fig.set_size_inches(5, 4)
-fig.savefig(
-    f"{main_directory}/results/losses_mount_isa.pdf", dpi=300, bbox_inches="tight", pad_inches=0
-)
+fig.savefig(f"{main_directory}/results/losses_mount_isa.pdf", dpi=300, bbox_inches="tight", pad_inches=0)
 
 # %% Highest only
 
@@ -272,12 +248,7 @@ ax.set_xlabel("Loss (percentage points)", fontsize=fsz + 2)
 # ax.legend(fontsize=fsz)
 
 fig.set_size_inches(5, 4)
-fig.savefig(
-    f"{main_directory}/results/highest_losses_mount_isa.pdf",
-    dpi=300,
-    bbox_inches="tight",
-    pad_inches=0,
-)
+fig.savefig(f"{main_directory}/results/highest_losses_mount_isa.pdf", dpi=300, bbox_inches="tight", pad_inches=0)
 
 # %% Fit quality plots (semi-physical)
 mirror_idxs = list(range(len(all_mirrors)))

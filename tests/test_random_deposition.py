@@ -58,12 +58,7 @@ def _sim_in():
 def _draws(model, sim_in, kappa, n_draws, seed=11):
     """n_draws simulated deposition arrays, shape (n_draws, n_mirrors, n_times)."""
     rng = np.random.default_rng(seed)
-    return np.array(
-        [
-            model.random_delta_soiled_area(sim_in, kappa=kappa, rng=rng, verbose=False)[F]
-            for _ in range(n_draws)
-        ]
-    )
+    return np.array([model.random_delta_soiled_area(sim_in, kappa=kappa, rng=rng, verbose=False)[F] for _ in range(n_draws)])
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +147,7 @@ def test_kappa_defaults_to_the_models_variance_split():
     assert model.common_variance_fraction == 0.0
 
     without = model.random_delta_soiled_area(sim_in, rng=np.random.default_rng(3), verbose=False)
-    explicit = model.random_delta_soiled_area(
-        sim_in, kappa=0.0, rng=np.random.default_rng(3), verbose=False
-    )
+    explicit = model.random_delta_soiled_area(sim_in, kappa=0.0, rng=np.random.default_rng(3), verbose=False)
     np.testing.assert_allclose(without[F], explicit[F], rtol=RTOL, atol=ATOL)
 
 

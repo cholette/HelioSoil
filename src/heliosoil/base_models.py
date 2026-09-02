@@ -26,7 +26,7 @@ from heliosoil.utilities import (
     get_project_root,
     cosd,
     gravitational_settling_factor,
-    sind
+    sind,
 )
 from heliosoil.dust_distributions import GaussianMixtureModel, NumberDistribution
 
@@ -35,7 +35,6 @@ _CM3_TO_M3 = 1e6  # number-concentration conversion: cm^-3 -> m^-3
 
 
 class SoilingBase:
-
     # Split of the deposition variance into a part common to every mirror at the site
     # during an interval and a mirror-specific part. Declared at class level so that
     # models restored from pickles predating the option still resolve them, and defined
@@ -71,9 +70,7 @@ class SoilingBase:
         self.sigma_dep = None  # standard deviation for deposition velocity
         self.loss_model = None  # either "geometry" or "mie"
 
-    def random_delta_soiled_area(
-        self, simulation_inputs, kappa=None, rng=None, verbose=True
-    ):
+    def random_delta_soiled_area(self, simulation_inputs, kappa=None, rng=None, verbose=True):
         """
         Simulates the soiled area deposited in each timestep, with random deposition.
 
@@ -115,10 +112,7 @@ class SoilingBase:
         if not 0.0 <= kappa <= 1.0:
             raise ValueError(f"The common variance fraction must be in [0, 1], got {kappa}.")
         if self.sigma_dep is None:
-            raise ValueError(
-                "sigma_dep must be set before simulating deposition; there is no noise "
-                "scale otherwise."
-            )
+            raise ValueError("sigma_dep must be set before simulating deposition; there is no noise scale otherwise.")
         if rng is None:
             rng = np.random.default_rng()
 
@@ -141,9 +135,7 @@ class SoilingBase:
             scale = np.sqrt(var_area_loss[f])
             common = rng.standard_normal(size=(1, mean.shape[1]))  # one draw per interval
             mirror = rng.standard_normal(size=mean.shape)
-            simulated[f] = mean + scale * (
-                np.sqrt(kappa) * common + np.sqrt(1.0 - kappa) * mirror
-            )
+            simulated[f] = mean + scale * (np.sqrt(kappa) * common + np.sqrt(1.0 - kappa) * mirror)
 
         return simulated
 
@@ -156,9 +148,7 @@ class SoilingBase:
         try:
             self.latitude = float(table.loc["latitude"].Value)  # latitude in degrees of site
             self.longitude = float(table.loc["longitude"].Value)  # longitude in degrees of site
-            self.timezone_offset = float(
-                table.loc["timezone_offset"].Value
-            )  # [hrs from GMT] timezone of site
+            self.timezone_offset = float(table.loc["timezone_offset"].Value)  # [hrs from GMT] timezone of site
         except Exception:
             _print_if(
                 dedent(
@@ -188,22 +178,14 @@ class PhysicalBase(SoilingBase):
         try:
             self.loss_model = table.loc["loss_model"].Value  # either "geometry" or "mie"
         except Exception:
-            _print_if(
-                f"No loss model defined in {file_params}. You will need to define this before simulating",
-                verbose,
-            )
+            _print_if(f"No loss model defined in {file_params}. You will need to define this before simulating", verbose)
 
         try:
             self.hrz0 = float(table.loc["hr_z0"].Value)  # [-] site roughness height ratio
         except Exception:
-            _print_if(
-                f"No hrz0 model defined in {file_params}. You will need to define this before simulating",
-                verbose,
-            )
+            _print_if(f"No hrz0 model defined in {file_params}. You will need to define this before simulating", verbose)
 
-    def deposition_velocity(
-        self, dust, f, wind_speed=None, air_temp=None, hrz0=None, verbose=True, Ra=True
-    ):
+    def deposition_velocity(self, dust, f, wind_speed=None, air_temp=None, hrz0=None, verbose=True, Ra=True):
         """Settling + inertial/diffusional deposition velocity for one experiment.
 
         ``dust.D[f]`` and ``dust.rho[f]`` are read for file/experiment index ``f``
@@ -227,77 +209,66 @@ class PhysicalBase(SoilingBase):
 
         if hrz0 is None:  # hrz0 from constants file
             hrz0 = self.hrz0
-            _print_if(
-                "No value for hrz0 supplied. Using value in self.hrz0 = " + str(self.hrz0) + ".",
-                verbose,
-            )
+            _print_if("No value for hrz0 supplied. Using value in self.hrz0 = " + str(self.hrz0) + ".", verbose)
         else:
-            _print_if(
-                "Value for hrz0 = " + str(hrz0) + " supplied. Value in self.hrz0 ignored.",
-                verbose,
-            )
+            _print_if("Value for hrz0 = " + str(hrz0) + " supplied. Value in self.hrz0 ignored.", verbose)
 
         # N_sims = sim_in.N_simulations
         # _print_if("Calculating deposition velocity for each of the "+str(N_sims)+" simulations",verbose)
 
         D_meters = dust.D[f] * 1e-6  # µm --> m
 
-        Cc = 1 + 2 * (λ_air_p / D_meters) * (
-            A_slip[0] + A_slip[1] * np.exp(-A_slip[2] * D_meters / λ_air_p)
-        )  # slip correction factor
+        Cc = 1 + 2 * (λ_air_p / D_meters) * (A_slip[0] + A_slip[1] * np.exp(-A_slip[2] * D_meters / λ_air_p))  # slip correction factor
 
         # computation of the gravitational settling velocity
         vg = (g * (D_meters**2) * Cc * (dust.rho[f])) / (18 * μ_air)
-    
+
         # terminal velocity [m/s] if Re<0.1
         Re = ρ_air * vg * D_meters / μ_air  # Reynolds number for vg(Re<0.1)
         for ii in range(constants.N_iter):
             vnew = vg.copy()  # initialize vnew with vg
             Cd_g = 24 / Re
 
-            mask0 = (Re>Re_Limit[0])
+            mask0 = Re > Re_Limit[0]
             Re0 = Re[mask0]
-            Cd_g[mask0] = 24/Re0*(1 + 3/16 * Re0 + 9/160 * (Re0** 2)*np.log(2*Re0)) 
-            
-            mask1 = (Re>Re_Limit[0])
+            Cd_g[mask0] = 24 / Re0 * (1 + 3 / 16 * Re0 + 9 / 160 * (Re0**2) * np.log(2 * Re0))
+
+            mask1 = Re > Re_Limit[0]
             Re1 = Re[mask1]
-            Cd_g[mask1] = 24/Re1*(1 + 0.15 * Re1**0.687)
+            Cd_g[mask1] = 24 / Re1 * (1 + 0.15 * Re1**0.687)
 
             Cd_g[Re > Re_Limit[2]] = 0.44
-            
+
             vg_high_re = np.sqrt(4 * g * D_meters * Cc * dust.rho[f] / (3 * Cd_g * ρ_air))
-            
+
             # replace vg with vg_high_re for Re>Re_Limit[0]
-            vnew[Re_Limit[0] >= Re] = vg_high_re[Re_Limit[0] >= Re]  
+            vnew[Re_Limit[0] >= Re] = vg_high_re[Re_Limit[0] >= Re]
             if max(abs(vnew - vg) / vnew) < constants.tol:
                 vg = vnew
                 break
             vg = vnew
             Re = ρ_air * vg * D_meters / μ_air
         if ii == constants.N_iter:
-            _print_if(
-                "Max iter reached in Reynolds calculation for gravitational settling velocity",
-                verbose,
-            )
+            _print_if("Max iter reached in Reynolds calculation for gravitational settling velocity", verbose)
 
         # computation of the settling velocity due to inertia and diffusion
         u_friction = κ * wind_speed / np.log(hrz0)  # [m/s] friction velocity
 
         # [m^2/s] brownian diffusivity (Stokes-Einstein expression)
         temp_K = (air_temp + 273.15)[:, None]
-        diffusivity = (kB/(3 * np.pi * μ_air)*temp_K*(Cc / D_meters)[None, :])  
-        
+        diffusivity = kB / (3 * np.pi * μ_air) * temp_K * (Cc / D_meters)[None, :]
+
         Schmidt_number = ν_air / diffusivity  # Schmidt number
-        Stokes_number = ((u_friction**2)[:, None] * vg / ν_air / g)  # Stokes number
+        Stokes_number = (u_friction**2)[:, None] * vg / ν_air / g  # Stokes number
         Cd_momentum = κ**2 / ((np.log(hrz0)) ** 2)  # drag coefficient for momentum
         E_brownian = Schmidt_number ** (-2 / 3)  # Brownian factor
 
         # Impaction factor (Giorgi, 1986)
-        E_impaction = (Stokes_number**β_EIM) / (constants.alpha_EIM + Stokes_number**β_EIM)  
+        E_impaction = (Stokes_number**β_EIM) / (constants.alpha_EIM + Stokes_number**β_EIM)
         E_interception = 0  # Interception factor (=0 in this model)
 
         # 'stick' factor for boundary layer resistance computation
-        R1 = np.exp(-np.sqrt(Stokes_number))  
+        R1 = np.exp(-np.sqrt(Stokes_number))
         R1[R1 <= tol] = tol  # to avoid division by 0
         if Ra:
             aerodynamic_resistance = 1 / (Cd_momentum * wind_speed)
@@ -308,10 +279,9 @@ class PhysicalBase(SoilingBase):
         else:
             _print_if("Choose whether or not considering the aerodynamic resistance", verbose)
 
-        boundary_layer_resistance = 1/(constants.eps0*u_friction[:, None]*R1*
-                                       (E_brownian + E_impaction + E_interception))  # [s/m]
+        boundary_layer_resistance = 1 / (constants.eps0 * u_friction[:, None] * R1 * (E_brownian + E_impaction + E_interception))  # [s/m]
 
-        vt = 1/( np.reshape(aerodynamic_resistance, (-1, 1)) + boundary_layer_resistance )  #[m/s]
+        vt = 1 / (np.reshape(aerodynamic_resistance, (-1, 1)) + boundary_layer_resistance)  # [m/s]
         vz = (vg + vt).transpose()  # [m/s]
 
         return (aerodynamic_resistance, boundary_layer_resistance, vg, vt, vz)
@@ -322,21 +292,12 @@ class PhysicalBase(SoilingBase):
         dust = sim_in.dust
 
         N_sims = sim_in.N_simulations
-        _print_if(
-            "Calculating deposition velocity for each of the " + str(N_sims) + " simulations",
-            verbose,
-        )
+        _print_if("Calculating deposition velocity for each of the " + str(N_sims) + " simulations", verbose)
 
         for f in sim_in.wind_speed:
             # vertical deposition velocity vz, shape (Nd, Ntimes)
             *_, vz = self.deposition_velocity(
-                dust,
-                f,
-                wind_speed=sim_in.wind_speed[f],
-                air_temp=sim_in.air_temp[f],
-                hrz0=hrz0,
-                verbose=verbose,
-                Ra=Ra,
+                dust, f, wind_speed=sim_in.wind_speed[f], air_temp=sim_in.air_temp[f], hrz0=hrz0, verbose=verbose, Ra=Ra
             )
 
             Nhelios = helios.tilt[f].shape[0]
@@ -345,17 +306,12 @@ class PhysicalBase(SoilingBase):
 
             helios.pdfqN[f] = np.empty((Nhelios, Ntimes, Nd))
             for idx in range(helios.tilt[f].shape[0]):
-                
                 # Flux per unit concentration at each time, for each heliostat [m/s] (Eq. 28 in [1] without Cd)
                 # A mirror past vertical collects no settled dust
                 Fd = gravitational_settling_factor(helios.tilt[f][idx, :]) * vz
 
                 if vz.min() < 0:
-                    warnings.warn(
-                        "Deposition velocity vz is negative (min value: "
-                        + str(vz.min())
-                        + "). Setting negative components to zero."
-                    )
+                    warnings.warn("Deposition velocity vz is negative (min value: " + str(vz.min()) + "). Setting negative components to zero.")
                     Fd[Fd < 0] = 0
                 helios.pdfqN[f][idx, :, :] = (
                     Fd.transpose() * dust.pdfN[f] * _CM3_TO_M3
@@ -381,65 +337,55 @@ class PhysicalBase(SoilingBase):
             youngs_modulus_composite = 4 / 3 / (dust_compliance + helios_compliance)
 
             # [J] system Hamaker constant (Israelachvili)
-            hamaker_system = np.sqrt(dust.hamaker[f] * helios.hamaker)  
+            hamaker_system = np.sqrt(dust.hamaker[f] * helios.hamaker)
             work_adh = hamaker_system / (12 * np.pi * constants.D0**2)  # [J/m^2] work of adhesion
 
             # [m] contact radius at separation (JKR model)
-            radius_sep = ((3*np.pi*work_adh*D_meters**2)/(8*youngs_modulus_composite))**(1/3)
+            radius_sep = ((3 * np.pi * work_adh * D_meters**2) / (8 * youngs_modulus_composite)) ** (1 / 3)
 
             # [N] van der Waals adhesion force (JKR model)
-            F_adhesion = (3 / 4 * np.pi * work_adh * D_meters)  
-            
-            # [N] weight force
-            F_gravity = dust.rho[f] * np.pi / 6 * g * D_meters**3  
+            F_adhesion = 3 / 4 * np.pi * work_adh * D_meters
 
-            if helios.stow_tilt is None: # (No stow, use raw tilts) 
-                _print_if(
-                    "  No common stow_tilt. Use values in helios.tilt to compute removal moments. This might take some time.",
-                    verbose,
-                )
+            # [N] weight force
+            F_gravity = dust.rho[f] * np.pi / 6 * g * D_meters**3
+
+            if helios.stow_tilt is None:  # (No stow, use raw tilts)
+                _print_if("  No common stow_tilt. Use values in helios.tilt to compute removal moments. This might take some time.", verbose)
                 Nhelios = helios.tilt[f].shape[0]
                 Ntimes = helios.tilt[f].shape[1]
 
                 # Accumulate in time so that we ensure we remove all dust present on mirror if removal condition is satisfied at a particular time
-                helios.pdfqN[f]= cumulative_trapezoid(y=helios.pdfqN[f], dx=dt[f], 
-                                                      axis=1, initial=0)  
+                helios.pdfqN[f] = cumulative_trapezoid(y=helios.pdfqN[f], dx=dt[f], axis=1, initial=0)
                 for h in range(Nhelios):
                     for k in range(Ntimes):
-
                         # [Nm] removal moment exerted by gravity at each tilt for each diameter
-                        mom_removal= (sind(helios.tilt[f][h, k])*F_gravity*np.sqrt((D_meters**2)/4
-                                                                                    - radius_sep**2))  
+                        mom_removal = sind(helios.tilt[f][h, k]) * F_gravity * np.sqrt((D_meters**2) / 4 - radius_sep**2)
 
                         # [Nm] adhesion moment. RAW cosine on purpose -- this is a force
                         # component, not a deposition geometry. Past vertical it must go
                         # negative, because gravity then pulls the dust off the face rather
                         # than holding it on. Do not swap in gravitational_settling_factor.
-                        mom_adhesion= (F_adhesion+F_gravity*cosd(helios.tilt[f][h, k]))*radius_sep
+                        mom_adhesion = (F_adhesion + F_gravity * cosd(helios.tilt[f][h, k])) * radius_sep
 
                         # ALL dust desposited at this diameter up to this point falls off
-                        helios.pdfqN[f][h, k:, mom_adhesion < mom_removal] = 0  
+                        helios.pdfqN[f][h, k:, mom_adhesion < mom_removal] = 0
 
                 # Take derivative so that pdfqN is the rate at which dust is deposited at each diameter
-                helios.pdfqN[f] = np.gradient(helios.pdfqN[f], dt[f], axis=1)  
+                helios.pdfqN[f] = np.gradient(helios.pdfqN[f], dt[f], axis=1)
 
             else:  # common stow angle at night for all heliostats. Assumes tilt at night is close to vertical at night.
                 # Since the heliostats are stowed at a large tilt angle at night, we assume that any dust that falls off at this stow
                 # is never deposited. This introduces a small error since the dust deposited during the day never affects the reflectance, but faster computation.
-                _print_if(
-                    "  Using common stow_tilt. Assumes all heliostats are stored at helios.stow_tilt at night.",
-                    verbose,
-                )
-                
+                _print_if("  Using common stow_tilt. Assumes all heliostats are stored at helios.stow_tilt at night.", verbose)
+
                 # [Nm] removal moment exerted by gravity
-                mom_removal = (sind(helios.stow_tilt)*F_gravity*np.sqrt((D_meters**2)/4 
-                                                                        - radius_sep**2))
-                
+                mom_removal = sind(helios.stow_tilt) * F_gravity * np.sqrt((D_meters**2) / 4 - radius_sep**2)
+
                 # [Nm] adhesion moment
-                mom_adhesion = (F_adhesion + F_gravity * cosd(helios.stow_tilt))*radius_sep  
+                mom_adhesion = (F_adhesion + F_gravity * cosd(helios.stow_tilt)) * radius_sep
 
                 # Remove this diameter from consideration
-                helios.pdfqN[f][:, :, mom_adhesion < mom_removal] = 0  
+                helios.pdfqN[f][:, :, mom_adhesion < mom_removal] = 0
 
         self.helios = helios
 
@@ -457,14 +403,10 @@ class PhysicalBase(SoilingBase):
         for f in files:
             D_meters = dust.D[f] * 1e-6
             D2 = D_meters**2
-            helios.delta_soiled_area[f] = np.empty(
-                (helios.tilt[f].shape[0], helios.tilt[f].shape[1])
-            )
+            helios.delta_soiled_area[f] = np.empty((helios.tilt[f].shape[0], helios.tilt[f].shape[1]))
 
             if sigma_dep is not None or self.sigma_dep is not None:
-                helios.delta_soiled_area_variance[f] = np.empty(
-                    (helios.tilt[f].shape[0], helios.tilt[f].shape[1])
-                )
+                helios.delta_soiled_area_variance[f] = np.empty((helios.tilt[f].shape[0], helios.tilt[f].shape[1]))
 
             # compute alpha
             try:
@@ -497,27 +439,22 @@ class PhysicalBase(SoilingBase):
             DT = sim_in.dt[f]
             # pdfqN includes cos(tilt); index order is (mirror, time, diameter) and the
             # extinction weighting is (mirror, diameter).
-            integrand = (
-                helios.pdfqN[f]
-                * (D2 * DT)[None, None, :]
-                * extinction_weighting[f][:, None, :]
-            )
+            integrand = helios.pdfqN[f] * (D2 * DT)[None, None, :] * extinction_weighting[f][:, None, :]
             integral = np.trapezoid(integrand, np.log10(dust.D[f]), axis=2)
             helios.delta_soiled_area[f] = alpha[None, :] * np.pi / 4 * integral
 
             # variance of noise for each measurement. Clipped like the mean: a mirror past
             # vertical collects nothing, so it carries no deposition variance either.
             if sigma_dep is not None:
-                helios.delta_soiled_area_variance[f]= sigma_dep**2 * (alpha**2 * gravitational_settling_factor(self.helios.tilt[f])**2)
+                helios.delta_soiled_area_variance[f] = sigma_dep**2 * (alpha**2 * gravitational_settling_factor(self.helios.tilt[f]) ** 2)
 
             elif self.sigma_dep is not None:
                 sigma_dep = self.sigma_dep
-                helios.delta_soiled_area_variance[f]= sigma_dep**2 * (alpha**2 * gravitational_settling_factor(self.helios.tilt[f])**2)
+                helios.delta_soiled_area_variance[f] = sigma_dep**2 * (alpha**2 * gravitational_settling_factor(self.helios.tilt[f]) ** 2)
 
         self.helios = helios
 
-    def plot_area_flux(self,sim_data,exp_idx,hel_id,air_temp, wind_speed,tilt=0.0,hrz0=None,
-                       constants=None, ax=None, Ra=True, verbose=True):
+    def plot_area_flux(self, sim_data, exp_idx, hel_id, air_temp, wind_speed, tilt=0.0, hrz0=None, constants=None, ax=None, Ra=True, verbose=True):
 
         dummy_sim = SimulationInputs()
         dummy_sim.dust = Dust()
@@ -535,17 +472,12 @@ class PhysicalBase(SoilingBase):
         dummy_sim.N_simulations = 1
 
         if self.loss_model == "mie":
-            dummy_sim.source_normalized_intensity = {
-                0: sim_data.source_normalized_intensity[exp_idx]
-            }
+            dummy_sim.source_normalized_intensity = {0: sim_data.source_normalized_intensity[exp_idx]}
             dummy_sim.source_wavelength = {0: sim_data.source_wavelength[exp_idx]}
             acceptance_angle = self.helios.acceptance_angles[exp_idx][hel_id]
-            _print_if("Loss model is " "mie" " ", verbose)
+            _print_if("Loss model is mie ", verbose)
         else:
-            _print_if(
-                "Loss model is " "geometry" ". Extinction weights are unity for all diameters.",
-                verbose,
-            )
+            _print_if("Loss model is geometry. Extinction weights are unity for all diameters.", verbose)
             acceptance_angle = np.nan
 
         dummy_model = copy.deepcopy(self)
@@ -555,9 +487,7 @@ class PhysicalBase(SoilingBase):
         dummy_model.loss_model = self.loss_model
         # dummy_model.helios.acceptance_angles = [acceptance_angle]
         # dummy_model.helios.extinction_weighting = {0:np.atleast_2d(self.helios.extinction_weighting[exp_idx][0,:])}
-        dummy_model.helios.extinction_weighting = {
-            0: np.atleast_2d(self.helios.extinction_weighting[exp_idx][hel_id, :])
-        }
+        dummy_model.helios.extinction_weighting = {0: np.atleast_2d(self.helios.extinction_weighting[exp_idx][hel_id, :])}
 
         fmt = "Setting constants.{0:s} to {1:s} (was {2:s})"
         if constants is not None:
@@ -585,20 +515,10 @@ class PhysicalBase(SoilingBase):
             (total area loss is {dummy_model.helios.delta_soiled_area[0][0, 0]:.2e} m$^2$/(s$\\cdot$m$^2$))
         """
         area_loss_rate = (
-            dummy_model.helios.pdfqN[0][0, 0, :]
-            * np.pi
-            / 4
-            * dummy_sim.dust.D[0] ** 2
-            * 1e-12
-            * dummy_model.helios.extinction_weighting[0][0, :]
+            dummy_model.helios.pdfqN[0][0, 0, :] * np.pi / 4 * dummy_sim.dust.D[0] ** 2 * 1e-12 * dummy_model.helios.extinction_weighting[0][0, :]
         )
         ax1.plot(dummy_sim.dust.D[0], area_loss_rate)
-        ax1.set_title(
-            title.format(
-                wind_speed,
-                air_temp,
-            )
-        )
+        ax1.set_title(title.format(wind_speed, air_temp))
         ax1.set_xlabel(r"D [$\mu$m]")
         ax1.set_ylabel(r"$\frac{dA [m^2/m^2/s] }{dLog(D \;[\mu m])}$", color="black", size=20)
         plt.xscale("log")
@@ -617,19 +537,14 @@ class ConstantMeanBase(SoilingBase):
             self.mu_tilde = float(table.loc["mu_tilde"].Value)  # [-] constant average deposition
         except Exception:
             self.mu_tilde = None
-            _print_if(
-                f"No mu_tilde model defined in {file_params}. You will need to define this before simulating",
-                verbose,
-            )
+            _print_if(f"No mu_tilde model defined in {file_params}. You will need to define this before simulating", verbose)
         try:
             self.sigma_dep = float(table.loc["sigma_dep"].Value)
         except Exception:
             self.sigma_dep = None
             _print_if(f"No sigma_dep model defined in {file_params}.", verbose)
 
-    def calculate_delta_soiled_area(
-        self, simulation_inputs, mu_tilde=None, sigma_dep=None, verbose=True
-    ):
+    def calculate_delta_soiled_area(self, simulation_inputs, mu_tilde=None, sigma_dep=None, verbose=True):
 
         _print_if("Calculating soil deposited in a timestep [m^2/m^2]", verbose)
 
@@ -671,15 +586,11 @@ class ConstantMeanBase(SoilingBase):
             # evaluated once per likelihood evaluation during fitting, so the elementwise
             # loop it replaces dominated the cost of a fit.
             # max(0, cos): a mirror past vertical collects no settled dust.
-            helios.delta_soiled_area[f] = (
-                alpha[None, :] * gravitational_settling_factor(helios.tilt[f]) * mu_tilde
-            )
+            helios.delta_soiled_area[f] = alpha[None, :] * gravitational_settling_factor(helios.tilt[f]) * mu_tilde
 
             # Predict confidence interval if sigma_dep is defined. Fixed tilt assumed in this class.
             if sigma_dep is not None:
-                dsav = sigma_dep**2 * (
-                    alpha**2 * gravitational_settling_factor(self.helios.tilt[f]) ** 2
-                )
+                dsav = sigma_dep**2 * (alpha**2 * gravitational_settling_factor(self.helios.tilt[f]) ** 2)
                 helios.delta_soiled_area_variance[f] = dsav
 
         self.helios = helios
@@ -701,131 +612,53 @@ class SimulationInputs:
 
     files: List[Union[str, Path]] = field(default=None)
     k_factors: Optional[List[float]] = field(default=None)
-    dust_type: Optional[List[str]] = field(
-        default=None,
-        metadata={"description": "Dust measurement type (TSP, PMX, PMX.Y)"},
-    )
+    dust_type: Optional[List[str]] = field(default=None, metadata={"description": "Dust measurement type (TSP, PMX, PMX.Y)"})
     verbose: bool = field(default=True)
 
-    dt: Dict[int, float] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "simulation time step", "units": "seconds"},
-    )
+    dt: Dict[int, float] = field(init=False, default_factory=dict, metadata={"description": "simulation time step", "units": "seconds"})
     time: Dict[int, pd.Series] = field(
-        init=False,
-        default_factory=dict,
-        metadata={
-            "description": "absolute time (taken from first entry)",
-            "units": "n/a",
-        },
+        init=False, default_factory=dict, metadata={"description": "absolute time (taken from first entry)", "units": "n/a"}
     )
     time_diff: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "delta_time since start date", "units": "days"},
+        init=False, default_factory=dict, metadata={"description": "delta_time since start date", "units": "days"}
     )
     start_datetime: Dict[int, np.datetime64] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "start datetime of simulation", "units": "datetime64"},
+        init=False, default_factory=dict, metadata={"description": "start datetime of simulation", "units": "datetime64"}
     )
     end_datetime: Dict[int, np.datetime64] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "end datetime of simulation", "units": "datetime64"},
+        init=False, default_factory=dict, metadata={"description": "end datetime of simulation", "units": "datetime64"}
     )
-    air_temp: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "air temperature", "units": "degC"},
-    )
-    wind_speed: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "wind speed", "units": "m/s"},
-    )
+    air_temp: Dict[int, np.ndarray] = field(init=False, default_factory=dict, metadata={"description": "air temperature", "units": "degC"})
+    wind_speed: Dict[int, np.ndarray] = field(init=False, default_factory=dict, metadata={"description": "wind speed", "units": "m/s"})
     wind_speed_mov_avg: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "wind speed hourly moving average", "units": "m/s"},
+        init=False, default_factory=dict, metadata={"description": "wind speed hourly moving average", "units": "m/s"}
     )
-    wind_direction: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "wind direction", "units": "degrees"},
-    )
+    wind_direction: Dict[int, np.ndarray] = field(init=False, default_factory=dict, metadata={"description": "wind direction", "units": "degrees"})
     dust_concentration: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "PM10 or TSP concentration in air", "units": "µg/m³"},
+        init=False, default_factory=dict, metadata={"description": "PM10 or TSP concentration in air", "units": "µg/m³"}
     )
     dust_conc_mov_avg: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={
-            "description": "hourly moving average of dust concentration",
-            "units": "µg/m³",
-        },
+        init=False, default_factory=dict, metadata={"description": "hourly moving average of dust concentration", "units": "µg/m³"}
     )
-    rain_intensity: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "rain intensity", "units": "mm/hr"},
-    )
-    dni: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "Direct Normal Irradiance", "units": "W/m^2"},
-    )
-    relative_humidity: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "relative humidity", "units": "%"},
-    )
+    rain_intensity: Dict[int, np.ndarray] = field(init=False, default_factory=dict, metadata={"description": "rain intensity", "units": "mm/hr"})
+    dni: Dict[int, np.ndarray] = field(init=False, default_factory=dict, metadata={"description": "Direct Normal Irradiance", "units": "W/m^2"})
+    relative_humidity: Dict[int, np.ndarray] = field(init=False, default_factory=dict, metadata={"description": "relative humidity", "units": "%"})
     source_normalized_intensity: Dict[int, Optional[np.ndarray]] = field(
-        init=False,
-        default_factory=dict,
-        metadata={
-            "description": "Source intensity (normalized to integrate to 1)",
-            "units": "1/m^2/nm",
-        },
+        init=False, default_factory=dict, metadata={"description": "Source intensity (normalized to integrate to 1)", "units": "1/m^2/nm"}
     )
     source_wavelength: Dict[int, Optional[np.ndarray]] = field(
-        init=False,
-        default_factory=dict,
-        metadata={
-            "description": "source wavelengths corresponding to intensity",
-            "units": "nm",
-        },
+        init=False, default_factory=dict, metadata={"description": "source wavelengths corresponding to intensity", "units": "nm"}
     )
-    dust: "Dust" = field(
-        init=False,
-        metadata={"description": "Dust properties per experiment", "units": "n/a"},
-    )
+    dust: "Dust" = field(init=False, metadata={"description": "Dust properties per experiment", "units": "n/a"})
     weather_variables: List[str] = field(
-        init=False,
-        default_factory=list,
-        metadata={"description": "list of imported weather variables", "units": "n/a"},
+        init=False, default_factory=list, metadata={"description": "list of imported weather variables", "units": "n/a"}
     )
-    N_simulations: int = field(
-        init=False,
-        default=0,
-        metadata={"description": "number of simulations", "units": "count"},
-    )
+    N_simulations: int = field(init=False, default=0, metadata={"description": "number of simulations", "units": "count"})
     k_factors_dict: Dict[int, float] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "k-factors per experiment", "units": "dimensionless"},
+        init=False, default_factory=dict, metadata={"description": "k-factors per experiment", "units": "dimensionless"}
     )
 
-    smallest_windspeed: float = field(
-        default=1e-6,
-        metadata={
-            "description": "smallest wind speed to set zero values",
-            "units": "m/s",
-        },
-    )
+    smallest_windspeed: float = field(default=1e-6, metadata={"description": "smallest wind speed to set zero values", "units": "m/s"})
 
     def __post_init__(self) -> None:
         if self.files is not None:
@@ -837,12 +670,7 @@ class SimulationInputs:
             if self.k_factors is None:
                 k_list = [1.0] * self.N_simulations
             elif self.k_factors == "import":
-                k_list = [
-                    pd.read_excel(f, sheet_name="Dust", index_col="Parameter")
-                    .loc["k_factor"]
-                    .values[0]
-                    for f in self.files
-                ]
+                k_list = [pd.read_excel(f, sheet_name="Dust", index_col="Parameter").loc["k_factor"].values[0] for f in self.files]
             else:
                 k_list = _import_option_helper(self.files, self.k_factors)
                 if len(k_list) != self.N_simulations:
@@ -863,13 +691,9 @@ class SimulationInputs:
                 _print_if(f"Loading source (normalized) intensity from {f}", self.verbose)
                 intensity = xl.parse("Source_Intensity")
                 self.source_wavelength[ii] = intensity["Wavelength (nm)"].to_numpy()
-                self.source_normalized_intensity[ii] = intensity[
-                    "Source Intensity (W/m^2 nm)"
-                ].to_numpy()
-                norm = np.trapezoid(
-                    y=self.source_normalized_intensity[ii], x=self.source_wavelength[ii]
-                )
-                self.source_normalized_intensity[ii] /= norm
+                self.source_normalized_intensity[ii] = intensity["Source Intensity (W/m^2 nm)"].to_numpy()
+                norm = np.trapezoid(y=self.source_normalized_intensity[ii], x=self.source_wavelength[ii])
+                self.source_normalized_intensity[ii] = self.source_normalized_intensity[ii] / norm
             else:
                 self.source_normalized_intensity[ii] = None
             xl.close()
@@ -896,14 +720,7 @@ class SimulationInputs:
             weather = pd.read_excel(file, sheet_name="Weather")
 
             # Identify time column
-            time_col = next(
-                (
-                    col
-                    for col in weather.columns
-                    if col.lower() in ["time", "timestamp", "date", "datetime", "date time"]
-                ),
-                None,
-            )
+            time_col = next((col for col in weather.columns if col.lower() in ["time", "timestamp", "date", "datetime", "date time"]), None)
             if time_col is None:
                 raise ValueError(f"No time column found in file {file}.")
 
@@ -920,28 +737,19 @@ class SimulationInputs:
 
             self.time[ii] = time
             self.dt[ii] = (time.iloc[1] - time.iloc[0]).total_seconds()
-            self.time_diff[ii] = (
-                (self.time[ii].values - self.time[ii].values.astype("datetime64[D]"))
-                .astype("timedelta64[h]")
-                .astype("int")
-            )
+            self.time_diff[ii] = (self.time[ii].values - self.time[ii].values.astype("datetime64[D]")).astype("timedelta64[h]").astype("int")
 
             # Load weather variables
             for (
                 attr_name,
                 column_names,
-            ) in (
-                weather_variables_map.items()
-            ):  # Search for weather variables inside the weather file and save them to self
+            ) in weather_variables_map.items():  # Search for weather variables inside the weather file and save them to self
                 for column in column_names:
                     if column in [col.lower() for col in weather.columns]:
                         (setattr(self, attr_name, {}) if not hasattr(self, attr_name) else None)
                         col_match = [col for col in weather.columns if col.lower() == column][0]
                         getattr(self, attr_name)[ii] = np.array(weather.loc[:, col_match])
-                        _print_if(
-                            f"Importing {col_match} data as {attr_name}...",
-                            self.verbose,
-                        )
+                        _print_if(f"Importing {col_match} data as {attr_name}...", self.verbose)
                         if attr_name not in self.weather_variables:
                             self.weather_variables.append(attr_name)
                         break
@@ -951,30 +759,19 @@ class SimulationInputs:
                 idx_low = np.where(self.wind_speed[ii] == 0)[0]
                 if len(idx_low) > 0:
                     self.wind_speed[ii][idx_low] = self.smallest_windspeed
-                    _print_if(
-                        f"Warning: zero windspeeds set to {self.smallest_windspeed}",
-                        self.verbose,
-                    )
+                    _print_if(f"Warning: zero windspeeds set to {self.smallest_windspeed}", self.verbose)
 
             self.wind_speed_mov_avg[ii] = (
-                pd.Series(self.wind_speed[ii])
-                .rolling(window=int(60.0 / (self.dt[ii] / 60)), min_periods=1)
-                .mean()
-                .to_numpy()
+                pd.Series(self.wind_speed[ii]).rolling(window=int(60.0 / (self.dt[ii] / 60)), min_periods=1).mean().to_numpy()
             )
 
             # Dust concentration
-            self.dust_concentration[ii] = (
-                self.k_factors_dict[ii] * weather[self.dust_type[ii]].to_numpy()
-            )
+            self.dust_concentration[ii] = self.k_factors_dict[ii] * weather[self.dust_type[ii]].to_numpy()
             if "dust_concentration" not in self.weather_variables:
                 self.weather_variables.append("dust_concentration")
 
             # Load all dust measurements
-            for (
-                dust_key,
-                dust_aliases,
-            ) in dust_names.items():  # Load all dust concentration data inside weather file
+            for dust_key, dust_aliases in dust_names.items():  # Load all dust concentration data inside weather file
                 for alias in dust_aliases:
                     if alias in [col.lower() for col in weather.columns]:
                         col_match = [col for col in weather.columns if col.lower() == alias][0]
@@ -988,10 +785,7 @@ class SimulationInputs:
                         break
 
             self.dust_conc_mov_avg[ii] = (
-                pd.Series(self.dust_concentration[ii])
-                .rolling(window=int(60.0 / (self.dt[ii] / 60)), min_periods=1)
-                .mean()
-                .to_numpy()
+                pd.Series(self.dust_concentration[ii]).rolling(window=int(60.0 / (self.dt[ii] / 60)), min_periods=1).mean().to_numpy()
             )
 
             if self.verbose:
@@ -1020,76 +814,26 @@ class Dust:
 
     files: Optional[List[Union[str, Path]]] = field(default=None)
 
-    D: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "µm", "description": "Dust particle diameters"},
-    )
+    D: Dict[int, np.ndarray] = field(init=False, default_factory=dict, metadata={"units": "µm", "description": "Dust particle diameters"})
     rho: Dict[int, float] = field(
-        init=False,
-        default_factory=dict,
-        metadata={
-            "units": "kg/m^3",
-            "description": "Particle material density (assummed constant)",
-        },
+        init=False, default_factory=dict, metadata={"units": "kg/m^3", "description": "Particle material density (assummed constant)"}
     )
-    m: Dict[int, complex] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "-", "description": "Complex refractive index"},
-    )
+    m: Dict[int, complex] = field(init=False, default_factory=dict, metadata={"units": "-", "description": "Complex refractive index"})
     pdfN: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={
-            "units": "[1/cm³]/dLog10([µm])",
-            "description": "Number distribution dN/d(log10(D))",
-        },
+        init=False, default_factory=dict, metadata={"units": "[1/cm³]/dLog10([µm])", "description": "Number distribution dN/d(log10(D))"}
     )
-    hamaker: Dict[int, float] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "J", "description": "Hamaker constant of dust"},
-    )
-    poisson: Dict[int, float] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "-", "description": "Poisson's ratio of dust"},
-    )
-    youngs_modulus: Dict[int, float] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "Pa", "description": "Young's modulus of dust"},
-    )
-    PM10: Dict[int, float] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "µg/m³", "description": "PM10 concentration"},
-    )
-    TSP: Dict[int, float] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "µg/m³", "description": "TSP concentration"},
-    )
-    PMT: Dict[int, float] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "µg/m³", "description": "PMT concentration"},
-    )
-    Nd: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "1/cm³", "description": "Number concentration components"},
-    )
+    hamaker: Dict[int, float] = field(init=False, default_factory=dict, metadata={"units": "J", "description": "Hamaker constant of dust"})
+    poisson: Dict[int, float] = field(init=False, default_factory=dict, metadata={"units": "-", "description": "Poisson's ratio of dust"})
+    youngs_modulus: Dict[int, float] = field(init=False, default_factory=dict, metadata={"units": "Pa", "description": "Young's modulus of dust"})
+    PM10: Dict[int, float] = field(init=False, default_factory=dict, metadata={"units": "µg/m³", "description": "PM10 concentration"})
+    TSP: Dict[int, float] = field(init=False, default_factory=dict, metadata={"units": "µg/m³", "description": "TSP concentration"})
+    PMT: Dict[int, float] = field(init=False, default_factory=dict, metadata={"units": "µg/m³", "description": "PMT concentration"})
+    Nd: Dict[int, np.ndarray] = field(init=False, default_factory=dict, metadata={"units": "1/cm³", "description": "Number concentration components"})
     log10_mu: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "log10(µm)", "description": "Log10 of mean diameters"},
+        init=False, default_factory=dict, metadata={"units": "log10(µm)", "description": "Log10 of mean diameters"}
     )
     log10_sig: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "log10(µm)", "description": "Log10 of distribution widths"},
+        init=False, default_factory=dict, metadata={"units": "log10(µm)", "description": "Log10 of distribution widths"}
     )
 
     def import_dust(self, verbose=True, dust_measurement_type=None):
@@ -1102,10 +846,7 @@ class Dust:
             table = pd.read_excel(f, sheet_name="Dust", index_col="Parameter")
             rhoii = float(table.loc["rho"].Value)
             self.rho[ii] = rhoii
-            self.m[ii] = (
-                table.loc["refractive_index_real_part"].Value
-                - table.loc["refractive_index_imaginary_part"].Value * 1j
-            )
+            self.m[ii] = table.loc["refractive_index_real_part"].Value - table.loc["refractive_index_imaginary_part"].Value * 1j
 
             # definition of parameters to compute the dust size distribution
             diameter_grid_info = np.array(table.loc["D"].Value.split(";"))  # [µm]
@@ -1114,26 +855,16 @@ class Dust:
             Dii = np.logspace(diameter_end_points[0], diameter_end_points[1], num=spacing)
             self.D[ii] = Dii
 
-            if isinstance(
-                table.loc["Nd"].Value, str
-            ):  # if this is imported as a string, we need to split it.
+            if isinstance(table.loc["Nd"].Value, str):  # if this is imported as a string, we need to split it.
                 self.Nd[ii] = np.array(table.loc["Nd"].Value.split(";"), dtype=float)
-                self.log10_mu[ii] = np.log10(
-                    np.array(table.loc["mu"].Value.split(";"), dtype=float)
-                )
-                self.log10_sig[ii] = np.log10(
-                    np.array(table.loc["sigma"].Value.split(";"), dtype=float)
-                )
+                self.log10_mu[ii] = np.log10(np.array(table.loc["mu"].Value.split(";"), dtype=float))
+                self.log10_sig[ii] = np.log10(np.array(table.loc["sigma"].Value.split(";"), dtype=float))
             elif isinstance(table.loc["Nd"].Value, float):  # handle single-component case
                 self.Nd[ii] = np.array([table.loc["Nd"].Value])
                 self.log10_mu[ii] = np.log10([np.array(table.loc["mu"].Value)])
                 self.log10_sig[ii] = np.log10([np.array(table.loc["sigma"].Value)])
             else:
-                raise ValueError(
-                    "Format of dust distribution components is not recognized in file {0:s}".format(
-                        f
-                    )
-                )
+                raise ValueError("Format of dust distribution components is not recognized in file {0:s}".format(f))
             self._compute_distributions(ii)
 
             self.hamaker[ii] = float(table.loc["hamaker_dust"].Value)
@@ -1142,11 +873,7 @@ class Dust:
 
             # add dust measurements if they are PMX
             for dt in dust_measurement_type:
-                if dt not in [
-                    None,
-                    "TSP",
-                    "PMT",
-                ]:  # another concentration is of interest (possibly because we have PMX measurements)
+                if dt not in [None, "TSP", "PMT"]:  # another concentration is of interest (possibly because we have PMX measurements)
                     X = dt[2::]
                     if len(X) in [1, 2]:  # integer, e.g. PM20
                         X = int(X)
@@ -1160,16 +887,11 @@ class Dust:
                         new_meas[ii] = self.pm_concentration(ii, X)
 
                     setattr(self, att, new_meas)
-                    _print_if(
-                        "Added " + att + " attribute to dust class to all experiment dust classes",
-                        verbose,
-                    )
+                    _print_if("Added " + att + " attribute to dust class to all experiment dust classes", verbose)
 
     def _number_distribution(self, f):
         """NumberDistribution for experiment f (weights = Nd [1/cm^3])."""
-        return NumberDistribution(
-            GaussianMixtureModel(self.Nd[f], self.log10_mu[f], self.log10_sig[f])
-        )
+        return NumberDistribution(GaussianMixtureModel(self.Nd[f], self.log10_mu[f], self.log10_sig[f]))
 
     def pm_concentration(self, f, cutoff_um):
         """Mass concentration [µg/m^3] of particles with D <= cutoff_um (analytic)."""
@@ -1185,8 +907,8 @@ class Dust:
         """Area distribution dA/dLog10(D) [µm^2/cm^3] on the D[f] grid (derived)."""
         return self._number_distribution(f).to_area().density(np.log10(self.D[f]))
 
-    def _compute_distributions(self,f):
-        
+    def _compute_distributions(self, f):
+
         # Number distribution sampled on the D grid [dN/dLog10(D) per cm^3].
         # Mass and area distributions are derived on demand via pdf_mass() /
         # pdf_area(); PM10/TSP come from the analytic mass CDF (grid-independent).
@@ -1203,10 +925,8 @@ class Dust:
         self.TSP[f] = float(mass.distribution.weights.sum())
         self.PMT[f] = self.TSP[f]
         self.PM10[f] = float(mass.cumulative(np.log10(10.0)))
-       
-    def plot_distributions(
-        self, figsize: Tuple[float, float] = (5, 5)
-    ) -> Tuple[plt.Figure, Any, List[Any]]:
+
+    def plot_distributions(self, figsize: Tuple[float, float] = (5, 5)) -> Tuple[plt.Figure, Any, List[Any]]:
         """
         Plot number and mass PDFs on a shared log-scale diameter axis.
 
@@ -1279,70 +999,26 @@ class TruckParameters:
     """Default parameters for cleaning truck configuration."""
 
     # Cost parameters
-    cost_water: float = field(
-        default=0.87, metadata={"units": "$/kL", "description": "Cost of water"}
-    )
-    usage_water: float = field(
-        default=0.4,
-        metadata={
-            "units": "L/m²",
-            "description": "Water usage per square meter cleaned",
-        },
-    )
+    cost_water: float = field(default=0.87, metadata={"units": "$/kL", "description": "Cost of water"})
+    usage_water: float = field(default=0.4, metadata={"units": "L/m²", "description": "Water usage per square meter cleaned"})
     cost_fuel: float = field(default=2.0, metadata={"units": "$/L", "description": "Cost of fuel"})
-    usage_fuel: float = field(
-        default=25.0,
-        metadata={"units": "L/hour", "description": "Fuel consumption rate"},
-    )
-    salary_operator: float = field(
-        default=80e3, metadata={"units": "$/year", "description": "Operator salary"}
-    )
-    cost_purchase: float = field(
-        default=150e3, metadata={"units": "$/truck", "description": "Cost of truck"}
-    )
-    cost_maintenance: float = field(
-        default=15e3,
-        metadata={"units": "$/year", "description": "Annual maintenance cost"},
-    )
-    useful_life: float = field(
-        default=10.0, metadata={"units": "years", "description": "Useful life of truck"}
-    )
+    usage_fuel: float = field(default=25.0, metadata={"units": "L/hour", "description": "Fuel consumption rate"})
+    salary_operator: float = field(default=80e3, metadata={"units": "$/year", "description": "Operator salary"})
+    cost_purchase: float = field(default=150e3, metadata={"units": "$/truck", "description": "Cost of truck"})
+    cost_maintenance: float = field(default=15e3, metadata={"units": "$/year", "description": "Annual maintenance cost"})
+    useful_life: float = field(default=10.0, metadata={"units": "years", "description": "Useful life of truck"})
     # Velocities
-    velocity_cleaning: float = field(
-        default=2.0,
-        metadata={"units": "km/h", "description": "Truck velocity during cleaning"},
-    )
-    velocity_travel: float = field(
-        default=20.0,
-        metadata={"units": "km/h", "description": "Truck velocity during travel"},
-    )
+    velocity_cleaning: float = field(default=2.0, metadata={"units": "km/h", "description": "Truck velocity during cleaning"})
+    velocity_travel: float = field(default=20.0, metadata={"units": "km/h", "description": "Truck velocity during travel"})
     # Times
-    time_setup: float = field(
-        default=30.0,
-        metadata={
-            "units": "seconds/heliostat",
-            "description": "Setup time per heliostat",
-        },
-    )
-    time_shift: float = field(
-        default=8.0,
-        metadata={"units": "hours", "description": "Duration of cleaning shift"},
-    )
+    time_setup: float = field(default=30.0, metadata={"units": "seconds/heliostat", "description": "Setup time per heliostat"})
+    time_shift: float = field(default=8.0, metadata={"units": "hours", "description": "Duration of cleaning shift"})
     # Distances and volumes
-    distance_reload_station: float = field(
-        default=750.0,
-        metadata={"units": "m", "description": "Distance to reload station"},
-    )
-    truck_water_volume: float = field(
-        default=15000.0, metadata={"units": "L", "description": "Water tank capacity"}
-    )
+    distance_reload_station: float = field(default=750.0, metadata={"units": "m", "description": "Distance to reload station"})
+    truck_water_volume: float = field(default=15000.0, metadata={"units": "L", "description": "Water tank capacity"})
     # Heliostat dimensions
-    heliostat_width: float = field(
-        default=None, metadata={"units": "m", "description": "Width of heliostat"}
-    )
-    heliostat_height: float = field(
-        default=None, metadata={"units": "m", "description": "Height of heliostat"}
-    )
+    heliostat_width: float = field(default=None, metadata={"units": "m", "description": "Width of heliostat"})
+    heliostat_height: float = field(default=None, metadata={"units": "m", "description": "Height of heliostat"})
 
 
 class Truck:
@@ -1350,9 +1026,7 @@ class Truck:
 
     def __init__(self, config_path: Path = None):
         self._params = TruckParameters()
-        self._solar_field = (
-            None  # Solarfield ID and positions with respect to receiver (m) [ID, x-x, y-y]
-        )
+        self._solar_field = None  # Solarfield ID and positions with respect to receiver (m) [ID, x-x, y-y]
         self._cleaning_rate = None  # Number of heliostats cleaned per truck per shift
         self._sectors = None  # Number of cleaning sectors to create in the field
         self._n_sectors_per_truck = None  # Number of sectors cleaned per truck per shift
@@ -1369,9 +1043,7 @@ class Truck:
 
     def _calculate_costs(self) -> None:
         """Calculate water and fuel costs per cleaning sector."""
-        if not all(
-            [hasattr(self._params, attr) for attr in ["heliostat_width", "heliostat_height"]]
-        ):
+        if not all([hasattr(self._params, attr) for attr in ["heliostat_width", "heliostat_height"]]):
             raise ValueError("Must set heliostat dimensions before calculating costs")
 
         p = self._params
@@ -1401,9 +1073,7 @@ class Truck:
         )  # [$/cleaning sector]
 
         # Calculate total cost
-        self._consumable_costs["total"] = (
-            self._consumable_costs["water"] + self._consumable_costs["fuel"]
-        )
+        self._consumable_costs["total"] = self._consumable_costs["water"] + self._consumable_costs["fuel"]
 
     @property
     def cleaning_rate(self) -> float:
@@ -1430,9 +1100,7 @@ class Truck:
     def sectors(self, new_sectors: tuple):
         """Set sector configuration (n_rad, n_az)."""
         self._sectors = new_sectors
-        print(
-            f"Updated sectors to {new_sectors[0]} x {new_sectors[1]} = {new_sectors[0] * new_sectors[1]} total sectors"
-        )
+        print(f"Updated sectors to {new_sectors[0]} x {new_sectors[1]} = {new_sectors[0] * new_sectors[1]} total sectors")
 
     @property
     def n_sectors_per_truck(self) -> int:
@@ -1466,9 +1134,7 @@ class Truck:
         # Show cleaning rate change if field properties are set
         if self._solar_field is not None:
             new_rate = self.cleaning_rate
-            print(
-                f"Cleaning rate changed from {old_rate:.1f} to {new_rate:.1f} heliostats per shift"
-            )
+            print(f"Cleaning rate changed from {old_rate:.1f} to {new_rate:.1f} heliostats per shift")
             print("Updated costs per sector:")
             print(f"  Total: {self._costs['total']:.2f} $/cleaning sector")
 
@@ -1490,11 +1156,7 @@ class Truck:
             print("Using default parameters")
 
     def calculate_cleaning_rate(
-        self,
-        solar_field,
-        cleaning_rate: float = None,
-        num_sectors: Optional[Union[int, Tuple[int, int], str]] = None,
-        tolerance: float = 0.05,
+        self, solar_field, cleaning_rate: float = None, num_sectors: Optional[Union[int, Tuple[int, int], str]] = None, tolerance: float = 0.05
     ) -> tuple:
         """Calculate cleaning rate based on truck parameters or use provided rate.
 
@@ -1517,9 +1179,7 @@ class Truck:
                 cleaning_setup_seconds=self._params.time_setup,
             )
             target_rate = self._heliostats_cleaned_shift(
-                shift_hours=self._params.time_shift,
-                hour_per_heliostat_clean=hour_per_clean,
-                hour_reloading_per_heliostat=hour_per_reload,
+                shift_hours=self._params.time_shift, hour_per_heliostat_clean=hour_per_clean, hour_reloading_per_heliostat=hour_per_reload
             )
             print(f"Calculated cleaning rate: {target_rate:.1f} heliostats/shift")
         elif cleaning_rate is not None:
@@ -1535,9 +1195,7 @@ class Truck:
             elif isinstance(num_sectors, tuple) and len(num_sectors) == 2:
                 self._sectors = num_sectors
                 target_rate = len(solar_field) / (num_sectors[0] * num_sectors[1])
-                print(
-                    f"Using manual sector configuration: {num_sectors[0]} x {num_sectors[1]} sectors"
-                )
+                print(f"Using manual sector configuration: {num_sectors[0]} x {num_sectors[1]} sectors")
             else:
                 raise ValueError("num_sectors must be an int or a tuple of two ints")
         else:
@@ -1548,9 +1206,7 @@ class Truck:
         if target_rate > len(solar_field):
             target_rate = len(solar_field)
             cleaning_rate = len(solar_field)
-            print(
-                f"Warning: Target rate {target_rate} exceeds number of heliostats {len(solar_field)}. Setting to {len(solar_field)}"
-            )
+            print(f"Warning: Target rate {target_rate} exceeds number of heliostats {len(solar_field)}. Setting to {len(solar_field)}")
         # Calculate sectors based on target rate
         self._optimize_sectors(solar_field, target_rate, tolerance)
 
@@ -1563,14 +1219,9 @@ class Truck:
         best_error = float("inf")
         best_sectors = None
 
-        if target_rate >= len(
-            solar_field
-        ):  # Increase field resoltuion if we are cleaning full field in one truck
+        if target_rate >= len(solar_field):  # Increase field resoltuion if we are cleaning full field in one truck
             best_n_sectors = int(np.ceil(len(solar_field) / 50))
-            best_sectors = (
-                int(np.floor(np.sqrt(best_n_sectors))),
-                int(np.ceil(np.sqrt(best_n_sectors))),
-            )
+            best_sectors = (int(np.floor(np.sqrt(best_n_sectors))), int(np.ceil(np.sqrt(best_n_sectors))))
             best_rate = len(solar_field) / (best_sectors[0] * best_sectors[1] / best_n_sectors)
             best_error = abs(best_rate - target_rate) / target_rate
             if best_rate < target_rate:
@@ -1606,29 +1257,18 @@ class Truck:
         self._sectors = best_sectors
         self._n_sectors_per_truck = best_n_sectors
 
-        print(
-            f"Grid size: {best_sectors[0]} x {best_sectors[1]} = {best_sectors[0] * best_sectors[1]} sectors"
-        )
+        print(f"Grid size: {best_sectors[0]} x {best_sectors[1]} = {best_sectors[0] * best_sectors[1]} sectors")
         print(f"Sectors per truck: {best_n_sectors}")
         print(f"Effective cleaning rate: {best_rate:.1f} heliostats/shift")
         print(f"Error from target: {best_error * 100:.1f}%")
 
-    def _heliostats_cleaned_shift(
-        self,
-        shift_hours=None,
-        hour_per_heliostat_clean=None,
-        hour_reloading_per_heliostat=None,
-    ) -> float:
+    def _heliostats_cleaned_shift(self, shift_hours=None, hour_per_heliostat_clean=None, hour_reloading_per_heliostat=None) -> float:
         """Calculate heliostats cleaned per shift."""
 
         return shift_hours / (hour_per_heliostat_clean + hour_reloading_per_heliostat)
 
     def _hour_per_heliostat_cleaning(
-        self,
-        heliostat_spacing: float,
-        truck_velocity: float = 10.0,
-        truck_cleaning_velocity: float = 2.0,
-        cleaning_setup_seconds: float = 30.0,
+        self, heliostat_spacing: float, truck_velocity: float = 10.0, truck_cleaning_velocity: float = 2.0, cleaning_setup_seconds: float = 30.0
     ):
         """Calculates the time it takes to move to a heliostat and clean it."""
         return (
@@ -1642,9 +1282,7 @@ class Truck:
         n_heliostats = len(positions_x)
         min_distances = np.zeros(n_heliostats)
         for i in range(n_heliostats):
-            distances = np.sqrt(
-                (positions_x - positions_x[i]) ** 2 + (positions_y - positions_y[i]) ** 2
-            )
+            distances = np.sqrt((positions_x - positions_x[i]) ** 2 + (positions_y - positions_y[i]) ** 2)
             distances[distances == 0] = np.inf
             min_distances[i] = np.min(distances)
         return np.mean(min_distances) - self._params.heliostat_width
@@ -1654,14 +1292,10 @@ class Truck:
         p = self._params
 
         heliostat_area = p.heliostat_width * p.heliostat_height  # [m^2] area of heliostat
-        cleaning_capacity_area = (
-            p.truck_water_volume / p.usage_water
-        )  # [m^2] cleaning capacity of water
+        cleaning_capacity_area = p.truck_water_volume / p.usage_water  # [m^2] cleaning capacity of water
         reload_occurence_rate = heliostat_area / cleaning_capacity_area  # []
 
-        hour_travel_reload = (
-            2 * p.distance_reload_station / (p.velocity_travel * 1e3)
-        )  # [hours] travel time to reload station
+        hour_travel_reload = 2 * p.distance_reload_station / (p.velocity_travel * 1e3)  # [hours] travel time to reload station
 
         return reload_occurence_rate * (hour_travel_reload + p.time_shift)  # [hours]
 
@@ -1675,58 +1309,22 @@ class Sun:
     """
 
     irradiation: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={
-            "units": "W/m^2",
-            "description": "Extraterrestrial nominal solar irradiation",
-        },
+        init=False, default_factory=dict, metadata={"units": "W/m^2", "description": "Extraterrestrial nominal solar irradiation"}
     )
-    elevation: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "degrees", "description": "Solar elevation angles"},
-    )
+    elevation: Dict[int, np.ndarray] = field(init=False, default_factory=dict, metadata={"units": "degrees", "description": "Solar elevation angles"})
     declination: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "degrees", "description": "Solar declination angles"},
+        init=False, default_factory=dict, metadata={"units": "degrees", "description": "Solar declination angles"}
     )
-    azimuth: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "degrees", "description": "Solar azimuth angles"},
-    )
-    zenith: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "degrees", "description": "Solar zenith angles"},
-    )
-    hourly: Dict[int, Any] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"description": "Hourly solar parameters"},
-    )
+    azimuth: Dict[int, np.ndarray] = field(init=False, default_factory=dict, metadata={"units": "degrees", "description": "Solar azimuth angles"})
+    zenith: Dict[int, np.ndarray] = field(init=False, default_factory=dict, metadata={"units": "degrees", "description": "Solar zenith angles"})
+    hourly: Dict[int, Any] = field(init=False, default_factory=dict, metadata={"description": "Hourly solar parameters"})
     time: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={"units": "datetime", "description": "Time vector for solar angles"},
+        init=False, default_factory=dict, metadata={"units": "datetime", "description": "Time vector for solar angles"}
     )
     DNI: Dict[int, np.ndarray] = field(
-        init=False,
-        default_factory=dict,
-        metadata={
-            "units": "W/m^2",
-            "description": "Direct normal irradiance at ground",
-        },
+        init=False, default_factory=dict, metadata={"units": "W/m^2", "description": "Direct normal irradiance at ground"}
     )
-    stow_angle: float = field(
-        init=False,
-        metadata={
-            "units": "degrees",
-            "description": "Minimum sun elevation angle where heliostat field operates",
-        },
-    )
+    stow_angle: float = field(init=False, metadata={"units": "degrees", "description": "Minimum sun elevation angle where heliostat field operates"})
 
     def import_sun(self, file_params: str) -> None:
         """
@@ -1738,9 +1336,7 @@ class Sun:
         table = pd.read_excel(file_params, index_col="Parameter")
         self.stow_angle = float(table.loc["stowangle"].Value)
 
-    def angles_and_clearsky_dni(
-        self, lat: float, lon: float, time_grid: pd.Series, tz_offset: float = 0.0
-    ) -> None:
+    def angles_and_clearsky_dni(self, lat: float, lon: float, time_grid: pd.Series, tz_offset: float = 0.0) -> None:
         """
         Compute solar angles and clearsky direct normal irradiance.
 
@@ -1760,12 +1356,7 @@ class Sun:
         solar_angles = np.array([solar.get_position(lat, lon, t) for t in time_utc])
         az = solar_angles[:, 0]
         el = solar_angles[:, 1]
-        dni_vals = np.array(
-            [
-                radiation.get_radiation_direct(time, elevation) if elevation > 0 else 0.0
-                for time, elevation in zip(time_utc, el)
-            ]
-        )
+        dni_vals = np.array([radiation.get_radiation_direct(time, elevation) if elevation > 0 else 0.0 for time, elevation in zip(time_utc, el)])
 
         idx = len(self.azimuth)
         self.azimuth[idx] = az
@@ -1790,9 +1381,7 @@ class Heliostats:
         self.x = []  # [m] x (east-west) position of representative heliostats
         self.y = []  # [m] y (north-south) position of representative heliostats
         self.rho = []  # [m] radius for polar coordinates of representative heliostats
-        self.theta = (
-            []
-        )  # [deg] angle (from north) for polar coordinates of representative heliostats
+        self.theta = []  # [deg] angle (from north) for polar coordinates of representative heliostats
         self.dist = []  # planar distance to tower
         self.elevation_angle_to_tower = []  # elevation angle from heliostats to tower
         self.sector_area = []  # [m**2] sector area
@@ -1815,28 +1404,20 @@ class Heliostats:
         self.azimuth = {}  # [deg] azimuth angle of the heliostat
         self.incidence_angle = {}  # [deg] incidence angle of solar rays
         self.elevation = {}  # [deg] elevation angle of the heliostat
-        self.inc_ref_factor = (
-            {}
-        )  # [ - ] incidence factor for reflectance computation (1st or second surface)
+        self.inc_ref_factor = {}  # [ - ] incidence factor for reflectance computation (1st or second surface)
         self.aoi_model = None  # Angle of incidence model is one of ['first_surface','second_surface','heimsath']
         self.aoi_parameter = {}  # parameter of the Angle of Incidence model (e.g. d for Heimsath)
         self.stow_tilt = {}  # [deg] tilt at which heliostats are stowed at night
-        self.optical_efficiency = (
-            {}
-        )  # [ - ] average total optical efficiency of the sector represented by the heliostat
+        self.optical_efficiency = {}  # [ - ] average total optical efficiency of the sector represented by the heliostat
 
         # Properties of dust on heliostat (dicts of 3D arrays, indexed by [heliostat_index, time, diameter] with experiment numbers as keys)
-        self.delta_soiled_area = (
-            {}
-        )  # [m^2/m^2] "pdf" of projected area of dust deposited on mirror for each time interval & each diameter
+        self.delta_soiled_area = {}  # [m^2/m^2] "pdf" of projected area of dust deposited on mirror for each time interval & each diameter
         self.mom_removal = {}
         self.mom_adhesion = {}
         self.soiling_factor = {}
         self.D = {}  # [µm] diameter discretization
         self.velocity = {}  # [m/s] velocity of falling dust for each diameter
-        self.pdfqN = (
-            {}
-        )  # dq[particles/(s*m^2)]/dLog_{10}(D[µm]) "pdf" of dust flux 1 m2 of mirror (constant for each time interval) at each diameter
+        self.pdfqN = {}  # dq[particles/(s*m^2)]/dLog_{10}(D[µm]) "pdf" of dust flux 1 m2 of mirror (constant for each time interval) at each diameter
         self.delta_soiled_area_variance = {}
         self.soiling_factor_prediction_variance = {}
 
@@ -1861,21 +1442,12 @@ class Heliostats:
         solar_field = self.read_solarfield(file_solar_field)
 
         self.truck = Truck(config_path=file_params)
-        self.truck.calculate_cleaning_rate(
-            solar_field=solar_field,
-            cleaning_rate=cleaning_rate,
-            num_sectors=num_sectors,
-            tolerance=0.05,
-        )
+        self.truck.calculate_cleaning_rate(solar_field=solar_field, cleaning_rate=cleaning_rate, num_sectors=num_sectors, tolerance=0.05)
 
-        if (
-            isinstance(self.truck.sectors, str) and self.truck.sectors.lower() == "manual"
-        ):  # Manual importing of solar field respresentatives
+        if isinstance(self.truck.sectors, str) and self.truck.sectors.lower() == "manual":  # Manual importing of solar field respresentatives
             self.x = solar_field[:, 1]  # x cartesian coordinate of each heliostat (E>0)
             self.y = solar_field[:, 2]  # y cartesian coordinate of each heliostat (N>0)
-            self.rho = np.sqrt(
-                self.x**2 + self.y**2
-            )  # radial polar coordinate of each heliostat 
+            self.rho = np.sqrt(self.x**2 + self.y**2)  # radial polar coordinate of each heliostat
             self.theta = np.arctan2(self.y, self.x)  # angular polar coordinate of each heliostat (E=0, positive counterclockwise)
             self.num_radial_sectors = None
             self.num_theta_sectors = None
@@ -1886,37 +1458,23 @@ class Heliostats:
             and isinstance(self.truck.sectors[1], int)
         ):  # import and sectorize
             n_rho, n_theta = self.truck.sectors
-            _print_if(
-                "Sectorizing with {0:d} angular and {1:d} radial sectors".format(n_theta, n_rho),
-                verbose,
-            )
+            _print_if("Sectorizing with {0:d} angular and {1:d} radial sectors".format(n_theta, n_rho), verbose)
             self.num_radial_sectors, self.num_theta_sectors = self.truck.sectors
             self.sectorize_radial(solar_field, n_rho, n_theta)
         elif table.loc["receiver_type"].Value == "Flat plate" and isinstance(self.truck.sectors, tuple):
-            
             n_rho, n_theta = self.truck.sectors
-            _print_if(
-                "Sectorizing with {0:d} angular and {1:d} radial sectors".format(n_theta, n_rho),
-                verbose,
-            )
+            _print_if("Sectorizing with {0:d} angular and {1:d} radial sectors".format(n_theta, n_rho), verbose)
             self.num_radial_sectors, self.num_theta_sectors = self.truck.sectors
 
             print(f"Sectorizing field into {n_rho} x {n_theta} sectors ... ")
-            self.sectorize_radial(solar_field,n_rho,n_theta)
+            self.sectorize_radial(solar_field, n_rho, n_theta)
             # self.sectorize_corn_cleaningrows(solar_field,n_hor,n_vert)
         elif table.loc["receiver_type"].Value == "Flat plate" and isinstance(self.truck.sectors, tuple):
             print(f"Sectorizing field into {num_sectors} with kmeans ... ")
             n_hor, n_vert = self.truck.sectors
-            _print_if(
-                "Sectorizing with {0:d} horizontal and {1:d} vertical sectors".format(
-                    n_hor, n_vert
-                ),
-                verbose,
-            )
+            _print_if("Sectorizing with {0:d} horizontal and {1:d} vertical sectors".format(n_hor, n_vert), verbose)
             self.num_radial_sectors, self.num_theta_sectors = self.truck.sectors
-            self.sectorize_kmeans_clusters(
-                solar_field, self.truck.sectors[0] * self.truck.sectors[1]
-            )
+            self.sectorize_kmeans_clusters(solar_field, self.truck.sectors[0] * self.truck.sectors[1])
         else:
             raise ValueError("num_sectors must be None or an a 2-tuple of intergers")
 
@@ -1934,9 +1492,7 @@ class Heliostats:
         idx_t = np.argsort(theta)  # store the indexes of the ascendent thetas
         val_r1 = rho[idx_t]  # find the corresponding values of the radii
 
-        val_r = np.concatenate(
-            (val_r1[val_t1 >= -np.pi / 2], val_r1[val_t1 < -np.pi / 2])
-        )  # "rotates" to have -pi/2 as the first theta value
+        val_r = np.concatenate((val_r1[val_t1 >= -np.pi / 2], val_r1[val_t1 < -np.pi / 2]))  # "rotates" to have -pi/2 as the first theta value
         val_t = np.concatenate(
             (val_t1[val_t1 >= -np.pi / 2], val_t1[val_t1 < -np.pi / 2] + 2 * np.pi)
         )  # "rotates" to have -pi/2 as the first theta value
@@ -1949,9 +1505,7 @@ class Heliostats:
         self.full_field["sector_id"] = np.nan * np.ones(len(x))
 
         # compute the coordinates of the angular sector-delimiting heliostats
-        n_th_hel = np.floor(n_tot / n_theta).astype(
-            "int"
-        )  # rounded-down number of heliostats per angular sector
+        n_th_hel = np.floor(n_tot / n_theta).astype("int")  # rounded-down number of heliostats per angular sector
         if extra_hel_th == 0:
             idx_th_sec = np.arange(0, len(val_r1), n_th_hel)
         else:
@@ -1960,9 +1514,7 @@ class Heliostats:
             id_bt = np.arange(1, extra_hel_th + 1, 1)
             id_ct = extra_hel_th * np.ones(n_theta - extra_hel_th - 1).astype("int")
             id_dt = np.array([extra_hel_th - 1])
-            idx_th_sec = np.arange(0, len(val_r), n_th_hel) + np.concatenate(
-                (id_at, id_bt, id_ct, id_dt)
-            )
+            idx_th_sec = np.arange(0, len(val_r), n_th_hel) + np.concatenate((id_at, id_bt, id_ct, id_dt))
 
         theta_th_sec = val_t[idx_th_sec]
         # rho_th_sec = val_r[idx_th_sec]
@@ -1976,9 +1528,7 @@ class Heliostats:
         for ii in range(n_theta):
             if ii != n_theta - 1:
                 in_theta_slice = (val_t >= theta_th_sec[ii]) & (val_t < theta_th_sec[ii + 1])
-                thetas = val_t[
-                    in_theta_slice
-                ]  # selects the heliostats whose angular coordinate is within the ii-th angular sector
+                thetas = val_t[in_theta_slice]  # selects the heliostats whose angular coordinate is within the ii-th angular sector
                 rhos = val_r[in_theta_slice]  # selects the correspondent values of radius
             else:
                 in_theta_slice = val_t >= theta_th_sec[ii]
@@ -1997,9 +1547,7 @@ class Heliostats:
             idx_r_sec = np.cumsum(np.concatenate((id_ar, id_br + np.concatenate((id_cr, id_dr)))))
             AR_sec = AR[idx_r_sec[0:n_rho]]
             AT_sec = AT[idx_r_sec[0:n_rho]]
-            rho_r_sec[:, ii] = AR_sec[
-                0 : len(rho_r_sec[:, ii])
-            ]  # finds the radial sector-delimiting heliostats for each angular sector
+            rho_r_sec[:, ii] = AR_sec[0 : len(rho_r_sec[:, ii])]  # finds the radial sector-delimiting heliostats for each angular sector
             theta_r_sec[:, ii] = AT_sec[
                 0 : len(rho_r_sec[:, ii])
             ]  # finds the corresponding angles of the radial sector-delimiting heliostats for each angular sector
@@ -2007,9 +1555,7 @@ class Heliostats:
             # select the heliostats whose radial coordinate is within the jj-th radial sector of the ii-th angular sector
             for jj in range(n_rho):
                 if jj != n_rho - 1:
-                    and_in_radius_slice = (rhos >= rho_r_sec[jj, ii]) & (
-                        rhos < rho_r_sec[jj + 1, ii]
-                    )
+                    and_in_radius_slice = (rhos >= rho_r_sec[jj, ii]) & (rhos < rho_r_sec[jj + 1, ii])
                     rhos_jj = rhos[and_in_radius_slice]
                     thetas_jj = thetas[and_in_radius_slice]
                 else:
@@ -2108,9 +1654,7 @@ class Heliostats:
             return grid
 
         def find_closest_point(position, grid):
-            distances = cdist(
-                [position[1:3]], grid
-            )  # Find distance between heliostats and grid coordinates
+            distances = cdist([position[1:3]], grid)  # Find distance between heliostats and grid coordinates
             closest_idx = np.argmin(distances)
             return distances[0][closest_idx], closest_idx
 
@@ -2123,12 +1667,7 @@ class Heliostats:
             if i == 0:
                 closest_grid = np.hstack([solar_field[i, :], distance_grid, closest_idx])
             else:
-                closest_grid = np.vstack(
-                    [
-                        closest_grid,
-                        np.hstack([solar_field[i, :], distance_grid, closest_idx]),
-                    ]
-                )
+                closest_grid = np.vstack([closest_grid, np.hstack([solar_field[i, :], distance_grid, closest_idx])])
 
         # Store Heliostat Field information
         self.full_field["x"] = closest_grid[:, 1]
@@ -2143,12 +1682,7 @@ class Heliostats:
             if i == 0:
                 representative_helio = np.hstack([representative_info, sector_size])
             else:
-                representative_helio = np.vstack(
-                    [
-                        representative_helio,
-                        np.hstack([representative_info, sector_size]),
-                    ]
-                )
+                representative_helio = np.vstack([representative_helio, np.hstack([representative_info, sector_size])])
 
         ##
         self.x = representative_helio[:, 1]
@@ -2166,9 +1700,7 @@ class Heliostats:
         else:
             raise ValueError("Solar field file must be csv or xlsx")
 
-        x_field = np.array(
-            whole_SF.loc[:, "Loc. X"]
-        )  # x cartesian coordinate of each heliostat (E>0)
+        x_field = np.array(whole_SF.loc[:, "Loc. X"])  # x cartesian coordinate of each heliostat (E>0)
         y_field = np.array(whole_SF.loc[:, "Loc. Y"])
         helioID = np.arange(len(x_field), dtype=np.int64)
         positions = np.column_stack((helioID, x_field, y_field))
@@ -2207,11 +1739,7 @@ class Heliostats:
             ax.scatter(
                 self.full_field["x"][mask],
                 self.full_field["y"][mask],
-                color=(
-                    color_map[ii % len(color_map)]
-                    if isinstance(color_map, np.ndarray)
-                    else color_map(ii / max(1, Ns - 1))
-                ),
+                color=(color_map[ii % len(color_map)] if isinstance(color_map, np.ndarray) else color_map(ii / max(1, Ns - 1))),
                 alpha=0.7,
                 s=30,
                 label=f"Sector {ii}" if ii < 10 else None,  # Limit legend entries
@@ -2234,15 +1762,7 @@ class Heliostats:
 
         # Plot representative heliostats if not showing IDs
         if not show_id:
-            ax.scatter(
-                self.x,
-                self.y,
-                color="black",
-                marker="X",
-                s=100,
-                label="Representative heliostats",
-                zorder=10,
-            )
+            ax.scatter(self.x, self.y, color="black", marker="X", s=100, label="Representative heliostats", zorder=10)
 
         # Add plot styling
         ax.set_xlabel("Distance from receiver - X [m]")
@@ -2256,12 +1776,7 @@ class Heliostats:
         plt.tight_layout()
         return fig, ax
 
-    def _validate_lookup_table(
-        self,
-        lookup_path: Path,
-        sim_dat: SimulationInputs,
-        verbose: bool,
-    ) -> bool:
+    def _validate_lookup_table(self, lookup_path: Path, sim_dat: SimulationInputs, verbose: bool) -> bool:
         """Validate the metadata of an existing lookup table."""
         metadata_path = lookup_path / "metadata.json"
         if not metadata_path.is_file():
@@ -2278,9 +1793,9 @@ class Heliostats:
         # --- Start validation checks ---
         current_m_real = [s.real for s in sim_dat.dust.m.values()]
         current_m_imag = [s.imag for s in sim_dat.dust.m.values()]
-        if not np.allclose(
-            metadata.get("refractive_index_real", []), current_m_real
-        ) or not np.allclose(metadata.get("refractive_index_imag", []), current_m_imag):
+        if not np.allclose(metadata.get("refractive_index_real", []), current_m_real) or not np.allclose(
+            metadata.get("refractive_index_imag", []), current_m_imag
+        ):
             _print_if("Validation failed: Refractive index mismatch.", verbose)
             return False
 
@@ -2344,9 +1859,7 @@ class Heliostats:
         num_heliostats = [len(self.tilt[f]) for f in files]
         phia = self.acceptance_angles
 
-        self.extinction_weighting = {
-            f: np.zeros((num_heliostats[f], num_diameters[f])) for f in files
-        }
+        self.extinction_weighting = {f: np.zeros((num_heliostats[f], num_diameters[f])) for f in files}
 
         if loss_model == "mie":
             assert len(phia) > 0, "Please call compute_acceptance_angles before this method."
@@ -2357,25 +1870,13 @@ class Heliostats:
                 is_cache_valid = self._validate_lookup_table(lookup_path, sim_dat, verbose)
 
                 if not is_cache_valid:
-                    _print_if(
-                        f"Lookup table in {lookup_path} is invalid or missing. Regenerating...",
-                        verbose,
-                    )
-                    assert (
-                        num_acceptance_steps is not None
-                    ), "num_acceptance_steps must be set to generate a new lookup table."
+                    _print_if(f"Lookup table in {lookup_path} is invalid or missing. Regenerating...", verbose)
+                    assert num_acceptance_steps is not None, "num_acceptance_steps must be set to generate a new lookup table."
                     lookup_path.mkdir(parents=True, exist_ok=True)
 
-                    acceptance_angles_range = {
-                        f: np.linspace(min(phia[f]), max(phia[f]), num_acceptance_steps)
-                        for f in files
-                    }
+                    acceptance_angles_range = {f: np.linspace(min(phia[f]), max(phia[f]), num_acceptance_steps) for f in files}
                     self._compute_extinction_weights_lookup_table(
-                        sim_dat,
-                        acceptance_angles_range,
-                        verbose=verbose,
-                        save_folder=str(lookup_path),
-                        options=options,
+                        sim_dat, acceptance_angles_range, verbose=verbose, save_folder=str(lookup_path), options=options
                     )
 
                 _print_if(f"Loading extinction weights from {lookup_path}...", verbose)
@@ -2383,18 +1884,11 @@ class Heliostats:
 
                 for f in files:
                     # add small number so that acc_angles is strictly increasing for interpolation
-                    acc_angles[f] += 1e-6*np.mean(acc_angles[f])*np.cumsum(np.ones_like(acc_angles[f]))
-                    interpolator = RegularGridInterpolator(
-                        (acc_angles[f], diameters),
-                        np.array(ext_weights[f]),
-                        bounds_error=False,
-                        fill_value=None,
-                    )
+                    acc_angles[f] += 1e-6 * np.mean(acc_angles[f]) * np.cumsum(np.ones_like(acc_angles[f]))
+                    interpolator = RegularGridInterpolator((acc_angles[f], diameters), np.array(ext_weights[f]), bounds_error=False, fill_value=None)
                     grid_angles, grid_dia = np.meshgrid(phia[f], dust.D[f], indexing="ij")
                     points = np.stack([grid_angles.ravel(), grid_dia.ravel()], axis=1)
-                    interpolated_values = interpolator(points).reshape(
-                        len(phia[f]), len(dust.D[f])
-                    )
+                    interpolated_values = interpolator(points).reshape(len(phia[f]), len(dust.D[f]))
                     self.extinction_weighting[f][:, :] = interpolated_values
 
             else:  # Direct computation without lookup table
@@ -2402,18 +1896,12 @@ class Heliostats:
                 same_ext = _same_ext_coeff(self, sim_dat)
                 computed = []
                 for f in files:
-                    for jj in tqdm(
-                        range(num_heliostats[f]),
-                        desc=f"File {f}",
-                        postfix=lambda jj=0: f"acceptance angle {phia[f][jj] * 1e3:.2f} mrad",
-                    ):
+                    for jj in tqdm(range(num_heliostats[f]), desc=f"File {f}", postfix=lambda jj=0: f"acceptance angle {phia[f][jj] * 1e3:.2f} mrad"):
                         already_computed = [e in computed for _, e in enumerate(same_ext[f][jj])]
                         if any(already_computed):
                             idx = already_computed.index(True)
                             fe, he = same_ext[f][jj][idx]
-                            self.extinction_weighting[f][jj, :] = self.extinction_weighting[fe][
-                                he, :
-                            ]
+                            self.extinction_weighting[f][jj, :] = self.extinction_weighting[fe][he, :]
                         else:
                             ext_weight = _extinction_function(
                                 dust.D[f],
@@ -2430,30 +1918,19 @@ class Heliostats:
                         if show_plots:
                             fig, ax = plt.subplots()
                             ax.semilogx(dust.D[f], self.extinction_weighting[f][jj, :])
-                            ax.set_title(
-                                f"Heliostat {jj}, acceptance angle {phia[f][jj] * 1e3:.2f} mrad"
-                            )
+                            ax.set_title(f"Heliostat {jj}, acceptance angle {phia[f][jj] * 1e3:.2f} mrad")
                             plt.show()
 
             _print_if("... Extinction weight calculation Done!", verbose)
 
         elif loss_model == "geometry":
-            _print_if(
-                "Loss Model is 'geometry'. Setting extinction coefficients to unity.", verbose
-            )
+            _print_if("Loss Model is 'geometry'. Setting extinction coefficients to unity.", verbose)
             for f in files:
                 self.extinction_weighting[f] = np.ones((num_heliostats[f], num_diameters[f]))
         else:
             raise ValueError(f"Loss model '{loss_model}' not recognized.")
 
-    def _compute_extinction_weights_lookup_table(
-        self,
-        simulation_data,
-        acceptance_angle_grid=None,
-        verbose=True,
-        save_folder="./",
-        options={},
-    ):
+    def _compute_extinction_weights_lookup_table(self, simulation_data, acceptance_angle_grid=None, verbose=True, save_folder="./", options={}):
         """
         Computes the extinction weights for the heliostat field based on the specified loss model.
 
@@ -2472,9 +1949,7 @@ class Heliostats:
         phia = acceptance_angle_grid
 
         extinction_weighting = {f: np.zeros((len(phia[f]), num_diameters[f])) for f in files}
-        assert (
-            phia is not None
-        ), "When computing the lookup table, please set acceptance_angles_range as a list of values"
+        assert phia is not None, "When computing the lookup table, please set acceptance_angles_range as a list of values"
         # _print_if("Loss Model is ""mie"". Computing extinction coefficients ... ",verbose)
 
         for f in files:
@@ -2484,20 +1959,9 @@ class Heliostats:
             intensities = sim_dat.source_normalized_intensity[f]
             h = 0
             for h in tqdm(
-                range(len(phia[f])),
-                desc=f"File {f}",
-                postfix=f"Acceptance angle between {phia[f][0] * 1e3:.0f} and {phia[f][-1] * 1e3:.0f} mrad",
+                range(len(phia[f])), desc=f"File {f}", postfix=f"Acceptance angle between {phia[f][0] * 1e3:.0f} and {phia[f][-1] * 1e3:.0f} mrad"
             ):
-
-                ext_weight = _extinction_function(
-                    dia,
-                    lam,
-                    intensities,
-                    phia[f][h],
-                    refractive_index,
-                    verbose=verbose,
-                    **options,
-                )
+                ext_weight = _extinction_function(dia, lam, intensities, phia[f][h], refractive_index, verbose=verbose, **options)
                 extinction_weighting[f][h, :] = ext_weight
 
             # df = pd.DataFrame(extinction_weighting[f], index=phia[f], columns=dia)
@@ -2508,12 +1972,7 @@ class Heliostats:
             # df.to_csv(save_folder+f'extinction_weights_lookup_table_{f}.csv')
 
         with open(save_folder + "extinction_weights_lookup_table.json", "w") as sf:
-            json.dump(
-                _to_dict_of_lists(extinction_weighting),
-                sf,
-                ensure_ascii=False,
-                indent=4,
-            )
+            json.dump(_to_dict_of_lists(extinction_weighting), sf, ensure_ascii=False, indent=4)
 
         with open(save_folder + "acceptance_angles.json", "w") as sf:
             json.dump(_to_dict_of_lists(phia), sf, ensure_ascii=False, indent=4)
@@ -2528,9 +1987,7 @@ class Heliostats:
                 "refractive_index_real": [s.real for s in sim_dat.dust.m.values()],
                 "refractive_index_imag": [s.imag for s in sim_dat.dust.m.values()],
                 "source_wavelength": _to_dict_of_lists(sim_dat.source_wavelength),
-                "source_normalized_intensity": _to_dict_of_lists(
-                    sim_dat.source_normalized_intensity
-                ),
+                "source_normalized_intensity": _to_dict_of_lists(sim_dat.source_normalized_intensity),
             }
             json.dump(metadata, sf, ensure_ascii=False, indent=4)
 
@@ -2586,99 +2043,24 @@ class Constants:
     Holds physical and empirical constants, loaded from an Excel sheet.
     """
 
-    air_rho: float = field(
-        init=False,
-        metadata={"units": "kg/m³", "description": "air density at T=293K and p=1 atm"},
-    )
-    air_mu: float = field(
-        init=False,
-        metadata={
-            "units": "Pa*s",
-            "description": "air dynamic viscosity at T=293K and p=1 atm",
-        },
-    )
-    air_nu: float = field(
-        init=False,
-        metadata={
-            "units": "m^2/s",
-            "description": "air kinematic viscosity at T=293K and p=1 atm",
-        },
-    )
-    air_lambda_p: float = field(
-        init=False,
-        metadata={
-            "units": "m",
-            "description": "mean free path in air at T=293K and p=1 atm",
-        },
-    )
-    irradiation: float = field(
-        init=False,
-        metadata={"units": "W/m2", "description": "solar extraterrestrial constant"},
-    )
-    g: float = field(
-        default=9.81,
-        metadata={"units": "m/s^2", "description": "gravitational constant"},
-    )
-    A_slip: np.ndarray = field(
-        init=False,
-        metadata={
-            "units": "dimensionless array",
-            "description": "coefficients for slip correction factor",
-        },
-    )
-    k_Boltzman: float = field(
-        init=False, metadata={"units": "J/K", "description": "Boltzman constant"}
-    )
-    k_von_Karman: float = field(
-        init=False,
-        metadata={"units": "dimensionless", "description": "Von Karman constant"},
-    )
-    N_iter: int = field(
-        init=False,
-        metadata={
-            "units": "count",
-            "description": "max iterations to compute gravitational settling velocity",
-        },
-    )
-    tol: float = field(
-        init=False,
-        metadata={
-            "units": "dimensionless",
-            "description": "tolerance for convergence in settling velocity computation",
-        },
-    )
+    air_rho: float = field(init=False, metadata={"units": "kg/m³", "description": "air density at T=293K and p=1 atm"})
+    air_mu: float = field(init=False, metadata={"units": "Pa*s", "description": "air dynamic viscosity at T=293K and p=1 atm"})
+    air_nu: float = field(init=False, metadata={"units": "m^2/s", "description": "air kinematic viscosity at T=293K and p=1 atm"})
+    air_lambda_p: float = field(init=False, metadata={"units": "m", "description": "mean free path in air at T=293K and p=1 atm"})
+    irradiation: float = field(init=False, metadata={"units": "W/m2", "description": "solar extraterrestrial constant"})
+    g: float = field(default=9.81, metadata={"units": "m/s^2", "description": "gravitational constant"})
+    A_slip: np.ndarray = field(init=False, metadata={"units": "dimensionless array", "description": "coefficients for slip correction factor"})
+    k_Boltzman: float = field(init=False, metadata={"units": "J/K", "description": "Boltzman constant"})
+    k_von_Karman: float = field(init=False, metadata={"units": "dimensionless", "description": "Von Karman constant"})
+    N_iter: int = field(init=False, metadata={"units": "count", "description": "max iterations to compute gravitational settling velocity"})
+    tol: float = field(init=False, metadata={"units": "dimensionless", "description": "tolerance for convergence in settling velocity computation"})
     Re_Limit: np.ndarray = field(
-        init=False,
-        metadata={
-            "units": "dimensionless array",
-            "description": "Reynolds limit values for drag coefficient correlations",
-        },
+        init=False, metadata={"units": "dimensionless array", "description": "Reynolds limit values for drag coefficient correlations"}
     )
-    alpha_EIM: float = field(
-        init=False,
-        metadata={
-            "units": "dimensionless",
-            "description": "factor for impaction efficiency computation",
-        },
-    )
-    beta_EIM: float = field(
-        init=False,
-        metadata={
-            "units": "dimensionless",
-            "description": "factor for impaction efficiency computation",
-        },
-    )
-    eps0: float = field(
-        init=False,
-        metadata={
-            "units": "dimensionless",
-            "description": "empirical factor for boundary layer resistance",
-        },
-    )
-    D0: float = field(
-        init=False,
-        metadata={"units": "m", "description": "common separation distance (Ahmadi)"},
-    )
+    alpha_EIM: float = field(init=False, metadata={"units": "dimensionless", "description": "factor for impaction efficiency computation"})
+    beta_EIM: float = field(init=False, metadata={"units": "dimensionless", "description": "factor for impaction efficiency computation"})
+    eps0: float = field(init=False, metadata={"units": "dimensionless", "description": "empirical factor for boundary layer resistance"})
+    D0: float = field(init=False, metadata={"units": "m", "description": "common separation distance (Ahmadi)"})
 
     def import_constants(self, file_params: str, verbose: bool = True):
         """
@@ -2718,47 +2100,28 @@ class ReflectanceMeasurements:
     Data class for managing reflectance measurement data.
     """
 
-    files: List[Union[str, Path]] = field(
-        default_factory=list,
-        metadata={"description": "Files from which reflectance data was imported."},
-    )
+    files: List[Union[str, Path]] = field(default_factory=list, metadata={"description": "Files from which reflectance data was imported."})
     time_grids: List[Any] = field(
         default_factory=list,
-        metadata={
-            "description": "A fine grid of times where reflectance measurements are desired (e.g. at times where simulations are available)."
-        },
+        metadata={"description": "A fine grid of times where reflectance measurements are desired (e.g. at times where simulations are available)."},
     )
     # The three fields below, and imported_column_names, are tested against None in
     # __post_init__ / import_reflectance_data, so their default must be None rather than
     # an empty list.
     number_of_measurements: Optional[List[float]] = field(
-        default=None,
-        metadata={
-            "description": "Number of measurements for each file. This should be a float for later operations."
-        },
+        default=None, metadata={"description": "Number of measurements for each file. This should be a float for later operations."}
     )
     reflectometer_incidence_angle: Optional[List[float]] = field(
-        default=None,
-        metadata={
-            "description": "Incidence angle of the reflectometer for each file.",
-            "units": "degrees",
-        },
+        default=None, metadata={"description": "Incidence angle of the reflectometer for each file.", "units": "degrees"}
     )
     reflectometer_acceptance_angle: Optional[List[float]] = field(
-        default=None,
-        metadata={
-            "description": "Half-angle describing the (conical) acceptance solid angle of the reflectometer ",
-            "units": "radians",
-        },
+        default=None, metadata={"description": "Half-angle describing the (conical) acceptance solid angle of the reflectometer ", "units": "radians"}
     )
     import_tilts: bool = False
     imported_column_names: Optional[List[str]] = field(
         default=None,
         metadata={
-            "description": (
-                "List of column names to import from the reflectance data files. None "
-                "imports every column except the time column."
-            )
+            "description": ("List of column names to import from the reflectance data files. None imports every column except the time column.")
         },
     )
     verbose: bool = True
@@ -2785,23 +2148,17 @@ class ReflectanceMeasurements:
         if self.number_of_measurements is None:
             self.number_of_measurements = [1.0] * n
         else:
-            self.number_of_measurements = _import_option_helper(
-                self.files, self.number_of_measurements
-            )
+            self.number_of_measurements = _import_option_helper(self.files, self.number_of_measurements)
 
         if self.reflectometer_incidence_angle is None:
             self.reflectometer_incidence_angle = [0.0] * n
         else:
-            self.reflectometer_incidence_angle = _import_option_helper(
-                self.files, self.reflectometer_incidence_angle
-            )
+            self.reflectometer_incidence_angle = _import_option_helper(self.files, self.reflectometer_incidence_angle)
 
         if self.reflectometer_acceptance_angle is None:
             self.reflectometer_acceptance_angle = [0.0] * n
         else:
-            self.reflectometer_acceptance_angle = _import_option_helper(
-                self.files, self.reflectometer_acceptance_angle
-            )
+            self.reflectometer_acceptance_angle = _import_option_helper(self.files, self.reflectometer_acceptance_angle)
 
         # Finally, import the data
         self.import_reflectance_data(
@@ -2862,12 +2219,7 @@ class ReflectanceMeasurements:
             self.sigma[index] = sigma
 
         # Calculate delta_ref with proper dimensions
-        self.delta_ref[index] = np.vstack(
-            (
-                np.zeros((1, self.average[index].shape[1])),
-                -np.diff(self.average[index], axis=0),
-            )
-        )
+        self.delta_ref[index] = np.vstack((np.zeros((1, self.average[index].shape[1])), -np.diff(self.average[index], axis=0)))
 
         # Set up prediction indices and times
         time_grid = np.asarray(time_grid)
@@ -2883,9 +2235,7 @@ class ReflectanceMeasurements:
         # Set reflectometer parameters
         self.reflectometer_incidence_angle[index] = incidence_angle
         self.reflectometer_acceptance_angle[index] = acceptance_angle
-        self.sigma_of_the_mean[index] = self.sigma[index] / np.sqrt(
-            self.number_of_measurements[index]
-        )
+        self.sigma_of_the_mean[index] = self.sigma[index] / np.sqrt(self.number_of_measurements[index])
 
         if tilts is not None:
             self.tilts[index] = np.asarray(tilts)
@@ -2939,26 +2289,15 @@ class ReflectanceMeasurements:
         time_grids = _ensure_list(time_grids)
         n = len(average)
 
-        for label, supplied in (
-            ("sigma", sigma),
-            ("times", times),
-            ("time_grids", time_grids),
-        ):
+        for label, supplied in (("sigma", sigma), ("times", times), ("time_grids", time_grids)):
             if len(supplied) != n:
-                raise ValueError(
-                    f"{label} has {len(supplied)} entries but average has {n}; one entry "
-                    "per experiment is required."
-                )
+                raise ValueError(f"{label} has {len(supplied)} entries but average has {n}; one entry per experiment is required.")
 
         self = cls()  # empty: __post_init__ imports nothing when there are no files
         self.files = list(names) if names is not None else [f"array_{ii}" for ii in range(n)]
         self.number_of_measurements = _import_option_helper(self.files, number_of_measurements)
-        self.reflectometer_incidence_angle = _import_option_helper(
-            self.files, reflectometer_incidence_angle
-        )
-        self.reflectometer_acceptance_angle = _import_option_helper(
-            self.files, reflectometer_acceptance_angle
-        )
+        self.reflectometer_incidence_angle = _import_option_helper(self.files, reflectometer_incidence_angle)
+        self.reflectometer_acceptance_angle = _import_option_helper(self.files, reflectometer_acceptance_angle)
 
         for ii in range(n):
             columns = np.asarray(average[ii]).reshape(len(times[ii]), -1).shape[1]
@@ -3001,12 +2340,7 @@ class ReflectanceMeasurements:
 
             # Extract timestamps
             time_column = next(
-                (
-                    col
-                    for col in reflectance_data["Average"].columns
-                    if col.lower() in ["time", "timestamp", "tmsmp", "date time"]
-                ),
-                None,
+                (col for col in reflectance_data["Average"].columns if col.lower() in ["time", "timestamp", "tmsmp", "date time"]), None
             )
             if time_column is not None:
                 times = reflectance_data["Average"][time_column].values
@@ -3034,22 +2368,10 @@ class ReflectanceMeasurements:
                 else:
                     tilts = tilt_data.transpose()  # Shape becomes (n_heliostats, n_times)
 
-            self._populate_experiment(
-                ii,
-                times,
-                avg_data,
-                sig_data,
-                names,
-                time_grids[ii],
-                incidence_angles[ii],
-                acceptance_angles[ii],
-                tilts=tilts,
-            )
+            self._populate_experiment(ii, times, avg_data, sig_data, names, time_grids[ii], incidence_angles[ii], acceptance_angles[ii], tilts=tilts)
 
     def get_experiment_subset(self, idx):
-        attributes = [
-            a for a in dir(self) if not a.startswith("__")
-        ]  # filters out python standard attributes
+        attributes = [a for a in dir(self) if not a.startswith("__")]  # filters out python standard attributes
         self_out = copy.deepcopy(self)
         for a in attributes:
             attr = self_out.__getattribute__(a)
@@ -3069,7 +2391,6 @@ class ReflectanceMeasurements:
         for ii in range(N_experiments):
             f = files[ii]
             for jj in range(N_mirrors):
-
                 # axis handle
                 if N_experiments == 1:
                     a = ax[jj]  # experiment ii, mirror jj plot
@@ -3092,18 +2413,8 @@ class ReflectanceMeasurements:
                 s = self.sigma_of_the_mean[f][:, jj]
                 miny = min((m - 6 * s).min(), miny)
                 error_two_sigma = 1.96 * s
-                a.errorbar(
-                    self.times[f],
-                    m,
-                    yerr=error_two_sigma,
-                    label="Measurement mean",
-                    marker=".",
-                )
+                a.errorbar(self.times[f], m, yerr=error_two_sigma, label="Measurement mean", marker=".")
 
-            a.set_ylabel(
-                r"Reflectance at ${0:.1f}^{{\circ}}$".format(
-                    self.reflectometer_incidence_angle[ii]
-                )
-            )
+            a.set_ylabel(r"Reflectance at ${0:.1f}^{{\circ}}$".format(self.reflectometer_incidence_angle[ii]))
         a.set_ylim((miny, 1))
         a.set_xlabel("Date")

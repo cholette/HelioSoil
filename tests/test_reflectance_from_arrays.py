@@ -30,29 +30,10 @@ TIME_GRID = np.arange(0.0, 15.0, 0.5)
 MIRROR_NAMES = ["north", "south", "east"]
 
 # Percentages, as they appear in the workbook.
-AVERAGE_PERCENT = np.array(
-    [
-        [95.1, 94.4, 96.0],
-        [93.8, 93.0, 94.7],
-        [92.2, 91.1, 93.4],
-        [90.6, 89.7, 91.8],
-    ]
-)
-SIGMA_PERCENT = np.array(
-    [
-        [0.21, 0.18, 0.25],
-        [0.23, 0.19, 0.24],
-        [0.20, 0.22, 0.26],
-        [0.24, 0.21, 0.23],
-    ]
-)
+AVERAGE_PERCENT = np.array([[95.1, 94.4, 96.0], [93.8, 93.0, 94.7], [92.2, 91.1, 93.4], [90.6, 89.7, 91.8]])
+SIGMA_PERCENT = np.array([[0.21, 0.18, 0.25], [0.23, 0.19, 0.24], [0.20, 0.22, 0.26], [0.24, 0.21, 0.23]])
 TILTS_PERCOLUMN = np.array(  # workbook layout: one column per mirror
-    [
-        [5.0, 10.0, 15.0],
-        [7.0, 12.0, 17.0],
-        [9.0, 14.0, 19.0],
-        [11.0, 16.0, 21.0],
-    ]
+    [[5.0, 10.0, 15.0], [7.0, 12.0, 17.0], [9.0, 14.0, 19.0], [11.0, 16.0, 21.0]]
 )
 NUMBER_OF_MEASUREMENTS = 9.0
 INCIDENCE_ANGLE = 15.0
@@ -103,15 +84,10 @@ def _from_arrays(average_percent=AVERAGE_PERCENT, tilts=TILTS_PERCOLUMN.transpos
 def _assert_experiments_match(imported, built, keys=(0,)):
     for f in keys:
         for name in ("times", "average", "sigma", "sigma_of_the_mean", "delta_ref", "rho0"):
-            np.testing.assert_allclose(
-                getattr(built, name)[f], getattr(imported, name)[f], rtol=RTOL, atol=ATOL,
-                err_msg=f"mismatch in {name}",
-            )
+            np.testing.assert_allclose(getattr(built, name)[f], getattr(imported, name)[f], rtol=RTOL, atol=ATOL, err_msg=f"mismatch in {name}")
         assert built.mirror_names[f] == imported.mirror_names[f]
         assert list(built.prediction_indices[f]) == list(imported.prediction_indices[f])
-        np.testing.assert_allclose(
-            built.prediction_times[f][0], imported.prediction_times[f][0], rtol=RTOL
-        )
+        np.testing.assert_allclose(built.prediction_times[f][0], imported.prediction_times[f][0], rtol=RTOL)
         assert built.reflectometer_incidence_angle[f] == imported.reflectometer_incidence_angle[f]
         assert built.reflectometer_acceptance_angle[f] == imported.reflectometer_acceptance_angle[f]
         assert built.number_of_measurements[f] == imported.number_of_measurements[f]
@@ -162,19 +138,12 @@ def test_from_arrays_derives_the_documented_conventions():
     np.testing.assert_allclose(built.rho0[0], np.nanmax(average, axis=0), rtol=RTOL)
     np.testing.assert_allclose(built.delta_ref[0][0], np.zeros(len(MIRROR_NAMES)), atol=0.0)
     np.testing.assert_allclose(built.delta_ref[0][1:], -np.diff(average, axis=0), rtol=RTOL)
-    np.testing.assert_allclose(
-        built.sigma_of_the_mean[0],
-        SIGMA_PERCENT / 100.0 / np.sqrt(NUMBER_OF_MEASUREMENTS),
-        rtol=RTOL,
-    )
+    np.testing.assert_allclose(built.sigma_of_the_mean[0], SIGMA_PERCENT / 100.0 / np.sqrt(NUMBER_OF_MEASUREMENTS), rtol=RTOL)
 
 
 def test_from_arrays_defaults_mirror_names_and_angles():
     built = ReflectanceMeasurements.from_arrays(
-        times=[TIMES],
-        average=[AVERAGE_PERCENT / 100.0],
-        sigma=[SIGMA_PERCENT / 100.0],
-        time_grids=[TIME_GRID],
+        times=[TIMES], average=[AVERAGE_PERCENT / 100.0], sigma=[SIGMA_PERCENT / 100.0], time_grids=[TIME_GRID]
     )
     assert built.mirror_names[0] == ["mirror_0", "mirror_1", "mirror_2"]
     assert built.number_of_measurements[0] == 1.0
@@ -221,16 +190,11 @@ def test_importer_optional_arguments_may_be_omitted(tmp_path):
     assert data.reflectometer_acceptance_angle == [0.0]
 
     # sigma_of_the_mean divides by sqrt(1) in this case, i.e. it equals sigma.
-    np.testing.assert_allclose(
-        data.sigma_of_the_mean[0], SIGMA_PERCENT / 100.0, rtol=RTOL, atol=ATOL
-    )
+    np.testing.assert_allclose(data.sigma_of_the_mean[0], SIGMA_PERCENT / 100.0, rtol=RTOL, atol=ATOL)
 
 
 def test_from_arrays_rejects_ragged_inputs():
     with pytest.raises(ValueError, match="one entry per experiment"):
         ReflectanceMeasurements.from_arrays(
-            times=[TIMES],
-            average=[AVERAGE_PERCENT / 100.0],
-            sigma=[SIGMA_PERCENT / 100.0, SIGMA_PERCENT / 100.0],
-            time_grids=[TIME_GRID],
+            times=[TIMES], average=[AVERAGE_PERCENT / 100.0], sigma=[SIGMA_PERCENT / 100.0, SIGMA_PERCENT / 100.0], time_grids=[TIME_GRID]
         )

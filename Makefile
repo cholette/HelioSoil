@@ -21,7 +21,7 @@ help:
 	@echo "  install   - Install the package in editable mode. Defaults to [dev] extras."
 	@echo "              Usage: make install EXTRAS=docs,dev"
 	@echo "  test      - Run all tests with pytest."
-	@echo "  format    - Format code with black and check style with flake8."
+	@echo "  format    - Format code with ruff and apply fixes."
 	@echo "  clean     - Remove build artifacts and pycache files."
 	@echo "  html      - Build HTML documentation using Sphinx."
 
@@ -37,8 +37,8 @@ test:
 
 format:
 	@echo "--> Formatting code..."
-	black .
-	flake8 .
+	ruff check --fix
+	ruff format .
 
 clean:
 	@echo "--> Cleaning up build artifacts and pycache..."

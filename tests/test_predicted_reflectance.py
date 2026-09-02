@@ -45,13 +45,7 @@ DENSITY = 40.0  # PM10 reference value
 # the configuration in which the two conventions disagree.
 RHO0 = np.array([0.93, 0.90, 0.95])
 
-TILT = np.array(
-    [
-        [0.0, 30.0, 60.0, 10.0, 20.0, 45.0],
-        [10.0, 45.0, 80.0, 15.0, 25.0, 5.0],
-        [20.0, 0.0, 35.0, 50.0, 60.0, 70.0],
-    ]
-)
+TILT = np.array([[0.0, 30.0, 60.0, 10.0, 20.0, 45.0], [10.0, 45.0, 80.0, 15.0, 25.0, 5.0], [20.0, 0.0, 35.0, 50.0, 60.0, 70.0]])
 DUST_CONCENTRATION = np.array([20.0, 50.0, 80.0, 110.0, 45.0, 65.0])
 PREDICTION_INDICES = [0, 2, 3, 5]  # measurement times, as indices into the sim grid
 INC_REF_FACTOR = 2.0 / np.cos(np.radians(15.0))  # second-surface, 15 deg reflectometer
@@ -183,9 +177,7 @@ def test_negative_log_likelihood_uses_the_same_mean_as_sse():
 
     nll = model._negative_log_likelihood([MU_TILDE, sigma_dep], sim_in, ref_dat)
 
-    s2total = model._compute_variance_of_measurements(
-        sigma_dep, sim_in, reflectance_data=ref_dat
-    )
+    s2total = model._compute_variance_of_measurements(sigma_dep, sim_in, reflectance_data=ref_dat)
     expected = 0.5 * s2total[F].size * np.log(2 * np.pi) + 0.5 * np.sum(np.log(s2total[F]))
 
     np.testing.assert_allclose(nll, expected, rtol=1e-12, atol=0.0)
@@ -207,18 +199,13 @@ def test_negative_log_likelihood_matches_independent_gaussian_density():
     sigma_dep = 5e-4
 
     reference = _reference_reflectance()
-    offsets = 1e-3 * np.array([[1.0, -2.0, 0.5], [-1.5, 0.25, 2.0], [0.75, 1.25, -1.0],
-                               [-0.5, 0.0, 1.5]])
+    offsets = 1e-3 * np.array([[1.0, -2.0, 0.5], [-1.5, 0.25, 2.0], [0.75, 1.25, -1.0], [-0.5, 0.0, 1.5]])
     ref_dat = _reflectance_data(reference + offsets)
 
     nll = model._negative_log_likelihood([MU_TILDE, sigma_dep], sim_in, ref_dat)
 
-    s2total = model._compute_variance_of_measurements(
-        sigma_dep, sim_in, reflectance_data=ref_dat
-    )
-    expected = _normal_neg_log_density(
-        np.diff(ref_dat.average[F], axis=0), np.diff(reference, axis=0), s2total[F]
-    )
+    s2total = model._compute_variance_of_measurements(sigma_dep, sim_in, reflectance_data=ref_dat)
+    expected = _normal_neg_log_density(np.diff(ref_dat.average[F], axis=0), np.diff(reference, axis=0), s2total[F])
 
     np.testing.assert_allclose(nll, expected, rtol=1e-12, atol=0.0)
 
@@ -263,13 +250,9 @@ def test_negative_log_likelihood_normalisation_sums_over_experiments():
 
     nll = model._negative_log_likelihood([MU_TILDE, sigma_dep], sim_in, ref_dat)
 
-    s2total = model._compute_variance_of_measurements(
-        sigma_dep, sim_in, reflectance_data=ref_dat
-    )
+    s2total = model._compute_variance_of_measurements(sigma_dep, sim_in, reflectance_data=ref_dat)
     n_terms = sum(s2total[f].size for f in keys)
-    expected = 0.5 * n_terms * np.log(2 * np.pi) + 0.5 * sum(
-        np.sum(np.log(s2total[f])) for f in keys
-    )
+    expected = 0.5 * n_terms * np.log(2 * np.pi) + 0.5 * sum(np.sum(np.log(s2total[f])) for f in keys)
 
     n_differences = len(PREDICTION_INDICES) - 1
     assert n_terms == len(keys) * n_differences * TILT.shape[0]

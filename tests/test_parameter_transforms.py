@@ -32,10 +32,7 @@ def _bare(cls, base):
 
 
 def _models():
-    return [
-        _bare(SemiPhysical, PhysicalBase),
-        _bare(ConstantMeanDeposition, ConstantMeanBase),
-    ]
+    return [_bare(SemiPhysical, PhysicalBase), _bare(ConstantMeanDeposition, ConstantMeanBase)]
 
 
 # ---------------------------------------------------------------------------
@@ -95,8 +92,7 @@ def test_parameter_names_track_the_variance_model():
 def test_transform_scale_round_trips():
     """forward and inverse are mutual inverses, with and without kappa."""
     for model in _models():
-        natural_two = np.array([2.5 if model._mean_parameter_transform == "log_log" else 0.02,
-                                8e-4])
+        natural_two = np.array([2.5 if model._mean_parameter_transform == "log_log" else 0.02, 8e-4])
         for natural in (natural_two, np.append(natural_two, 0.3)):
             if natural.size == 3:
                 model.set_variance_model("components")
@@ -113,12 +109,8 @@ def test_transform_scale_matches_the_stated_transforms():
     y = np.array([-0.4, -7.0, 0.8])
     kappa = 1.0 / (1.0 + np.exp(-y[2]))
 
-    np.testing.assert_allclose(
-        semi.transform_scale(y), [np.exp(np.exp(y[0])), np.exp(y[1]), kappa], rtol=RTOL
-    )
-    np.testing.assert_allclose(
-        constant.transform_scale(y), [np.exp(y[0]), np.exp(y[1]), kappa], rtol=RTOL
-    )
+    np.testing.assert_allclose(semi.transform_scale(y), [np.exp(np.exp(y[0])), np.exp(y[1]), kappa], rtol=RTOL)
+    np.testing.assert_allclose(constant.transform_scale(y), [np.exp(y[0]), np.exp(y[1]), kappa], rtol=RTOL)
 
 
 def test_transform_scale_jacobian_matches_finite_differences():
@@ -142,9 +134,7 @@ def test_transform_scale_jacobian_matches_finite_differences():
             up, down = y.astype(float).copy(), y.astype(float).copy()
             up[i] += step
             down[i] -= step
-            numerical[i] = (
-                model.transform_scale(up)[i] - model.transform_scale(down)[i]
-            ) / (2 * step)
+            numerical[i] = (model.transform_scale(up)[i] - model.transform_scale(down)[i]) / (2 * step)
 
         np.testing.assert_allclose(jacobian_from_transform, numerical, rtol=1e-6, atol=0.0)
 
@@ -162,9 +152,7 @@ def test_update_model_parameters_sets_the_variance_split():
         np.testing.assert_allclose(model.sigma_c, sigma_dep * np.sqrt(kappa), rtol=RTOL)
         np.testing.assert_allclose(model.sigma_m, sigma_dep * np.sqrt(1 - kappa), rtol=RTOL)
         # sigma_dep keeps its meaning as the total, so downstream code is unaffected.
-        np.testing.assert_allclose(
-            model.sigma_c**2 + model.sigma_m**2, sigma_dep**2, rtol=RTOL
-        )
+        np.testing.assert_allclose(model.sigma_c**2 + model.sigma_m**2, sigma_dep**2, rtol=RTOL)
 
 
 def test_update_model_parameters_rejects_out_of_range_fraction():
@@ -191,9 +179,7 @@ def test_two_parameter_update_leaves_the_split_untouched():
 
 
 def _reflectance_stub(mirror_counts):
-    return types.SimpleNamespace(
-        average={f: np.zeros((5, p)) for f, p in enumerate(mirror_counts)}
-    )
+    return types.SimpleNamespace(average={f: np.zeros((5, p)) for f, p in enumerate(mirror_counts)})
 
 
 def test_single_mirror_experiments_are_rejected_for_components():

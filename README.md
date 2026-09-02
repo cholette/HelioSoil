@@ -60,7 +60,7 @@ Once your environment is activated, install the `HelioSoil` package in editable 
 # Install the package with core dependencies
 pip install -e .
 
-# To include development tools (black, flake8, pytest), install with the [dev] extra
+# To include development tools (ruff, pytest), install with the [dev] extra
 pip install -e .[dev]
 ```
 

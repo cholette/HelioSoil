@@ -28,13 +28,7 @@ from .base_models import (
 )
 
 # From field_models
-from .field_models import (
-    CentralTowerPlant,
-    FieldModel,
-    SimplifiedFieldModel,
-    ReceiverParameters,
-    PlantParameters,
-)
+from .field_models import CentralTowerPlant, FieldModel, SimplifiedFieldModel, ReceiverParameters, PlantParameters
 
 # From fitting
 from .fitting import SemiPhysical, ConstantMeanDeposition
